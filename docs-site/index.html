@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CausalQwen-0.5B - 因果语言模型架构</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+  <meta name="description" content="CausalQwen-0.5B是一个基于因果语言模型架构的项目，实现了最简单的因果语言模型架构，并提供了将标准大语言模型（如Qwen-0.5B）改造为因果语言模型的方法。">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
+  <link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css">
+  <!-- KaTeX 样式 -->
+  <link rel="stylesheet" href="//cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css">
+  <style>
+    :root {
+      --theme-color: #42b983;
+      --sidebar-width: 300px;
+    }
+    .sidebar-nav li > a {
+      font-size: 15px;
+    }
+    .sidebar-nav li.active > a {
+      font-weight: bold;
+      color: var(--theme-color);
+    }
+    .markdown-section {
+      max-width: 900px;
+    }
+    .markdown-section pre > code {
+      font-size: 0.9rem;
+    }
+    .markdown-section code {
+      font-size: 0.9rem;
+    }
+    .markdown-section h1 {
+      font-size: 2rem;
+      margin-bottom: 1rem;
+    }
+    .markdown-section h2 {
+      font-size: 1.5rem;
+      margin-bottom: 0.8rem;
+    }
+    .markdown-section h3 {
+      font-size: 1.2rem;
+      margin-bottom: 0.6rem;
+    }
+    .markdown-section h4 {
+      font-size: 1.1rem;
+      margin-bottom: 0.4rem;
+    }
+    .markdown-section blockquote {
+      border-left: 4px solid var(--theme-color);
+    }
+    .markdown-section table {
+      display: table;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    window.$docsify = {
+      name: 'CausalQwen-0.5B',
+      repo: 'https://github.com/yourusername/causal-lm-project',
+      loadSidebar: true,
+      subMaxLevel: 3,
+      auto2top: true,
+      coverpage: true,
+      themeColor: '#42b983',
+      search: {
+        maxAge: 86400000,
+        paths: 'auto',
+        placeholder: '搜索',
+        noData: '没有找到结果',
+        depth: 6
+      },
+      pagination: {
+        previousText: '上一章节',
+        nextText: '下一章节',
+        crossChapter: true
+      },
+      copyCode: {
+        buttonText: '复制',
+        errorText: '错误',
+        successText: '已复制'
+      },
+      tabs: {
+        persist: true,
+        sync: true,
+        theme: 'classic',
+        tabComments: true,
+        tabHeadings: true
+      }
+    }
+  </script>
+  <!-- KaTeX 核心库 -->
+  <script src="//cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js"></script>
+  <!-- marked (docsify-katex 依赖) -->
+  <script src="//cdn.jsdelivr.net/npm/marked@4"></script>
+  <!-- docsify-katex 插件 -->
+  <script src="//cdn.jsdelivr.net/npm/docsify-katex@latest/dist/docsify-katex.js"></script>
+  <!-- Docsify v4 -->
+  <script src="//cdn.jsdelivr.net/npm/docsify@4"></script>
+  <!-- 插件 -->
+  <script src="//cdn.jsdelivr.net/npm/docsify/lib/plugins/search.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify/lib/plugins/zoom-image.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-copy-code/dist/docsify-copy-code.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-pagination/dist/docsify-pagination.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-tabs@1"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-python.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-markdown.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-yaml.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify/lib/plugins/emoji.min.js"></script>
+</body>
+</html>
+
