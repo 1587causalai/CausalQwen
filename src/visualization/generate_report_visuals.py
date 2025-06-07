@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import numpy as np
+import re
 
 def generate_visuals(results_dir):
     """
@@ -98,11 +99,74 @@ def generate_visuals(results_dir):
     print("\n--- Markdown Table for Report ---")
     print(markdown_table)
     
+    return markdown_table, {
+        "accuracy_plot": accuracy_plot_path,
+        "mean_rank_plot": mean_rank_plot_path
+    }
+
+def update_report_markdown(report_path, table, plot_paths, latest_experiment_name):
+    """
+    Updates the visuals in the qwen_finetuning_report.md file.
+    """
+    with open(report_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    # Update table
+    # Matches the table block, starting from | Dataset and ending with a blank line
+    content = re.sub(
+        r"(\|(?:-*:?--*)+\|[\s\S]*?)(?:\r?\n){2,}",
+        table + "\n\n",
+        content,
+        count=1,
+        flags=re.DOTALL
+    )
+
+    # Update image paths
+    # The relative path from `docs/experiments/` to `docs/results/` is `../results/`
+    new_acc_path = f"../results/{latest_experiment_name}/accuracy_comparison.png"
+    new_rank_path = f"../results/{latest_experiment_name}/mean_rank_comparison.png"
+    
+    content = re.sub(
+        r"!\[Accuracy Comparison\]\(.*?\)",
+        f"![Accuracy Comparison]({new_acc_path})",
+        content
+    )
+    content = re.sub(
+        r"!\[Mean Rank Comparison\]\(.*?\)",
+        f"![Mean Rank Comparison]({new_rank_path})",
+        content
+    )
+    
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+        
+    print(f"\nSuccessfully updated report: {report_path}")
+
+
 if __name__ == '__main__':
     # Find the latest experiment directory
     base_dir = "docs/results"
-    all_exp_dirs = [os.path.join(base_dir, d) for d in os.listdir(base_dir) if "qwen_finetuning_experiment" in d]
-    latest_exp_dir = max(all_exp_dirs, key=os.path.getmtime)
+    try:
+        all_exp_dirs = [
+            d for d in os.listdir(base_dir) 
+            if os.path.isdir(os.path.join(base_dir, d)) and d.startswith('qwen_finetuning')
+        ]
+        if not all_exp_dirs:
+            raise FileNotFoundError("No experiment directories found.")
+            
+        latest_exp_dir = max([os.path.join(base_dir, d) for d in all_exp_dirs], key=os.path.getmtime)
+        latest_experiment_name = os.path.basename(latest_exp_dir)
+
+    except FileNotFoundError as e:
+        print(f"Error: Could not find experiment results directory at '{base_dir}'.")
+        print("Please run an experiment first using `src/run_qwen_finetuning_experiment.py`.")
+        exit(1)
+
+    print(f"Generating report for latest experiment: {latest_experiment_name}")
     
-    print(f"Generating report for latest experiment: {latest_exp_dir}")
-    generate_visuals(latest_exp_dir) 
+    # Generate new visuals and get paths
+    markdown_table, plot_paths = generate_visuals(latest_exp_dir)
+    
+    # Update the main report file
+    report_file_path = "docs/experiments/qwen_finetuning_report.md"
+    update_report_markdown(report_file_path, markdown_table, plot_paths, latest_experiment_name) 

@@ -78,10 +78,11 @@ python src/run_qwen_finetuning_experiment.py --qwen_model_path /path/to/your/Qwe
 下面的表格直观地展示了模型在微调前后的巨大差异：
 
 | Dataset            | Accuracy   | Mean Rank   |   RMSE (Finetuned) |
+| Dataset            | Accuracy   | Mean Rank   |   RMSE (Finetuned) |
 |:-------------------|:-----------|:------------|-------------------:|
-| Basic              | 100%       | 82046 -> 1  |              42.10 |
-| Question Answering | 100%       | 91343 -> 1  |              48.10 |
-| Extreme Values     | 100%       | 81144 -> 1  |           50724.62 |
+| Basic              | 100%       | 82046 -> 1  |              42.1  |
+| Question Answering | 100%       | 91343 -> 1  |              48.1  |
+| Extreme Values     | 100%       | 81144 -> 1  |           50724.6  |
 | Boundary Values    | 100%       | 81314 -> 1  |               6.53 |
 
 - **准确率 (Accuracy)**: 从 0% 跃升至 100%，表明模型现在能够可靠地识别出需要生成数值的上下文。
