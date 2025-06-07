@@ -136,7 +136,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--results_base_dir', 
         type=str, 
-        default='docs-site/results',
+        default='docs/results',
         help='Base directory to save experiment results.'
     )
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs.')

@@ -223,7 +223,7 @@ python src/run_qwen_experiments.py --experiment basic --batch_size 8 --num_sampl
 
 ## 贡献
 
-欢迎贡献代码、报告问题或提出改进建议！请查看[贡献指南](./docs-site/contributing.md)了解更多信息。
+欢迎贡献代码、报告问题或提出改进建议！请查看[贡献指南](./docs/contributing.md)了解更多信息。
 
 ## 许可证
 
@@ -232,4 +232,11 @@ MIT
 ## 联系方式
 
 如果你有任何问题或需要帮助，可以在GitHub上提交Issue或联系项目维护者。
+
+### 本地预览
+
+```bash
+cd docs
+docsify serve
+```
 

@@ -100,7 +100,7 @@ def generate_visuals(results_dir):
     
 if __name__ == '__main__':
     # Find the latest experiment directory
-    base_dir = "docs-site/results"
+    base_dir = "docs/results"
     all_exp_dirs = [os.path.join(base_dir, d) for d in os.listdir(base_dir) if "qwen_finetuning_experiment" in d]
     latest_exp_dir = max(all_exp_dirs, key=os.path.getmtime)
     

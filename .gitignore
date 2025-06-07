@@ -9,7 +9,8 @@ __pycache__/
 .idea/
 
 # Experiment Results & Models
-docs-site/results/
+docs/results/
+!docs/results/*.png
 *.pth
 
 # PyCharm
