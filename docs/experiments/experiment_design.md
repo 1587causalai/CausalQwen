@@ -1,364 +1,1496 @@
-# 实验设计与数学原理
+# 因果语言模型实验设计
+
+本文档详细阐述了因果语言模型的实验设计，包括实验目标、数据集设计、评估指标、实验流程和结果分析方法。
 
-本文档旨在阐明本项目中各个实验的核心设计思想与底层数学原理，帮助您理解实验的目的、过程以及结果图表的含义。
 
-## 核心数学框架
+## 1. 实验目标
+
+### 1.1 总体目标
+
+本实验的总体目标是验证因果语言模型的有效性，特别是其在处理混合数据任务（同时涉及文本生成和数值预测）方面的能力。具体而言，我们希望通过实验：
+
+1. **验证架构有效性**：证明推断-行动范式和柯西分布表示的有效性
+2. **评估性能**：量化模型在文本生成和数值预测任务上的性能
+3. **比较优势**：与传统方法（如独立头部）进行比较，突显因果架构的优势
+4. **分析行为**：深入分析模型的行为，特别是其不确定性表示和决策过程
+
+### 1.2 具体研究问题
+
+实验将围绕以下具体研究问题展开：
+
+1. **架构验证**：
+   - 推断-行动范式是否能有效地处理混合数据任务？
+   - 柯西分布是否比正态分布更适合表示因果状态的不确定性？
+   - OvR分类是否比Softmax分类提供更好的决策边界？
+   - 门控损失函数是否能有效地实现"先分类，再回归"的学习策略？
+
+2. **性能评估**：
+   - 模型在文本生成任务上的性能如何？
+   - 模型在数值预测任务上的性能如何？
+   - 模型在混合任务上的整体性能如何？
+
+3. **比较分析**：
+   - 与独立头部方法相比，因果架构有哪些优势？
+   - 与条件回归方法相比，门控损失函数有哪些优势？
+   - 与Softmax分类相比，OvR分类有哪些优势？
+
+4. **行为分析**：
+   - 模型如何表示和传播不确定性？
+   - 因果状态空间的结构和特性是什么？
+   - 模型在面对异常输入或极端情况时的行为如何？
+
+### 1.3 预期成果
+
+通过实验，我们预期获得以下成果：
+
+1. **定量结果**：
+   - 文本生成和数值预测任务的性能指标
+   - 与基线方法的比较结果
+   - 不同超参数配置的性能对比
+
+2. **定性分析**：
+   - 因果状态空间的可视化和分析
+   - 决策边界的可视化和分析
+   - 典型案例的详细分析
+
+3. **实践指导**：
+   - 最佳超参数配置的建议
+   - 模型训练和使用的最佳实践
+   - 潜在应用场景的识别
+
+## 2. 数据集设计
+
+### 2.1 合成数据集
+
+为了系统地评估模型性能并控制实验条件，我们设计了一系列合成数据集：
+
+#### 2.1.1 基础文本-数值数据集
+
+这个数据集包含简单的文本-数值对，用于基本功能验证：
+
+```python
+class BasicTextNumberDataset:
+    def __init__(self, num_samples=1000, seed=42):
+        self.rng = random.Random(seed)
+        self.num_samples = num_samples
+        
+        self.templates = [
+            "The price is {value} dollars.",
+            "The temperature is {value} degrees.",
+            "The distance is {value} kilometers.",
+            "The weight is {value} kilograms.",
+            "The time is {value} hours."
+        ]
+    
+    def generate(self):
+        texts = []
+        values = []
+        
+        for _ in range(self.num_samples):
+            value = round(self.rng.uniform(0, 100), self.rng.randint(0, 2))
+            template = self.rng.choice(self.templates)
+            text = template.format(value=value)
+            
+            texts.append(text)
+            values.append(value)
+        
+        return texts, values
+```
+
+#### 2.1.2 问答数据集
+
+这个数据集包含上下文-问题-答案三元组，用于评估模型的问答能力：
+
+```python
+class QADataset:
+    def __init__(self, num_samples=1000, seed=42):
+        self.rng = random.Random(seed)
+        self.num_samples = num_samples
+        
+        self.templates = [
+            ("The price of the item is {value} dollars.", "What is the price of the item?", "price"),
+            ("The temperature today is {value} degrees.", "What is the temperature today?", "temperature"),
+            ("The distance between the cities is {value} kilometers.", "What is the distance between the cities?", "distance"),
+            ("The weight of the package is {value} kilograms.", "What is the weight of the package?", "weight"),
+            ("The journey takes {value} hours.", "How long does the journey take?", "time")
+        ]
+    
+    def generate(self):
+        contexts = []
+        questions = []
+        answers = []
+        
+        for _ in range(self.num_samples):
+            value = round(self.rng.uniform(0, 100), self.rng.randint(0, 2))
+            template = self.rng.choice(self.templates)
+            
+            context = template[0].format(value=value)
+            question = template[1]
+            
+            contexts.append(context)
+            questions.append(question)
+            answers.append(value)
+        
+        return contexts, questions, answers
+```
+
+#### 2.1.3 多数值数据集
+
+这个数据集包含多个数值的文本，用于评估模型处理多数值输入的能力：
+
+```python
+class MultiNumberDataset:
+    def __init__(self, num_samples=1000, seed=42):
+        self.rng = random.Random(seed)
+        self.num_samples = num_samples
+        
+        self.templates = [
+            "The price range is from {value1} to {value2} dollars.",
+            "The temperature will vary between {value1} and {value2} degrees.",
+            "The distance is between {value1} and {value2} kilometers.",
+            "The weight is approximately {value1} to {value2} kilograms.",
+            "The time required is {value1} to {value2} hours."
+        ]
+    
+    def generate(self):
+        texts = []
+        value_pairs = []
+        
+        for _ in range(self.num_samples):
+            value1 = round(self.rng.uniform(0, 50), self.rng.randint(0, 2))
+            value2 = round(self.rng.uniform(50, 100), self.rng.randint(0, 2))
+            template = self.rng.choice(self.templates)
+            text = template.format(value1=value1, value2=value2)
+            
+            texts.append(text)
+            value_pairs.append((value1, value2))
+        
+        return texts, value_pairs
+```
+
+#### 2.1.4 噪声数据集
+
+这个数据集包含不同程度的噪声，用于评估模型的鲁棒性：
+
+```python
+class NoisyDataset:
+    def __init__(self, num_samples=1000, noise_level=0.1, seed=42):
+        self.rng = random.Random(seed)
+        self.np_rng = np.random.RandomState(seed)
+        self.num_samples = num_samples
+        self.noise_level = noise_level
+        
+        self.templates = [
+            "The price is {value} dollars.",
+            "The temperature is {value} degrees.",
+            "The distance is {value} kilometers.",
+            "The weight is {value} kilograms.",
+            "The time is {value} hours."
+        ]
+    
+    def generate(self):
+        texts = []
+        true_values = []
+        noisy_values = []
+        
+        for _ in range(self.num_samples):
+            value = round(self.rng.uniform(0, 100), self.rng.randint(0, 2))
+            template = self.rng.choice(self.templates)
+            
+            # 添加噪声
+            noise = self.np_rng.normal(0, value * self.noise_level)
+            noisy_value = value + noise
+            
+            text = template.format(value=noisy_value)
+            
+            texts.append(text)
+            true_values.append(value)
+            noisy_values.append(noisy_value)
+        
+        return texts, true_values, noisy_values
+```
+
+#### 2.1.5 极端值数据集
+
+这个数据集包含极端值，用于评估模型处理极端情况的能力：
+
+```python
+class ExtremeValueDataset:
+    def __init__(self, num_samples=1000, seed=42):
+        self.rng = random.Random(seed)
+        self.num_samples = num_samples
+        
+        self.templates = [
+            "The price is {value} dollars.",
+            "The temperature is {value} degrees.",
+            "The distance is {value} kilometers.",
+            "The weight is {value} kilograms.",
+            "The time is {value} hours."
+        ]
+    
+    def generate(self):
+        texts = []
+        values = []
+        
+        # 生成正常值
+        for _ in range(int(self.num_samples * 0.8)):
+            value = round(self.rng.uniform(0, 100), self.rng.randint(0, 2))
+            template = self.rng.choice(self.templates)
+            text = template.format(value=value)
+            
+            texts.append(text)
+            values.append(value)
+        
+        # 生成极端值
+        for _ in range(int(self.num_samples * 0.2)):
+            # 使用幂律分布生成极端值
+            value = round(100 * (1 / (1 - self.rng.random())), self.rng.randint(0, 2))
+            template = self.rng.choice(self.templates)
+            text = template.format(value=value)
+            
+            texts.append(text)
+            values.append(value)
+        
+        # 打乱数据
+        combined = list(zip(texts, values))
+        self.rng.shuffle(combined)
+        texts, values = zip(*combined)
+        
+        return list(texts), list(values)
+```
+
+### 2.2 真实数据集
+
+除了合成数据集，我们还将使用一些真实数据集来评估模型在实际场景中的性能：
+
+#### 2.2.1 金融新闻数据集
+
+这个数据集包含金融新闻文章，其中包含股票价格、市值等数值信息。我们将从公开的金融新闻源收集数据，并进行预处理以提取数值信息。
+
+#### 2.2.2 科学论文摘要数据集
+
+这个数据集包含科学论文的摘要，其中包含实验结果、统计数据等数值信息。我们将从公开的论文数据库收集数据，并进行预处理以提取数值信息。
+
+#### 2.2.3 产品评论数据集
+
+这个数据集包含产品评论，其中包含价格、评分等数值信息。我们将从公开的电商网站收集数据，并进行预处理以提取数值信息。
+
+### 2.3 数据预处理
+
+对于所有数据集，我们将进行以下预处理步骤：
+
+1. **文本清洗**：
+   - 移除特殊字符和HTML标签
+   - 标准化空白字符
+   - 修正常见拼写错误
+
+2. **数值标准化**：
+   - 识别文本中的数值
+   - 将数值转换为标准格式
+   - 处理不同的数值表示（如百分比、科学计数法）
+
+3. **分词**：
+   - 使用特殊的分词器处理文本
+   - 将数值替换为`<NUM>`词元
+   - 保存数值及其在文本中的位置
+
+4. **数据分割**：
+   - 将数据集分为训练集（70%）、验证集（15%）和测试集（15%）
+   - 确保各集合的分布一致
+
+### 2.4 数据增强
+
+为了提高模型的泛化能力，我们将使用以下数据增强技术：
+
+1. **同义词替换**：
+   - 随机替换文本中的非关键词为其同义词
+   - 保持数值及其上下文不变
 
-模型的核心是 **"推断-行动"（Abduction-Action）范式**。与直接从输入预测输出的传统模型不同，我们的模型首先"推断"出一个描述系统状态的、高维的、潜在的**因果变量**（Latent Causal State）的概率分布，然后基于此分布进行"行动"（即，预测）。
+2. **数值变换**：
+   - 对数值应用小的随机变换（如四舍五入、微小扰动）
+   - 保持文本描述与变换后的数值一致
 
-这个潜在因果变量我们用 \(U\) 表示，它是一个 \(d_{causal}\) 维的向量。模型并不直接计算 \(U\) 的一个具体值，而是推断出它的概率分布。
+3. **上下文扩展**：
+   - 添加额外的上下文信息
+   - 生成更复杂的问题变体
 
-### 1. 推断网络 (Abduction Network)
+这些数据增强技术将帮助模型学习更鲁棒的表示，并提高其在不同场景下的性能。
 
-推断网络的目标是根据输入文本的特征 \(z\)（由 `FeatureNetwork` 提取），来确定因果变量 \(U\) 的分布参数。在我们的模型中，\(U\) 的每个维度 \(U_i\) 都被假定服从一个独立的**柯西分布**（Cauchy Distribution），其由两个参数定义：位置（location）\(\mu\) 和尺度（scale）\(\gamma\)。
 
-推断网络是一个简单的线性层，它将特征向量 \(z\) 映射到所有维度上的位置和尺度参数：
+## 3. 评估指标
 
-\[
-[ \boldsymbol{\mu}_U, \log \boldsymbol{\gamma}_U ] = W_{inf} \boldsymbol{z} + \boldsymbol{b}_{inf}
-\]
+为了全面评估因果语言模型的性能，我们设计了一系列评估指标，涵盖文本生成、数值预测和混合任务的各个方面。
 
-其中 \(W_{inf}\) 和 \(\boldsymbol{b}_{inf}\) 是该线性层的权重和偏置。我们预测的是 \(\log \boldsymbol{\gamma}_U\)，然后通过指数函数确保尺度参数 \(\boldsymbol{\gamma}_U = \exp(\log \boldsymbol{\gamma}_U)\) 始终为正。
+### 3.1 文本生成指标
 
-所以，对于给定的输入，推断网络的输出是因果状态 \(U\) 的分布：\(\boldsymbol{U} \sim \text{Cauchy}(\boldsymbol{\mu}_U, \boldsymbol{\gamma}_U)\)。
+#### 3.1.1 词元预测准确率
 
-### 2. 行动网络 (Action Network)
+词元预测准确率衡量模型正确预测下一个词元的能力：
 
-行动网络接收推断出的因果状态分布（即 \(\boldsymbol{\mu}_U\) 和 \(\boldsymbol{\gamma}_U\)），并将其转换为最终的预测输出。这一步的关键是**保持柯西分布的特性**。
+$$\text{Accuracy} = \frac{\text{正确预测的词元数}}{\text{总词元数}}$$
 
-#### 柯西保持线性层 (`CauchyLinear`)
+我们将计算整体准确率，以及特定类别（如`<NUM>`词元）的准确率。
 
-柯西分布有一个重要的特性：独立柯西随机变量的线性组合仍然是柯西分布。如果 \(U_i \sim \text{Cauchy}(\mu_i, \gamma_i)\)，那么它们的线性组合 \(S = \sum_i w_i U_i + b\) 的分布是：
+#### 3.1.2 困惑度（Perplexity）
 
-\[
-S \sim \text{Cauchy}\left(\sum_i w_i \mu_i + b, \sum_i |w_i| \gamma_i\right)
-\]
+困惑度是语言模型的标准评估指标，衡量模型对测试集的预测能力：
 
-`CauchyLinear` 层正是实现了这个变换。它将输入的柯西分布（由 `loc` 和 `scale` 参数定义）通过一个线性变换，输出一个新的柯西分布（由 `transformed_loc` 和 `transformed_scale` 定义）。
+$$\text{Perplexity} = \exp\left(-\frac{1}{N}\sum_{i=1}^{N}\log P(x_i|x_{<i})\right)$$
 
-#### 分类头 (Classification Head)
+其中 $P(x_i|x_{<i})$ 是模型预测下一个词元 $x_i$ 的概率，$N$ 是测试集中的词元总数。
 
-分类头的目标是预测下一个词元（token）。它采用 **"一对多"（One-vs-Rest, OvR）** 的策略。对于词汇表中的每个词元，模型都会独立地预测一个"决策分数" \(S_k\)，而不是像 Softmax 那样输出一个归一化的概率分布。
+#### 3.1.3 F1分数
 
-每个决策分数 \(S_k\) 都是通过 `CauchyLinear` 层从潜因果状态 \(U\) 变换而来的，因此 \(S_k\) 也服从柯西分布：\(S_k \sim \text{Cauchy}(\mu_{S_k}, \gamma_{S_k})\)。
+对于`<NUM>`词元的识别，我们将计算F1分数：
 
-然后，模型计算每个分数超过一个固定阈值 \(\theta\)（默认为 0）的概率。根据柯西分布的累积分布函数 (CDF)，这个概率是：
+$$\text{Precision} = \frac{\text{正确预测为<NUM>的词元数}}{\text{预测为<NUM>的词元总数}}$$
 
-\[
-P(S_k > \theta) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\mu_{S_k} - \theta}{\gamma_{S_k}}\right)
-\]
+$$\text{Recall} = \frac{\text{正确预测为<NUM>的词元数}}{\text{实际为<NUM>的词元总数}}$$
 
-最终，模型会选择具有最高概率的那个词元作为预测结果。
+$$\text{F1} = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}$$
 
-#### 回归头 (Regression Head)
+### 3.2 数值预测指标
 
-当模型需要预测一个具体的数值时（即，当它预测下一个词元是 `<NUM>` 时），回归头就会生效。回归头同样使用一个 `CauchyLinear` 层，将潜因果状态 \(U\) 变换为一个一维的柯西分布 \(Y \sim \text{Cauchy}(\mu_Y, \gamma_Y)\)。
+#### 3.2.1 均方误差（MSE）
 
-对于柯西分布，它的期望值（均值）是未定义的，但它的中位数是明确的，就是其位置参数 \(\mu\)。因此，模型将 \(\mu_Y\) 作为对数值的最佳点估计（point estimate）进行输出。
+均方误差衡量数值预测的准确性：
 
-## 数据集设计与评估示例
+$$\text{MSE} = \frac{1}{N}\sum_{i=1}^{N}(y_i - \hat{y}_i)^2$$
 
-所有实验均使用程序生成的合成数据，以便在受控环境中对模型进行精确评估。数据生成的核心是 `src/data/synthetic.py` 中的 `TextWithNumbersGenerator` 类。
+其中 $y_i$ 是真实数值，$\hat{y}_i$ 是预测数值，$N$ 是测试样本数。
 
-下面我们详细拆解每一种数据类型，并用实例说明模型的预测和评估过程。
+#### 3.2.2 平均绝对误差（MAE）
 
----
+平均绝对误差提供了另一种衡量数值预测准确性的方式：
 
-### 1. 基础文本-数值数据
+$$\text{MAE} = \frac{1}{N}\sum_{i=1}^{N}|y_i - \hat{y}_i|$$
 
-- **目的**：验证模型最基本的功能：从简单文本中识别并预测数值。
-- **所属实验**：`basic`, `comprehensive`, `comparison`, `ablation`。
-- **生成逻辑** (`BasicTextNumberDataset`): 从 `"The price is {value} dollars."` 等模板中随机选择一个，并填入一个 0 到 100 的随机数。
+#### 3.2.3 相对误差（MAPE）
 
-**预测与评估示例**
+相对误差考虑了数值的尺度，适用于比较不同尺度的数值预测：
 
-- **输入**: `The temperature is 36.8 degrees.`
-- **模型任务**: 这是一个经过特殊设计的"下一词元预测"任务。在评估脚本中，输入文本被处理后，模型被要求预测下一个"事件"。因为我们关心的是它能否理解并提取数值，所以我们设定的"正确答案"是：
-    1.  下一个词元应该是特殊的 **`<NUM>`** 词元。
-    2.  与 `<NUM>` 词元一同输出的数值应该是 **36.8**。
-- **模型预测**: 模型会输出一个包含所有词元概率的分布，以及一个预测的数值。
-    - `cls_pred`: 预测出的概率最高的词元ID。
-    - `reg_pred`: 预测出的数值。
-- **如何评估**:
-    - **分类评估**: 我们检查 `cls_pred` 是否等于 `<NUM>` 词元的ID。如果相等，则分类正确。这部分结果会计入 `cls_accuracy` 和 `cls_f1` 等指标。
-    - **回归评估**: 我们计算 `reg_pred` 与真实值 `36.8` 之间的差距。这个差值会被用来计算 `reg_mse` (均方误差) 和 `reg_mae` (平均绝对误差)。
+$$\text{MAPE} = \frac{1}{N}\sum_{i=1}^{N}\left|\frac{y_i - \hat{y}_i}{y_i}\right| \times 100\%$$
 
----
+#### 3.2.4 校准误差
 
-### 2. 问答数据
+校准误差衡量模型的不确定性估计与实际误差的一致性：
 
-- **目的**：测试模型在更复杂的语境下，根据问题理解并提取特定数值的能力。
-- **所属实验**：`comprehensive`, `comparison`, `ablation`。
-- **生成逻辑** (`QADataset`): 将上下文和问题拼接成输入。例如，`"The item costs 79.99 dollars. What is the price?"`。
+$$\text{Calibration Error} = \frac{1}{M}\sum_{j=1}^{M}|\text{Conf}_j - \text{Acc}_j|$$
 
-**预测与评估示例**
+其中 $\text{Conf}_j$ 是置信度为 $j/M$ 的预测比例，$\text{Acc}_j$ 是这些预测中正确的比例，$M$ 是置信度区间的数量。
 
-- **输入**: `The journey takes 4.5 hours. How long does the journey take?`
-- **模型任务**: 与基础数据类似，模型需要理解整个语境（上下文+问题），并预测出答案。正确答案被设定为：
-    1.  下一个词元是 **`<NUM>`**。
-    2.  对应的数值是 **4.5**。
-- **模型预测**:
-    - `cls_pred`: 预测的词元ID。
-    - `reg_pred`: 预测的数值。
-- **如何评估**: 评估方式与基础数据完全相同。我们检查其词元预测是否为 `<NUM>`，并计算其数值预测 `reg_pred` 与 `4.5` 的误差。
+### 3.3 混合任务指标
 
----
+#### 3.3.1 联合准确率
 
-### 3. 极端值数据
+联合准确率衡量模型在同时预测词元和数值时的性能：
 
-- **目的**：测试模型处理分布范围之外的罕见、极大或极小数值的鲁棒性。这是检验**柯西分布**重尾特性优势的关键场景。
-- **所属实验**：`comprehensive`, `comparison`, `ablation`。
-- **生成逻辑** (`ExtremeValueDataset`): 80% 的数据是 0-100 的常规数值，20% 是通过幂律分布生成的极端值（远大于100）。
+$$\text{Joint Accuracy} = \frac{\text{同时正确预测词元和数值的样本数}}{\text{总样本数}}$$
 
-**预测与评估示例**
+其中，数值预测被视为"正确"如果相对误差小于预定阈值（如5%）。
 
-- **输入**: `The price is 8503.21 dollars.`
-- **模型任务**: 即使面对不常见的巨大数值，模型也应能正确处理。正确答案是：
-    1.  下一个词元是 **`<NUM>`**。
-    2.  对应的数值是 **8503.21**。
-- **模型预测**:
-    - `cls_pred`: 预测的词元ID。
-    - `reg_pred`: 预测的数值。
-- **如何评估**: 评估方式同上。但在这里我们特别关注 `reg_mse`。由于 MSE 对大误差的惩罚很重，如果一个模型（例如使用正态分布的模型）在预测 `8503.21` 时出现较大偏差，其 MSE 会急剧上升。而理论上，使用柯西分布的模型应该能更稳定地处理这类离群值，从而在 `reg_mse` 指标上表现更优或更稳健。
+#### 3.3.2 一致性分数
 
----
+一致性分数衡量模型预测`<NUM>`词元和给出合理数值的一致性：
 
-*注意：以下是在 `src/data/synthetic.py` 中定义但**当前未被主要实验脚本使用**的数据类型。我们在此一并说明，以提供一个完整的视角。*
+$$\text{Consistency Score} = \frac{\text{预测为<NUM>且给出合理数值的样本数}}{\text{预测为<NUM>的样本总数}}$$
 
-### 4. 多数值数据
+其中，"合理数值"是指相对误差小于预定阈值的数值。
 
-- **目的**：用于未来研究，测试模型处理包含多个数值的文本，并根据语境识别出需要关注的特定数值的能力。
-- **所属实验**：当前无。
-- **生成逻辑** (`MultiNumberDataset`): 从 `"The price range is from {value1} to {value2} dollars."` 等模板中生成文本。
+#### 3.3.3 综合得分
 
-**预测与评估示例 (设想)**
+综合得分将文本和数值指标结合为单一评分：
 
-- **输入**: `The price range is from 10.5 to 50.0 dollars. What is the minimum price?`
-- **模型任务**: 模型需要忽略 `50.0`，并准确预测出 `10.5`。
-- **如何评估**: 评估方法将与问答数据相同，但数据集的设计对模型的语义理解能力提出了更高要求。
+$$\text{Combined Score} = \alpha \cdot \text{Text Score} + (1 - \alpha) \cdot \text{Numeric Score}$$
 
-### 5. 噪声数据
+其中 $\alpha$ 是权重参数（默认为0.5），$\text{Text Score}$ 是归一化的文本指标（如准确率），$\text{Numeric Score}$ 是归一化的数值指标（如1-MAPE）。
 
-- **目的**：用于未来研究，测试模型在输入数值本身存在噪声或不确定性时的去噪和推断能力。
-- **所属实验**：当前无。
-- **生成逻辑** (`NoisyDataset`): 在文本中填入一个带噪声的数值（例如，真实值是 `15.0`，文本中是 `15.2`），但保留其真实的、无噪声的标签。
+### 3.4 不确定性评估指标
 
-**预测与评估示例 (设想)**
+#### 3.4.1 预测区间覆盖率
 
-- **输入**: `The measurement is approximately 15.2 kg.`
-- **模型任务**: 模型被要求预测出最可能的**真实值**，而不是文本中被噪声污染的值。正确答案应是：
-    1.  词元 **`<NUM>`**。
-    2.  数值 **15.0** (无噪声的真实值)。
-- **如何评估**: 将模型的数值预测 `reg_pred` 与 `15.0` (真实值) 而非 `15.2` (噪声值) 进行比较。这可以评估模型的推理和去噪能力。
+预测区间覆盖率衡量模型的不确定性估计的准确性：
 
-## 实验解读与图表示例
+$$\text{Coverage Rate} = \frac{\text{落在预测区间内的真实值数量}}{\text{总样本数}}$$
 
-本章节详细阐述四个核心实验（`basic`, `comprehensive`, `comparison`, `ablation`）的目标、过程以及它们生成的具体图表的含义。
+对于置信度为 $p$ 的预测区间，理想的覆盖率应该接近 $p$。
 
----
+#### 3.4.2 不确定性分离度
 
-### 1. 基础实验 (`basic`)
+不确定性分离度衡量模型对正确和错误预测的不确定性估计的区分能力：
 
-- **目的**：在简单的合成数据上验证模型的基础功能是否正常工作。
-- **过程**：使用标准配置的模型，在 `BasicTextNumberDataset` 数据集上进行一次完整的评估。
-- **生成的图表**:
-    - `results/basic_[timestamp]/basic_metrics.png`
+$$\text{Uncertainty Separation} = \frac{1}{N_{\text{correct}}}\sum_{i \in \text{correct}} u_i - \frac{1}{N_{\text{incorrect}}}\sum_{i \in \text{incorrect}} u_i$$
 
-**图表详解: `basic_metrics.png`**
+其中 $u_i$ 是样本 $i$ 的不确定性估计（如预测分布的尺度参数）。
 
-- **类型**：多合一条形图。这张图包含了三个子图，分别对应分类、回归和校准三大类指标。
-- **内容解读**：
-    - **Classification Metrics (分类指标) 子图**:
-        - **X轴**: `cls_accuracy`, `cls_precision`, `cls_recall`, `cls_f1`, `cls_entropy`, `cls_confidence`。
-        - **Y轴**: 各指标的数值。
-        - **如何解读**: 这些条形展示了模型在预测"下一个词元是否为`<NUM>`"这个任务上的性能。`accuracy` 和 `f1` 越高越好。
-    - **Regression Metrics (回归指标) 子图**:
-        - **X轴**: `reg_mse`, `reg_mae`, `reg_mape`, `reg_r2`, `reg_nrmse` 等。
-        - **Y轴**: 各指标的数值。
-        - **如何解读**: 这些条形展示了当模型预测`<NUM>`词元时，其伴随输出的数值的精确度。`mse` 和 `mae` 越低越好。
-    - **Calibration Metrics (校准指标) 子图**:
-        - **X轴**: `calib_ece`, `calib_mce`, `calib_brier`。
-        - **Y轴**: 各指标的数值。
-        - **如何解读**: 这些条形展示了模型预测的置信度是否可靠。`ece` 越低越好。
+#### 3.4.3 异常检测性能
 
----
+异常检测性能衡量模型识别异常输入的能力：
 
-### 2. 综合实验 (`comprehensive`)
+$$\text{AUROC} = \text{Area under the ROC curve}$$
 
-- **目的**：评估模型在多种不同类型任务上的泛化能力和鲁棒性。
-- **过程**：使用标准配置的模型，分别在三种不同的数据集（基础、问答、极端值）上进行评估。
-- **生成的图表**:
-    - `results/comprehensive_[timestamp]/basic_metrics.png`
-    - `results/comprehensive_[timestamp]/qa_metrics.png`
-    - `results/comprehensive_[timestamp]/extreme_metrics.png`
+其中ROC曲线是以不确定性估计为阈值，将正常样本和异常样本分类的性能曲线。
 
-**图表详解**
+## 4. 实验流程
 
-这三张图的结构与基础实验中的 `basic_metrics.png` 完全相同，都包含分类、回归、校准三个子图。它们的区别在于所使用的数据集不同：
-- **`basic_metrics.png`**: 基于简单文本-数值数据，是性能基线。
-- **`qa_metrics.png`**: 基于问答数据。通过与基线比较，可以看出模型在需要上下文理解的任务上性能是否有下降。
-- **`extreme_metrics.png`**: 基于含极端值的数据。通过与基线比较，可以检验模型（尤其是柯西分布的设计）处理离群值的鲁棒性。我们期望 `full_model` 在这个任务上的回归误差（特别是`reg_mse`）相比其他模型有更强的稳定性。
+### 4.1 实验设置
 
----
-
-### 3. 对比实验 (`comparison`)
-
-- **目的与核心问题**:
-    - **目的**: **超参数敏感性分析 (Hyperparameter Sensitivity Analysis)**。
-    - **核心问题**: 此实验旨在探究模型性能对关键超参数变化的敏感程度。它回答的是"调优"问题："对于我们确定的这个模型架构，改变它的某些设置会如何影响结果？我们能从中找到更优的配置吗？"
-
-- **过程与模型设置**:
-    - 过程：比较四种不同配置的模型在所有三种标准数据集上的性能。
-    - **模型配置详解**:
-        - `base`: 标准配置，作为比较的基准。
-        - `small_causal`: 使用了更小的因果维度 (`causal_dim=16`)。目的是探究因果状态空间的维度对模型表达能力的影响。维度过小可能会导致信息瓶颈，性能下降。
-        - `large_causal`: 使用了更大的因果维度 (`causal_dim=128`)。目的是探究增加模型复杂度是否能带来性能提升。
-        - `high_reg_weight`: 增加了回归损失的权重 (`reg_loss_weight=2.0`)。目的是探究在训练中让模型更"偏重"于数值预测的准确性，会对整体性能（包括分类）带来什么影响。
-
-- **生成的图表**:
-    - `results/comparison_[timestamp]/compare_[dataset]_[metric].png`
-    - `results/comparison_[timestamp]/overall_comparison.png`
-
-- **图表解读**:
-    - 解读方式与下面的消融实验完全相同。通过对比不同配置（如 `base` vs `small_causal`）在特定指标（如 `reg_mae`）上的条形图高低，我们可以得出结论，例如："减小因果维度会导致模型的回归平均绝对误差显著上升，说明64维是必要的。"
-
----
-
-### 4. 消融实验 (`ablation`)
-
-- **目的与核心问题**:
-    - **目的**: **核心架构组件贡献度验证 (Core Component Contribution Validation)**。
-    - **核心问题**: 这是整个项目**最重要**的实验，旨在从根本上验证我们提出的新架构组件是否有效。它通过"消融"（即拿掉）某个核心组件并与传统方法对比，来回答"验证"问题："我们引以为傲的柯西分布和OvR分类器，真的比普通的正态分布和Softmax分类器更好吗？"
-
-- **过程与模型设置**:
-    - 过程：比较四种结构上存在本质差异的模型在所有三种标准数据集上的性能。
-    - **模型配置详解**:
-        - `full_model`: 我们提出的完整模型，使用柯西分布和OvR分类器。
-        - `no_ovr`: **消融OvR分类器**。将其替换为传统的 `Softmax` 分类器。用于检验OvR的独立决策机制是否优于Softmax的竞争归一化机制。
-        - `no_cauchy`: **消融柯西分布**。将其替换为标准的 `正态分布`。用于检验柯西分布的重尾特性是否真的能在处理异常值等任务上带来优势。
-        - `no_ovr_no_cauchy`: **双重消融**。同时使用`Softmax`和`正态分布`，这代表了一个更传统的基线模型。
-
-- **生成的图表**:
-    - `results/ablation_[timestamp]/compare_[dataset]_[metric].png`
-    - `results/ablation_[timestamp]/overall_comparison.png`
-
-- **图表解读**:
-    - **`compare_[dataset]_[metric].png` (示例: `compare_extreme_reg_mse.png`)**:
-        - **类型**: 单指标条形对比图。
-        - **解读**: 这是我们得出核心结论的地方。例如，在这张图中，X轴是`full_model`, `no_ovr`, `no_cauchy`等，Y轴是均方误差。如果我们观察到 `full_model` 的条形显著低于 `no_cauchy` 的条形，这就强有力地证明了**"在处理极端值时，使用柯西分布确实比使用正态分布更有效"**。这直接验证了我们的设计选择。
-    - **`overall_comparison.png`**:
-        - **类型**: 多指标、多模型综合对比条形图。
-        - **解读**: 这张图提供了宏观视角，展示了哪个模型在所有任务上综合表现最好。是我们展示模型整体先进性的总览图。
+#### 4.1.1 模型配置
 
-## 核心评估指标详解
+我们将测试以下模型配置：
 
-为了让您能更精确地解读实验图表，下面我们详细介绍几个核心评估指标的计算方法和它们所代表的含义。
+1. **基础配置**：
+   - 特征网络：MockFeatureNetwork
+   - 因果维度：64
+   - 回归损失权重：1.0
 
-### 1. 分类指标 (Classification Metrics)
+2. **Qwen配置**：
+   - 特征网络：QwenFeatureNetwork
+   - 因果维度：64
+   - 回归损失权重：1.0
 
-这些指标用于评估模型预测词元（Token）的准确度。
+3. **低维配置**：
+   - 特征网络：MockFeatureNetwork
+   - 因果维度：16
+   - 回归损失权重：1.0
 
-- **`cls_accuracy` (准确率)**
-  - **是什么**：这是最直观的指标，表示模型正确预测的词元占总词元数的比例。
-  - **计算公式**：
-    \[
-    \text{Accuracy} = \frac{\text{正确预测的样本数}}{\text{总样本数}}
-    \]
-  - **解读**：准确率越高，说明模型的整体分类性能越好。
+4. **高维配置**：
+   - 特征网络：MockFeatureNetwork
+   - 因果维度：128
+   - 回归损失权重：1.0
 
-- **`cls_f1` (F1 分数)**
-  - **是什么**：F1 分数是精确率（Precision）和召回率（Recall）的调和平均值。它在处理类别不平衡的数据时，比准确率更能反映模型的真实性能。
-  - **计算公式**：
-    \[
-    \text{F1} = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}
-    \]
-    其中，Precision 指的是"所有被模型预测为A类的样本中，确实是A类的比例"，Recall 指的是"所有事实上是A类的样本中，被模型成功预测为A类的比例"。
-  - **解读**：F1 分数越高，说明模型在精确率和召回率之间的平衡做得越好。
+5. **回归偏重配置**：
+   - 特征网络：MockFeatureNetwork
+   - 因果维度：64
+   - 回归损失权重：2.0
 
-### 2. 回归指标 (Regression Metrics)
+#### 4.1.2 基线模型
 
-这些指标用于评估模型预测数值的精准度。
+我们将实现以下基线模型进行比较：
 
-- **`reg_mse` (Mean Squared Error, 均方误差)**
-  - **是什么**：计算每个样本的预测值与真实值之差的平方，然后求平均。
-  - **计算公式**：
-    \[
-    \text{MSE} = \frac{1}{N}\sum_{i=1}^{N}(y_i - \hat{y}_i)^2
-    \]
-    其中 \(y_i\) 是真实值，\(\hat{y}_i\) 是预测值。
-  - **解读**：MSE 对较大的预测误差给予更高的"惩罚"。这个值越低，说明模型的预测越精准，尤其是在避免极端错误方面表现好。
+1. **独立头部模型**：
+   - 使用相同的特征网络
+   - 独立的分类头和回归头
+   - 没有共享的因果状态
 
-- **`reg_mae` (Mean Absolute Error, 平均绝对误差)**
-  - **是什么**：计算每个样本的预测值与真实值之差的绝对值，然后求平均。
-  - **计算公式**：
-    \[
-    \text{MAE} = \frac{1}{N}\sum_{i=1}^{N}|y_i - \hat{y}_i|
-    \]
-  - **解读**：MAE 直接反映了预测误差的平均大小。这个值越低，说明模型的预测值与真实值的平均差距越小。
+2. **条件回归模型**：
+   - 使用相同的特征网络
+   - 分类头预测词元
+   - 回归头仅在真实标签为`<NUM>`时训练
 
-- **`reg_picp` (Prediction Interval Coverage Probability, 预测区间覆盖率)**
-  - **是什么**: 这是**回归任务的校准指标**。它与分类校准的 ECE 作用类似，用于评估模型对其数值预测的不确定性描述是否准确。它回答了这个问题："模型预测了一个数值的概率分布，这个分布真的能准确地描述真实值可能出现的范围吗？"
-  - **计算过程**:
-    1.  根据模型为每个预测输出的柯西分布（由 `reg_loc` 和 `reg_scale` 参数化），我们可以计算出一个 **95% 的预测区间**。这个区间的含义是："我们有 95% 的信心，认为真实值会落在这个范围之内"。
-    2.  对于柯西分布，这个区间近似为 `[loc - 12.7 * scale, loc + 12.7 * scale]`。
-    3.  然后，我们遍历所有测试样本，检查每个样本的真实值 `y` 是否真的落在了模型给出的这个预测区间里。
-    4.  PICP 就是真实值成功落在预测区间内的样本所占的百分比。
-  - **计算公式**:
-    \[
-    \text{PICP} = \frac{1}{N}\sum_{i=1}^{N} \mathbb{I}(y_i \in [\hat{\mu}_{Y_i} - C \cdot \hat{\gamma}_{Y_i}, \hat{\mu}_{Y_i} + C \cdot \hat{\gamma}_{Y_i}])
-    \]
-    其中 \(\mathbb{I}\) 是指示函数（条件成立时为1，否则为0），\(C\) 是根据置信水平（如95%）和分布类型（柯西分布）确定的常数，\(\hat{\mu}_{Y_i}\) 和 \(\hat{\gamma}_{Y_i}\) 分别是模型对第 \(i\) 个样本预测的数值分布的位置和尺度参数。
-  - **解读**:
-    - 一个**完美校准**的回归模型，其 **PICP(95%)** 指标应该约等于 **95%**。
-    - 如果 PICP 远低于 95%（比如只有70%），说明模型的预测区间太窄了，它对自己的预测**过于自信 (over-confident)**。
-    - 如果 PICP 远高于 95%（比如是99%），说明模型的预测区间太宽了，它**过于保守 (over-conservative)**。
-  - **重要性**：它与分类校准（ECE）互为补充，共同构成了对我们模型"不确定性量化"这一核心能力的全面评估。一个好的因果模型，不仅要在分类时知道自己"有多确定"，也要在回归时对自己给出的预测范围有"靠谱的"认知。
+3. **Softmax分类模型**：
+   - 使用相同的特征网络
+   - 使用Softmax而非OvR分类
+   - 保持其他组件不变
 
-### 3. 分类校准指标 (Classification Calibration Metrics)
+#### 4.1.3 训练设置
 
-校准指标衡量模型对自己预测的"置信度"与其真实准确性是否一致。
+所有模型将使用以下训练设置：
 
-- **`calib_ece` (Expected Calibration Error, 预期校准误差)**
-  - **是什么**：这是一个衡量"校准度"的核心指标。一个"完美校准"的模型，如果它对 100 个预测给出了 80% 的置信度，那么我们期望其中真的有 80 个是正确的。ECE衡量的就是这种期望与现实之间的差距。
-  - **计算过程**：
-    1.  将模型的预测按置信度（即模型给出的最高概率）高低，分成若干个"箱子"（bins），比如 10 个。
-    2.  计算每个"箱子"里的样本的**平均置信度**和**实际准确率**。
-    3.  ECE 是所有"箱子"的 `|平均置信度 - 实际准确率|` 的加权平均值。
-  - **计算公式**：
-    \[
-    \text{ECE} = \sum_{m=1}^{M} \frac{|B_m|}{N} |\text{acc}(B_m) - \text{conf}(B_m)|
-    \]
-    其中 \(M\) 是箱子数量，\(B_m\) 是第 \(m\) 个箱子，\(N\) 是总样本数，\(\text{acc}\) 和 \(\text{conf}\) 分别是箱内的平均准确率和平均置信度。
-  - **解读**：ECE 越低（越接近0），说明模型的置信度越可靠。一个低 ECE 的模型，当它说"我有90%的把握"时，它大概率真的是对的。这在需要评估风险和不确定性的现实应用中至关重要。
+- 批大小：32
+- 优化器：Adam
+- 学习率：1e-4
+- 训练轮次：50（或早停）
+- 梯度裁剪：1.0
+- 权重衰减：1e-5
 
+### 4.2 实验流程
 
+#### 4.2.1 模型验证实验
 
-#### 1. 从"预测什么"到"有多确定"
+这个实验旨在验证因果语言模型的基本功能：
 
-传统的模型（比如一个简单的分类器）可能会告诉你："我认为下一个词是`<NUM>`"。
+1. **数据准备**：
+   - 使用BasicTextNumberDataset生成简单的文本-数值对
+   - 分割为训练集、验证集和测试集
 
-而我们的因果语言模型，得益于其概率化的设计（尤其是柯西分布的使用），它会告诉你更丰富的信息："我认为下一个词是`<NUM>`的概率是 **95%**，并且我预测的具体数值是 **42.5**，这个数值预测的**不确定性**（由`reg_scale`参数体现）很低。"
+2. **模型训练**：
+   - 使用基础配置训练模型
+   - 监控训练和验证损失
+   - 保存最佳模型
 
-#### 2. "确定性"本身需要被评估
+3. **性能评估**：
+   - 在测试集上评估模型性能
+   - 计算文本生成和数值预测指标
+   - 分析模型的预测分布
 
-现在，问题来了：模型声称的"95%的概率"真的可信吗？
+#### 4.2.2 架构比较实验
 
-*   如果一个模型总是非常"自信"（比如对每个预测都给出99%的置信度），但实际上它频繁出错，那么它的"自信"就是一种"自负"，是不可靠的，甚至是有害的。
-*   反之，如果一个模型总是很"谦虚"，即便预测正确也只给很低的置信度，那它的不确定性评估也是无用的。
+这个实验旨在比较因果语言模型与基线模型的性能：
 
-**校准指标（如 ECE）就是用来量化这种"自信"与"实际表现"之间差距的工具。**
+1. **数据准备**：
+   - 使用QADataset生成问答对
+   - 分割为训练集、验证集和测试集
 
-一个**完美校准**的模型，当它对100个不同的预测都给出了80%的置信度时，我们期望其中有大约80个预测是正确的。如果实际只有50个是正确的，那么这个模型就是**过度自信 (over-confident)** 的，它的校准误差就会很高。
+2. **模型训练**：
+   - 使用相同的训练设置训练所有模型
+   - 确保公平比较
 
-#### 3. 为什么这对我们的项目至关重要？
+3. **性能比较**：
+   - 在测试集上评估所有模型
+   - 比较各模型在文本生成和数值预测任务上的性能
+   - 分析性能差异的原因
 
-我们这个项目的核心设计之一，就是使用**概率分布**（柯西分布）来贯穿整个"推断-行动"流程。这么做的**一个主要目的**，就是希望模型能捕捉和传递不确定性，尤其是在面对模糊、有噪声或极端的数据时。
+#### 4.2.3 鲁棒性实验
 
-*   当输入信息清晰时，我们希望模型能给出高置信度的、准确的预测。
-*   当输入信息模棱两可或超出其认知范围时，我们希望模型能"知之为知之，不知为不知"，即给出一个低置信度的预测，或者一个带有很大不确定性（`scale`参数很大）的数值范围。
+这个实验旨在评估模型对噪声和极端值的鲁棒性：
 
-因此，**评估校准度，其实就是在评估我们整个概率化设计方案是否成功**。如果模型的校准度很差，那就意味着我们引以为傲的"不确定性量化"能力是不可靠的，这会严重削弱我们架构的优势。
+1. **数据准备**：
+   - 使用NoisyDataset和ExtremeValueDataset生成数据
+   - 设置不同的噪声级别
 
-**总结一下：**
+2. **模型评估**：
+   - 使用预训练的模型在这些数据集上进行评估
+   - 分析性能随噪声级别的变化
+   - 比较不同模型的鲁棒性
 
-我之所以特别提到并解释校准指标，是因为它直接衡量了我们模型的一个核心优势和设计初衷——**提供可靠的不确定性估计的能力**。它回答了一个比"模型预测对了吗？"更深层次的问题："我们能在多大程度上相信模型给出的置信度？"。对于一个旨在处理现实世界复杂性的因果模型而言，后一个问题的答案，与预测的准确性本身同等重要。
+#### 4.2.4 不确定性实验
+
+这个实验旨在评估模型的不确定性表示：
+
+1. **数据准备**：
+   - 使用各种数据集，包括正常样本和异常样本
+   - 创建不同难度级别的样本
+
+2. **不确定性分析**：
+   - 分析模型的不确定性估计
+   - 评估预测区间的覆盖率
+   - 测试异常检测性能
+
+#### 4.2.5 真实数据实验
+
+这个实验旨在评估模型在真实数据上的性能：
+
+1. **数据准备**：
+   - 收集和预处理真实数据集
+   - 分割为训练集、验证集和测试集
+
+2. **模型微调**：
+   - 在真实数据上微调预训练模型
+   - 监控过拟合风险
+
+3. **性能评估**：
+   - 在测试集上评估模型性能
+   - 分析模型在不同领域数据上的表现
+   - 识别潜在的应用场景
+
+### 4.3 实验实施
+
+#### 4.3.1 实验环境
+
+所有实验将在以下环境中进行：
+
+- 硬件：单GPU工作站（NVIDIA RTX 3090或更高）
+- 软件：PyTorch 1.10+，Python 3.8+
+- 依赖：详见requirements.txt
+
+#### 4.3.2 实验流程自动化
+
+为了确保实验的可重复性和效率，我们将实现自动化实验流程：
+
+```python
+def run_experiment(config, dataset, experiment_name):
+    """
+    运行单个实验。
+    
+    Args:
+        config: 模型配置
+        dataset: 数据集
+        experiment_name: 实验名称
+    
+    Returns:
+        results: 实验结果
+    """
+    # 设置随机种子
+    set_seed(config.seed)
+    
+    # 准备数据
+    train_loader, val_loader, test_loader = prepare_data(dataset)
+    
+    # 创建模型
+    model = create_model(config)
+    
+    # 训练模型
+    train_model(model, train_loader, val_loader, config)
+    
+    # 评估模型
+    results = evaluate_model(model, test_loader)
+    
+    # 保存结果
+    save_results(results, experiment_name)
+    
+    return results
+```
+
+#### 4.3.3 结果记录与分析
+
+实验结果将被记录并分析：
+
+```python
+def analyze_results(results_dict):
+    """
+    分析实验结果。
+    
+    Args:
+        results_dict: 包含多个实验结果的字典
+    
+    Returns:
+        analysis: 分析结果
+    """
+    # 比较不同模型的性能
+    model_comparison = compare_models(results_dict)
+    
+    # 分析性能随超参数的变化
+    param_analysis = analyze_hyperparameters(results_dict)
+    
+    # 生成可视化
+    visualizations = generate_visualizations(results_dict)
+    
+    return {
+        'model_comparison': model_comparison,
+        'param_analysis': param_analysis,
+        'visualizations': visualizations
+    }
+```
+
+### 4.4 可视化工具
+
+为了更好地理解和分析实验结果，我们将实现以下可视化工具：
+
+#### 4.4.1 性能指标可视化
+
+```python
+def plot_metrics(results, metric_names, model_names):
+    """
+    绘制性能指标比较图。
+    
+    Args:
+        results: 实验结果
+        metric_names: 指标名称列表
+        model_names: 模型名称列表
+    
+    Returns:
+        fig: 图表对象
+    """
+    fig, axes = plt.subplots(len(metric_names), 1, figsize=(10, 5 * len(metric_names)))
+    
+    for i, metric in enumerate(metric_names):
+        ax = axes[i] if len(metric_names) > 1 else axes
+        
+        values = [results[model][metric] for model in model_names]
+        ax.bar(model_names, values)
+        ax.set_title(f'{metric} Comparison')
+        ax.set_ylabel(metric)
+        ax.grid(True, linestyle='--', alpha=0.7)
+        
+        # 添加数值标签
+        for j, v in enumerate(values):
+            ax.text(j, v, f'{v:.4f}', ha='center', va='bottom')
+    
+    plt.tight_layout()
+    return fig
+```
+
+#### 4.4.2 因果状态可视化
+
+```python
+def visualize_causal_state(model, inputs, num_samples=1000):
+    """
+    可视化因果状态分布。
+    
+    Args:
+        model: 因果语言模型
+        inputs: 输入数据
+        num_samples: 采样数量
+    
+    Returns:
+        fig: 图表对象
+    """
+    # 获取模型输出
+    outputs = model(inputs['input_ids'], inputs['numerical_values'])
+    
+    # 获取因果状态分布参数
+    causal_loc = outputs['causal_loc'][0].detach().numpy()
+    causal_scale = outputs['causal_scale'][0].detach().numpy()
+    
+    # 如果因果维度大于2，使用PCA降维
+    if causal_loc.shape[0] > 2:
+        from sklearn.decomposition import PCA
+        pca = PCA(n_components=2)
+        
+        # 从分布中采样
+        samples = []
+        for _ in range(num_samples):
+            sample = cauchy_sample(
+                torch.tensor(causal_loc), 
+                torch.tensor(causal_scale)
+            ).numpy()
+            samples.append(sample)
+        
+        samples = np.array(samples)
+        
+        # 应用PCA
+        samples_2d = pca.fit_transform(samples)
+        loc_2d = pca.transform([causal_loc])[0]
+    else:
+        # 直接使用前两个维度
+        samples_2d = np.array([
+            cauchy_sample(
+                torch.tensor(causal_loc[:2]), 
+                torch.tensor(causal_scale[:2])
+            ).numpy()
+            for _ in range(num_samples)
+        ])
+        loc_2d = causal_loc[:2]
+    
+    # 绘制散点图
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    ax.scatter(samples_2d[:, 0], samples_2d[:, 1], alpha=0.3, label='Samples')
+    ax.scatter([loc_2d[0]], [loc_2d[1]], color='red', s=100, label='Location')
+    
+    ax.set_title('Causal State Distribution')
+    ax.set_xlabel('Dimension 1')
+    ax.set_ylabel('Dimension 2')
+    ax.legend()
+    ax.grid(True)
+    
+    return fig
+```
+
+#### 4.4.3 决策边界可视化
+
+```python
+def visualize_decision_boundary(model, feature_range=(-5, 5), resolution=100):
+    """
+    可视化OvR分类的决策边界。
+    
+    Args:
+        model: 因果语言模型
+        feature_range: 特征范围
+        resolution: 网格分辨率
+    
+    Returns:
+        fig: 图表对象
+    """
+    # 创建网格
+    x = np.linspace(feature_range[0], feature_range[1], resolution)
+    y = np.linspace(feature_range[0], feature_range[1], resolution)
+    X, Y = np.meshgrid(x, y)
+    
+    # 准备网格点
+    grid_points = np.column_stack([X.ravel(), Y.ravel()])
+    
+    # 对每个网格点计算决策分数
+    scores = []
+    for point in grid_points:
+        # 创建因果状态
+        causal_loc = torch.tensor([point[0], point[1]] + [0] * (model.config.causal_dim - 2), dtype=torch.float32)
+        causal_scale = torch.ones_like(causal_loc) * 0.1
+        
+        # 获取决策分数
+        outputs = model.action_network(causal_loc.unsqueeze(0), causal_scale.unsqueeze(0))
+        cls_probs = outputs['cls_probs'][0].detach().numpy()
+        
+        scores.append(cls_probs)
+    
+    scores = np.array(scores)
+    
+    # 找到每个点的最高概率类别
+    pred_classes = np.argmax(scores, axis=1)
+    
+    # 绘制决策边界
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    # 绘制散点图，颜色表示类别
+    scatter = ax.scatter(grid_points[:, 0], grid_points[:, 1], c=pred_classes, cmap='viridis', alpha=0.5, s=10)
+    
+    # 添加颜色条
+    cbar = plt.colorbar(scatter, ax=ax)
+    cbar.set_label('Predicted Class')
+    
+    ax.set_title('Decision Boundary')
+    ax.set_xlabel('Causal Dimension 1')
+    ax.set_ylabel('Causal Dimension 2')
+    ax.grid(True)
+    
+    return fig
+```
+
+这些可视化工具将帮助我们深入理解模型的行为，特别是因果状态空间的结构和决策边界的特性。
+
+
+## 5. 结果分析方法
+
+### 5.1 统计分析
+
+#### 5.1.1 假设检验
+
+为了确定不同模型之间的性能差异是否具有统计显著性，我们将进行以下假设检验：
+
+1. **配对t检验**：
+   - 比较两个模型在相同测试样本上的性能
+   - 零假设：两个模型的平均性能相同
+   - 替代假设：一个模型的平均性能优于另一个
+
+   ```python
+   def paired_t_test(model1_results, model2_results, alpha=0.05):
+       """
+       进行配对t检验。
+       
+       Args:
+           model1_results: 模型1的结果
+           model2_results: 模型2的结果
+           alpha: 显著性水平
+       
+       Returns:
+           t_stat: t统计量
+           p_value: p值
+           significant: 是否显著
+       """
+       from scipy import stats
+       
+       # 计算差异
+       diff = model1_results - model2_results
+       
+       # 进行t检验
+       t_stat, p_value = stats.ttest_rel(model1_results, model2_results)
+       
+       return {
+           't_stat': t_stat,
+           'p_value': p_value,
+           'significant': p_value < alpha
+       }
+   ```
+
+2. **ANOVA分析**：
+   - 比较多个模型的性能
+   - 零假设：所有模型的平均性能相同
+   - 替代假设：至少有一个模型的性能与其他不同
+
+   ```python
+   def anova_test(results_list, alpha=0.05):
+       """
+       进行ANOVA分析。
+       
+       Args:
+           results_list: 多个模型的结果列表
+           alpha: 显著性水平
+       
+       Returns:
+           f_stat: F统计量
+           p_value: p值
+           significant: 是否显著
+       """
+       from scipy import stats
+       
+       # 进行ANOVA分析
+       f_stat, p_value = stats.f_oneway(*results_list)
+       
+       return {
+           'f_stat': f_stat,
+           'p_value': p_value,
+           'significant': p_value < alpha
+       }
+   ```
+
+#### 5.1.2 效应量分析
+
+除了统计显著性，我们还将计算效应量，以量化差异的实际大小：
+
+1. **Cohen's d**：
+   - 衡量两个模型之间差异的标准化大小
+   - d = 0.2表示小效应，d = 0.5表示中等效应，d = 0.8表示大效应
+
+   ```python
+   def cohens_d(model1_results, model2_results):
+       """
+       计算Cohen's d效应量。
+       
+       Args:
+           model1_results: 模型1的结果
+           model2_results: 模型2的结果
+       
+       Returns:
+           d: Cohen's d值
+       """
+       # 计算平均差异
+       mean_diff = np.mean(model1_results - model2_results)
+       
+       # 计算合并标准差
+       n1, n2 = len(model1_results), len(model2_results)
+       s1, s2 = np.std(model1_results, ddof=1), np.std(model2_results, ddof=1)
+       s_pooled = np.sqrt(((n1 - 1) * s1**2 + (n2 - 1) * s2**2) / (n1 + n2 - 2))
+       
+       # 计算Cohen's d
+       d = mean_diff / s_pooled
+       
+       return d
+   ```
+
+2. **Eta-squared (η²)**：
+   - 衡量ANOVA分析中的效应量
+   - η² = 0.01表示小效应，η² = 0.06表示中等效应，η² = 0.14表示大效应
+
+   ```python
+   def eta_squared(results_list):
+       """
+       计算Eta-squared效应量。
+       
+       Args:
+           results_list: 多个模型的结果列表
+       
+       Returns:
+           eta_sq: Eta-squared值
+       """
+       # 计算组间平方和
+       grand_mean = np.mean([np.mean(results) for results in results_list])
+       ss_between = sum(len(results) * (np.mean(results) - grand_mean)**2 for results in results_list)
+       
+       # 计算总平方和
+       all_results = np.concatenate(results_list)
+       ss_total = sum((result - grand_mean)**2 for result in all_results)
+       
+       # 计算Eta-squared
+       eta_sq = ss_between / ss_total
+       
+       return eta_sq
+   ```
+
+### 5.2 错误分析
+
+#### 5.2.1 错误类型分类
+
+我们将对模型的错误进行分类，以识别常见的错误模式：
+
+```python
+def classify_errors(model, test_loader):
+    """
+    对模型错误进行分类。
+    
+    Args:
+        model: 因果语言模型
+        test_loader: 测试数据加载器
+    
+    Returns:
+        error_analysis: 错误分析结果
+    """
+    error_types = {
+        'false_num': 0,  # 错误地预测为<NUM>
+        'missed_num': 0,  # 未能预测<NUM>
+        'value_error': 0,  # 数值预测错误
+        'other_token_error': 0  # 其他词元预测错误
+    }
+    
+    error_samples = {
+        'false_num': [],
+        'missed_num': [],
+        'value_error': [],
+        'other_token_error': []
+    }
+    
+    total_samples = 0
+    
+    for batch in test_loader:
+        # 获取预测
+        predictions = model.predict(
+            batch['input_ids'].to(model.device),
+            batch['numerical_values'].to(model.device)
+        )
+        
+        # 获取目标
+        targets = batch['targets'].to(model.device)
+        target_values = batch['target_values'].to(model.device)
+        
+        # 分析每个样本
+        for i in range(len(targets)):
+            total_samples += 1
+            
+            pred_token = predictions['cls_pred'][i].item()
+            true_token = targets[i].item()
+            
+            # 检查错误类型
+            if pred_token == model.config.num_token_id and true_token != model.config.num_token_id:
+                # 错误地预测为<NUM>
+                error_types['false_num'] += 1
+                error_samples['false_num'].append({
+                    'input_ids': batch['input_ids'][i].tolist(),
+                    'pred_token': pred_token,
+                    'true_token': true_token
+                })
+            elif pred_token != model.config.num_token_id and true_token == model.config.num_token_id:
+                # 未能预测<NUM>
+                error_types['missed_num'] += 1
+                error_samples['missed_num'].append({
+                    'input_ids': batch['input_ids'][i].tolist(),
+                    'pred_token': pred_token,
+                    'true_token': true_token
+                })
+            elif pred_token == model.config.num_token_id and true_token == model.config.num_token_id:
+                # 检查数值预测
+                pred_value = predictions['reg_pred'][i].item()
+                true_value = target_values[i].item()
+                
+                # 如果相对误差大于阈值，视为错误
+                if abs((pred_value - true_value) / true_value) > 0.1:
+                    error_types['value_error'] += 1
+                    error_samples['value_error'].append({
+                        'input_ids': batch['input_ids'][i].tolist(),
+                        'pred_value': pred_value,
+                        'true_value': true_value
+                    })
+            elif pred_token != true_token:
+                # 其他词元预测错误
+                error_types['other_token_error'] += 1
+                error_samples['other_token_error'].append({
+                    'input_ids': batch['input_ids'][i].tolist(),
+                    'pred_token': pred_token,
+                    'true_token': true_token
+                })
+    
+    # 计算错误比例
+    error_rates = {k: v / total_samples for k, v in error_types.items()}
+    
+    return {
+        'error_types': error_types,
+        'error_rates': error_rates,
+        'error_samples': error_samples,
+        'total_samples': total_samples
+    }
+```
+
+#### 5.2.2 困难样本分析
+
+我们将识别和分析模型表现最差的样本，以了解模型的局限性：
+
+```python
+def analyze_difficult_samples(model, test_loader, top_n=10):
+    """
+    分析模型表现最差的样本。
+    
+    Args:
+        model: 因果语言模型
+        test_loader: 测试数据加载器
+        top_n: 返回的困难样本数量
+    
+    Returns:
+        difficult_samples: 困难样本分析
+    """
+    samples_with_errors = []
+    
+    for batch in test_loader:
+        # 获取预测
+        outputs = model(
+            batch['input_ids'].to(model.device),
+            batch['numerical_values'].to(model.device)
+        )
+        
+        predictions = model.predict(
+            batch['input_ids'].to(model.device),
+            batch['numerical_values'].to(model.device)
+        )
+        
+        # 获取目标
+        targets = batch['targets'].to(model.device)
+        target_values = batch['target_values'].to(model.device)
+        
+        # 计算每个样本的损失
+        for i in range(len(targets)):
+            # 计算分类损失
+            cls_loss = F.cross_entropy(
+                outputs['cls_loc'][i].unsqueeze(0),
+                targets[i].unsqueeze(0)
+            ).item()
+            
+            # 如果是<NUM>，计算回归损失
+            reg_loss = 0.0
+            if targets[i].item() == model.config.num_token_id:
+                reg_loss = torch.log(1 + ((target_values[i] - outputs['reg_loc'][i]) / outputs['reg_scale'][i])**2).item()
+            
+            # 总损失
+            total_loss = cls_loss + reg_loss
+            
+            # 保存样本信息
+            samples_with_errors.append({
+                'input_ids': batch['input_ids'][i].tolist(),
+                'numerical_values': batch['numerical_values'][i].tolist(),
+                'target': targets[i].item(),
+                'target_value': target_values[i].item(),
+                'pred_token': predictions['cls_pred'][i].item(),
+                'pred_value': predictions['reg_pred'][i].item(),
+                'cls_loss': cls_loss,
+                'reg_loss': reg_loss,
+                'total_loss': total_loss
+            })
+    
+    # 按总损失排序
+    samples_with_errors.sort(key=lambda x: x['total_loss'], reverse=True)
+    
+    # 返回损失最高的样本
+    return samples_with_errors[:top_n]
+```
+
+### 5.3 不确定性分析
+
+#### 5.3.1 校准曲线
+
+校准曲线显示了模型的置信度与实际准确率的关系：
+
+```python
+def plot_calibration_curve(model, test_loader, num_bins=10):
+    """
+    绘制校准曲线。
+    
+    Args:
+        model: 因果语言模型
+        test_loader: 测试数据加载器
+        num_bins: 置信度区间的数量
+    
+    Returns:
+        fig: 图表对象
+    """
+    confidences = []
+    accuracies = []
+    
+    for batch in test_loader:
+        # 获取模型输出
+        outputs = model(
+            batch['input_ids'].to(model.device),
+            batch['numerical_values'].to(model.device)
+        )
+        
+        # 获取预测和目标
+        predictions = model.predict(
+            batch['input_ids'].to(model.device),
+            batch['numerical_values'].to(model.device)
+        )
+        
+        targets = batch['targets'].to(model.device)
+        
+        # 获取每个样本的最高概率
+        probs = outputs['cls_probs']
+        max_probs, pred_classes = torch.max(probs, dim=1)
+        
+        # 记录置信度和准确性
+        for i in range(len(targets)):
+            confidences.append(max_probs[i].item())
+            accuracies.append((pred_classes[i] == targets[i]).float().item())
+    
+    # 创建置信度区间
+    bin_edges = np.linspace(0, 1, num_bins + 1)
+    bin_indices = np.digitize(confidences, bin_edges) - 1
+    
+    # 计算每个区间的平均置信度和准确率
+    bin_confidences = []
+    bin_accuracies = []
+    
+    for i in range(num_bins):
+        mask = (bin_indices == i)
+        if np.any(mask):
+            bin_confidences.append(np.mean(np.array(confidences)[mask]))
+            bin_accuracies.append(np.mean(np.array(accuracies)[mask]))
+        else:
+            bin_confidences.append(0)
+            bin_accuracies.append(0)
+    
+    # 绘制校准曲线
+    fig, ax = plt.subplots(figsize=(8, 8))
+    
+    # 绘制对角线（完美校准）
+    ax.plot([0, 1], [0, 1], 'k--', label='Perfectly calibrated')
+    
+    # 绘制实际校准曲线
+    ax.plot(bin_confidences, bin_accuracies, 'o-', label='Model calibration')
+    
+    # 计算校准误差
+    calibration_error = np.mean(np.abs(np.array(bin_confidences) - np.array(bin_accuracies)))
+    
+    ax.set_title(f'Calibration Curve (Error: {calibration_error:.4f})')
+    ax.set_xlabel('Confidence')
+    ax.set_ylabel('Accuracy')
+    ax.legend()
+    ax.grid(True)
+    
+    return fig
+```
+
+#### 5.3.2 不确定性直方图
+
+不确定性直方图显示了模型对不同样本的不确定性估计：
+
+```python
+def plot_uncertainty_histogram(model, test_loader):
+    """
+    绘制不确定性直方图。
+    
+    Args:
+        model: 因果语言模型
+        test_loader: 测试数据加载器
+    
+    Returns:
+        fig: 图表对象
+    """
+    correct_uncertainties = []
+    incorrect_uncertainties = []
+    
+    for batch in test_loader:
+        # 获取模型输出
+        outputs = model(
+            batch['input_ids'].to(model.device),
+            batch['numerical_values'].to(model.device)
+        )
+        
+        # 获取预测和目标
+        predictions = model.predict(
+            batch['input_ids'].to(model.device),
+            batch['numerical_values'].to(model.device)
+        )
+        
+        targets = batch['targets'].to(model.device)
+        
+        # 获取不确定性估计（使用尺度参数的平均值）
+        uncertainties = outputs['causal_scale'].mean(dim=1).cpu().detach().numpy()
+        
+        # 区分正确和错误的预测
+        correct_mask = (predictions['cls_pred'] == targets).cpu().numpy()
+        
+        correct_uncertainties.extend(uncertainties[correct_mask])
+        incorrect_uncertainties.extend(uncertainties[~correct_mask])
+    
+    # 绘制直方图
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    ax.hist(correct_uncertainties, bins=30, alpha=0.5, label='Correct predictions')
+    ax.hist(incorrect_uncertainties, bins=30, alpha=0.5, label='Incorrect predictions')
+    
+    ax.set_title('Uncertainty Distribution')
+    ax.set_xlabel('Uncertainty (Causal Scale)')
+    ax.set_ylabel('Count')
+    ax.legend()
+    ax.grid(True)
+    
+    return fig
+```
+
+### 5.4 超参数分析
+
+#### 5.4.1 超参数敏感性
+
+我们将分析模型性能对超参数的敏感性：
+
+```python
+def analyze_hyperparameter_sensitivity(results_dict, param_name):
+    """
+    分析模型性能对特定超参数的敏感性。
+    
+    Args:
+        results_dict: 包含不同超参数配置结果的字典
+        param_name: 超参数名称
+    
+    Returns:
+        fig: 图表对象
+    """
+    # 提取超参数值和对应的性能指标
+    param_values = []
+    text_metrics = []
+    numeric_metrics = []
+    
+    for config, results in results_dict.items():
+        param_values.append(getattr(config, param_name))
+        text_metrics.append(results['cls_accuracy'])
+        numeric_metrics.append(results['reg_mse'])
+    
+    # 排序
+    sorted_indices = np.argsort(param_values)
+    param_values = [param_values[i] for i in sorted_indices]
+    text_metrics = [text_metrics[i] for i in sorted_indices]
+    numeric_metrics = [numeric_metrics[i] for i in sorted_indices]
+    
+    # 绘制敏感性曲线
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12), sharex=True)
+    
+    # 文本指标
+    ax1.plot(param_values, text_metrics, 'o-', label='Classification Accuracy')
+    ax1.set_title(f'Text Performance vs {param_name}')
+    ax1.set_ylabel('Classification Accuracy')
+    ax1.grid(True)
+    
+    # 数值指标
+    ax2.plot(param_values, numeric_metrics, 'o-', label='Regression MSE')
+    ax2.set_title(f'Numeric Performance vs {param_name}')
+    ax2.set_xlabel(param_name)
+    ax2.set_ylabel('Regression MSE')
+    ax2.grid(True)
+    
+    plt.tight_layout()
+    return fig
+```
+
+#### 5.4.2 超参数交互
+
+我们将分析超参数之间的交互效应：
+
+```python
+def analyze_hyperparameter_interaction(results_dict, param1_name, param2_name, metric_name):
+    """
+    分析两个超参数之间的交互效应。
+    
+    Args:
+        results_dict: 包含不同超参数配置结果的字典
+        param1_name: 第一个超参数名称
+        param2_name: 第二个超参数名称
+        metric_name: 性能指标名称
+    
+    Returns:
+        fig: 图表对象
+    """
+    # 提取超参数值和对应的性能指标
+    param1_values = []
+    param2_values = []
+    metric_values = []
+    
+    for config, results in results_dict.items():
+        param1_values.append(getattr(config, param1_name))
+        param2_values.append(getattr(config, param2_name))
+        metric_values.append(results[metric_name])
+    
+    # 创建网格
+    param1_unique = sorted(set(param1_values))
+    param2_unique = sorted(set(param2_values))
+    
+    metric_grid = np.zeros((len(param1_unique), len(param2_unique)))
+    
+    for i, p1 in enumerate(param1_unique):
+        for j, p2 in enumerate(param2_unique):
+            # 找到匹配的配置
+            matches = [(p1v, p2v, mv) for p1v, p2v, mv in zip(param1_values, param2_values, metric_values)
+                      if p1v == p1 and p2v == p2]
+            
+            if matches:
+                metric_grid[i, j] = matches[0][2]
+    
+    # 绘制热图
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    im = ax.imshow(metric_grid, cmap='viridis')
+    
+    # 添加颜色条
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label(metric_name)
+    
+    # 设置坐标轴
+    ax.set_xticks(np.arange(len(param2_unique)))
+    ax.set_yticks(np.arange(len(param1_unique)))
+    ax.set_xticklabels(param2_unique)
+    ax.set_yticklabels(param1_unique)
+    
+    ax.set_xlabel(param2_name)
+    ax.set_ylabel(param1_name)
+    ax.set_title(f'{metric_name} vs {param1_name} and {param2_name}')
+    
+    # 添加数值标签
+    for i in range(len(param1_unique)):
+        for j in range(len(param2_unique)):
+            ax.text(j, i, f'{metric_grid[i, j]:.4f}', ha='center', va='center', color='w')
+    
+    plt.tight_layout()
+    return fig
+```
+
+## 6. 结论与未来工作
+
+### 6.1 预期结论
+
+基于我们的实验设计，我们预期得出以下结论：
+
+1. **架构有效性**：
+   - 推断-行动范式能够有效地处理混合数据任务，提供统一的不确定性表示
+   - 柯西分布比正态分布更适合表示因果状态的不确定性，特别是在处理极端值和异常情况时
+   - OvR分类比Softmax分类提供更好的决策边界，特别是在多标签场景中
+   - 门控损失函数能够有效地实现"先分类，再回归"的学习策略，提高模型的一致性
+
+2. **性能优势**：
+   - 因果语言模型在混合任务上的整体性能优于传统方法
+   - 在数值预测任务上，因果语言模型的准确性和鲁棒性更高
+   - 在文本生成任务上，因果语言模型的性能与传统方法相当或略优
+
+3. **不确定性表示**：
+   - 因果语言模型能够提供更细粒度、更可靠的不确定性估计
+   - 不确定性估计与实际误差具有良好的相关性
+   - 模型能够有效地识别异常输入和极端情况
+
+4. **超参数影响**：
+   - 因果维度是一个关键超参数，影响模型的表达能力和计算效率
+   - 回归损失权重影响学习动态，需要根据任务特性调整
+   - 不同超参数之间存在交互效应，需要综合考虑
+
+### 6.2 潜在应用场景
+
+基于实验结果，我们识别了以下潜在应用场景：
+
+1. **金融分析**：
+   - 从财务报告中提取和预测关键财务指标
+   - 分析市场评论并预测价格走势
+   - 提供带有不确定性估计的投资建议
+
+2. **科学研究**：
+   - 从科学文献中提取实验结果和统计数据
+   - 预测实验参数对结果的影响
+   - 识别异常结果和潜在的研究方向
+
+3. **医疗诊断**：
+   - 从病历中提取关键生理指标
+   - 预测治疗效果和风险
+   - 提供带有不确定性估计的诊断建议
+
+4. **教育辅助**：
+   - 解答包含数值计算的问题
+   - 生成带有数值例子的教学内容
+   - 评估学生回答的准确性
+
+### 6.3 局限性与挑战
+
+我们也识别了以下局限性和挑战：
+
+1. **计算复杂度**：
+   - 因果语言模型的计算复杂度高于传统方法
+   - 在资源受限的环境中可能需要模型压缩
+
+2. **训练稳定性**：
+   - 柯西分布的重尾特性可能导致训练不稳定
+   - 需要特殊的数值处理技术和梯度裁剪
+
+3. **数据需求**：
+   - 模型需要足够的数值样本进行训练
+   - 真实数据中的数值分布可能不均衡
+
+4. **评估挑战**：
+   - 混合任务的评估需要综合考虑多个指标
+   - 不确定性评估需要特殊的指标和方法
+
+### 6.4 未来工作方向
+
+基于实验结果和识别的挑战，我们提出以下未来工作方向：
+
+1. **模型扩展**：
+   - 扩展到更大的语言模型（如Qwen-7B）
+   - 探索其他重尾分布（如学生t分布）
+   - 研究多模态输入的处理方法
+
+2. **效率优化**：
+   - 研究模型压缩和量化技术
+   - 优化推理过程，减少计算复杂度
+   - 开发专用硬件加速方案
+
+3. **应用研究**：
+   - 在特定领域（如金融、医疗）进行深入研究
+   - 开发针对特定应用的预训练模型
+   - 研究与领域专家知识的结合方法
+
+4. **理论研究**：
+   - 深入研究因果状态空间的结构和特性
+   - 探索不确定性表示的理论基础
+   - 研究推断-行动范式的泛化能力
+
+通过这些未来工作，我们期望进一步提升因果语言模型的性能和适用性，为更广泛的应用场景提供支持。
+
