@@ -189,6 +189,65 @@ class ActionNetwork(nn.Module):
         # Regression head for numerical prediction
         self.regression_head = RegressionHead(causal_dim)
         
+    def init_weights(self, qwen_lm_head, num_target_mean, num_target_std, num_token_id):
+        """
+        Initialize weights based on pretrained Qwen model and data statistics.
+        
+        Args:
+            qwen_lm_head (nn.Linear): The pretrained language model head from Qwen.
+            num_target_mean (float): The mean of the numerical target values.
+            num_target_std (float): The standard deviation of the numerical target values.
+            num_token_id (int): The token ID for the <NUM> token.
+        """
+        # 1. Initialize Classification Head
+        cls_head = self.classification_head.causal_linear
+        
+        # Handle vocabulary size mismatch between our tokenizer and Qwen model
+        qwen_vocab_size = qwen_lm_head.weight.shape[0]
+        our_vocab_size = self.num_classes  # This includes our added <NUM> token
+        
+        # The overlapping vocabulary size (excluding our <NUM> token)
+        overlapping_vocab_size = min(qwen_vocab_size, our_vocab_size - 1)
+        
+        print(f"  - Qwen vocab size: {qwen_vocab_size}, Our vocab size: {our_vocab_size}")
+        print(f"  - Copying weights for {overlapping_vocab_size} overlapping tokens")
+
+        # Copy weights and biases for overlapping tokens
+        cls_head.loc_layer.weight.data[:overlapping_vocab_size, :].copy_(
+            qwen_lm_head.weight.data[:overlapping_vocab_size, :]
+        )
+        if qwen_lm_head.bias is not None:
+            cls_head.loc_layer.bias.data[:overlapping_vocab_size].copy_(
+                qwen_lm_head.bias.data[:overlapping_vocab_size]
+            )
+        
+        # Initialize any remaining tokens (between overlapping_vocab_size and our_vocab_size-1) to zero
+        if overlapping_vocab_size < our_vocab_size - 1:
+            cls_head.loc_layer.weight.data[overlapping_vocab_size:our_vocab_size-1, :].fill_(0)
+            cls_head.loc_layer.bias.data[overlapping_vocab_size:our_vocab_size-1].fill_(0)
+        
+        # Initialize the new <NUM> token row for loc to zero
+        cls_head.loc_layer.weight.data[num_token_id, :].fill_(0)
+        # Penalize the bias for <NUM> token to suppress initial predictions
+        cls_head.loc_layer.bias.data[num_token_id].fill_(-10.0)
+
+        # Initialize all scale parameters to a high uncertainty state
+        # Weight = zero, Bias = large positive value
+        cls_head.scale_layer.weight.data.fill_(0)
+        cls_head.scale_layer.bias.data.fill_(2.3) # exp(2.3) approx 10
+
+        # 2. Initialize Regression Head
+        reg_head = self.regression_head.causal_linear
+        
+        # Initialize loc to predict the mean of the data
+        reg_head.loc_layer.weight.data.fill_(0)
+        reg_head.loc_layer.bias.data.fill_(num_target_mean)
+
+        # Initialize scale to reflect the standard deviation of the data
+        reg_head.scale_layer.weight.data.fill_(0)
+        # Use log of std dev, ensure std > 0
+        reg_head.scale_layer.bias.data.fill_(torch.log(torch.tensor(num_target_std) + 1e-6))
+
     def forward(self, causal_loc, causal_scale):
         """
         Transform causal state distribution to classification and regression outputs.

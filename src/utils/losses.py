@@ -13,6 +13,22 @@ import math
 from .distributions import cauchy_cdf, cauchy_nll_loss
 
 
+def compute_ovr_probabilities(loc, scale, threshold=0.0):
+    """
+    Computes OvR probabilities based on decision score distributions.
+
+    Args:
+        loc (torch.Tensor): Location parameters for each class decision score.
+        scale (torch.Tensor): Scale parameters for each class decision score.
+        threshold (float, optional): Decision threshold. Defaults to 0.0.
+
+    Returns:
+        torch.Tensor: The computed probabilities for each class.
+    """
+    # Implements the formula P(S > C) = 1/2 + (1/π) * arctan((loc - C)/scale)
+    return 0.5 + (1 / math.pi) * torch.atan((loc - threshold) / scale)
+
+
 class OvRClassificationLoss(nn.Module):
     """
     One-vs-Rest (OvR) classification loss.
@@ -33,7 +49,6 @@ class OvRClassificationLoss(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         self.threshold = threshold
-        self.register_buffer('thresholds', torch.ones(num_classes) * threshold)
         
     def forward(self, loc, scale, targets):
         """
@@ -50,11 +65,9 @@ class OvRClassificationLoss(nn.Module):
         Returns:
             torch.Tensor: OvR classification loss
         """
-        batch_size = loc.size(0)
         
-        # Direct implementation of the formula from core-design.md
-        # P(S_k > C_k) = 1/2 + (1/π) * arctan((loc_Sk - C_k)/scale_Sk)
-        probs = 0.5 + (1 / math.pi) * torch.atan((loc - self.thresholds) / scale)
+        # Use the utility function to compute probabilities
+        probs = compute_ovr_probabilities(loc, scale, self.threshold)
         
         # Create one-hot target tensor
         target_one_hot = F.one_hot(targets, self.num_classes).float()
@@ -71,10 +84,11 @@ class OvRClassificationLoss(nn.Module):
 
 class GatedRegressionLoss(nn.Module):
     """
-    Gated regression loss for numerical prediction.
+    Hard-Gated regression loss for numerical prediction.
     
-    This loss is only activated when the target is a numerical value (indicated by <NUM> token),
-    and is weighted by the model's confidence in predicting the <NUM> token.
+    This loss is only activated when the target is a numerical value (indicated by <NUM> token).
+    It uses a "hard" gate (the target must be <NUM>) instead of being scaled by
+    the model's prediction probability, which proved to be unstable.
     """
     
     def __init__(self, num_token_id):
@@ -87,43 +101,35 @@ class GatedRegressionLoss(nn.Module):
         super().__init__()
         self.num_token_id = num_token_id
         
-    def forward(self, reg_loc, reg_scale, num_prob, targets, target_values):
+    def forward(self, reg_loc, reg_scale, targets, target_values):
         """
-        Compute the gated regression loss.
+        Compute the hard-gated regression loss.
         
         Args:
             reg_loc (torch.Tensor): Predicted location parameter for regression
-                                   Shape: [batch_size]
             reg_scale (torch.Tensor): Predicted scale parameter for regression
-                                     Shape: [batch_size]
-            num_prob (torch.Tensor): Probability of predicting <NUM> token
-                                    Shape: [batch_size]
             targets (torch.Tensor): Target token IDs
-                                   Shape: [batch_size]
-            target_values (torch.Tensor): Target numerical values (only valid when target is <NUM>)
-                                         Shape: [batch_size]
+            target_values (torch.Tensor): Target numerical values
             
         Returns:
-            torch.Tensor: Gated regression loss
+            torch.Tensor: Hard-gated regression loss
         """
         # Create mask for samples where target is <NUM>
         is_num_mask = (targets == self.num_token_id).float()
-        
-        # Compute Cauchy NLL loss for regression
+        num_count = is_num_mask.sum()
+
+        if num_count == 0:
+            return torch.tensor(0.0, device=reg_loc.device)
+
+        # Compute the standard Cauchy NLL loss
         cauchy_loss = cauchy_nll_loss(reg_loc, reg_scale, target_values)
         
-        # Gate the regression loss by:
-        # 1. Only applying it to samples where target is <NUM>
-        # 2. Weighting it by the model's confidence in predicting <NUM>
-        gated_loss = is_num_mask * num_prob * cauchy_loss
+        # Apply a "hard" gate: only compute loss for <NUM> tokens.
+        # We do not scale by the probability, as it created instabilities.
+        hard_gated_loss = is_num_mask * cauchy_loss
         
-        # Return mean loss over batch
-        # If no <NUM> targets in batch, return zero loss
-        num_count = is_num_mask.sum()
-        if num_count > 0:
-            return gated_loss.sum() / num_count
-        else:
-            return torch.tensor(0.0, device=gated_loss.device)
+        # Return the mean loss over the <NUM> samples in the batch
+        return hard_gated_loss.sum() / num_count
 
 
 class CausalLMLoss(nn.Module):
@@ -143,8 +149,9 @@ class CausalLMLoss(nn.Module):
             regression_weight (float, optional): Weight for the regression loss. Defaults to 1.0.
         """
         super().__init__()
-        self.cls_loss = OvRClassificationLoss(num_classes)
-        self.reg_loss = GatedRegressionLoss(num_token_id)
+        self.num_classes = num_classes
+        self.num_token_id = num_token_id
+        self.cls_loss_fn = OvRClassificationLoss(num_classes)
         self.regression_weight = regression_weight
         
     def forward(self, cls_loc, cls_scale, reg_loc, reg_scale, targets, target_values):
@@ -153,39 +160,57 @@ class CausalLMLoss(nn.Module):
         
         Args:
             cls_loc (torch.Tensor): Location parameters for classification
-                                   Shape: [batch_size, num_classes]
             cls_scale (torch.Tensor): Scale parameters for classification
-                                     Shape: [batch_size, num_classes]
             reg_loc (torch.Tensor): Location parameter for regression
-                                   Shape: [batch_size]
             reg_scale (torch.Tensor): Scale parameter for regression
-                                     Shape: [batch_size]
             targets (torch.Tensor): Target token IDs
-                                   Shape: [batch_size]
             target_values (torch.Tensor): Target numerical values
-                                         Shape: [batch_size]
             
         Returns:
             dict: Dictionary containing total loss and individual loss components
         """
-        # Compute classification loss
-        classification_loss = self.cls_loss(cls_loc, cls_scale, targets)
+        # 1. Compute classification loss
+        classification_loss = self.cls_loss_fn(cls_loc, cls_scale, targets)
         
-        # Get probability of <NUM> token for gating
-        # Direct implementation from core-design.md: P(S_k > C_k) = 1/2 + (1/π) * arctan((loc_Sk - C_k)/scale_Sk)
-        num_prob = 0.5 + (1 / math.pi) * torch.atan(
-            (cls_loc[:, self.reg_loss.num_token_id] - 0.0) / cls_scale[:, self.reg_loss.num_token_id]
-        )
+        # 2. Compute components for gated regression loss
+        # Create mask for samples where target is <NUM>
+        is_num_mask = (targets == self.num_token_id).float()
+        num_count = is_num_mask.sum()
+
+        if num_count == 0:
+            # If no <NUM> tokens, regression loss is zero
+            unweighted_regression_loss = torch.tensor(0.0, device=reg_loc.device)
+            gated_regression_loss = torch.tensor(0.0, device=reg_loc.device)
+            num_prob = torch.tensor(0.0, device=reg_loc.device)
+        else:
+            # Compute the base Cauchy NLL loss only for the <NUM> samples
+            unweighted_regression_loss = cauchy_nll_loss(reg_loc, reg_scale, target_values)
+            
+            # Get the probability of the <NUM> token, which acts as the gate
+            all_probs = compute_ovr_probabilities(cls_loc, cls_scale, self.cls_loss_fn.threshold)
+            num_prob = all_probs[:, self.num_token_id]
+            
+            # Apply the soft gate: P(<NUM>) * L_cauchy
+            gated_loss_per_sample = num_prob * unweighted_regression_loss
+            
+            # Only consider the loss for samples that are actually <NUM>
+            final_gated_loss_component = gated_loss_per_sample * is_num_mask
+            
+            # Average over the number of <NUM> samples
+            gated_regression_loss = final_gated_loss_component.sum() / num_count
+
+        # 3. Combine losses
+        total_loss = classification_loss + self.regression_weight * gated_regression_loss
         
-        # Compute regression loss
-        regression_loss = self.reg_loss(reg_loc, reg_scale, num_prob, targets, target_values)
-        
-        # Combine losses
-        total_loss = classification_loss + self.regression_weight * regression_loss
+        # 4. Prepare dictionary for logging and accuracy calculation
+        cls_probs = compute_ovr_probabilities(cls_loc, cls_scale, self.cls_loss_fn.threshold)
         
         return {
             'loss': total_loss,
             'cls_loss': classification_loss,
-            'reg_loss': regression_loss
+            'gated_reg_loss': gated_regression_loss,
+            'unweighted_reg_loss': unweighted_regression_loss.mean() if num_count > 0 else torch.tensor(0.0), # For logging
+            'num_prob': num_prob.mean() if num_count > 0 else torch.tensor(0.0), # For logging
+            'cls_probs': cls_probs,
         }
 

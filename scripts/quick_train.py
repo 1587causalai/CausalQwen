@@ -185,7 +185,7 @@ def train_quick_model(use_real_qwen=False, num_epochs=5, batch_size=8, num_sampl
             # Update metrics
             total_loss += loss.item()
             total_cls_loss += loss_dict["cls_loss"].item()
-            total_reg_loss += loss_dict["reg_loss"].item()
+            total_reg_loss += loss_dict["gated_reg_loss"].item()
             
             # Update progress bar
             accuracy = correct / total
@@ -193,7 +193,7 @@ def train_quick_model(use_real_qwen=False, num_epochs=5, batch_size=8, num_sampl
                 'loss': f'{loss.item():.4f}',
                 'acc': f'{accuracy:.4f}',
                 'cls_loss': f'{loss_dict["cls_loss"].item():.4f}',
-                'reg_loss': f'{loss_dict["reg_loss"].item():.4f}'
+                'reg_loss': f'{loss_dict["gated_reg_loss"].item():.4f}'
             })
         
         # Epoch summary
@@ -208,7 +208,7 @@ def train_quick_model(use_real_qwen=False, num_epochs=5, batch_size=8, num_sampl
     print("\n训练完成！")
     
     # Save model
-    save_path = f"results/trained_model_{'qwen' if use_real_qwen else 'mock'}.pth"
+    save_path = f"docs/results/trained_model_{'qwen' if use_real_qwen else 'mock'}.pth"
     torch.save(model.state_dict(), save_path)
     print(f"模型已保存到: {save_path}")
     

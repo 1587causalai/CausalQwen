@@ -119,14 +119,15 @@ class QwenFeatureNetwork(FeatureNetworkBase):
         
         if use_real_model:
             try:
-                from transformers import AutoModel, AutoTokenizer
+                from transformers import AutoModelForCausalLM, AutoTokenizer
                 import os
                 
                 # Expand the tilde in the path
                 expanded_path = os.path.expanduser(model_path)
                 
                 print(f"Loading Qwen model from {expanded_path}")
-                self.model = AutoModel.from_pretrained(expanded_path, trust_remote_code=True)
+                # Load the full causal language model (including lm_head)
+                self.model = AutoModelForCausalLM.from_pretrained(expanded_path, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(expanded_path, trust_remote_code=True)
                 
                 # Get the actual hidden size from the model
@@ -148,10 +149,47 @@ class QwenFeatureNetwork(FeatureNetworkBase):
                 print("Falling back to mock implementation")
                 self.use_real_model = False
                 self.mock_network = MockFeatureNetwork(hidden_size)
-        else:
-            # Use mock implementation
+        
+        # Ensure mock_network is always available as fallback
+        if not hasattr(self, 'mock_network') or self.mock_network is None:
             self.mock_network = MockFeatureNetwork(hidden_size)
         
+    def get_lm_head(self):
+        """
+        Returns the language model head of the underlying Qwen model.
+        
+        This is needed for weight initialization in the ActionNetwork.
+        
+        Returns:
+            nn.Linear: The language model head module.
+        """
+        if not self.use_real_model:
+            return None
+            
+        # For AutoModelForCausalLM, the lm_head should be directly accessible
+        if hasattr(self.model, 'lm_head'):
+            print(f"Found language model head: lm_head")
+            return self.model.lm_head
+        
+        # Try different possible attribute names for the language model head
+        possible_lm_head_names = ['output', 'classifier', 'language_model_head', 'head']
+        
+        for attr_name in possible_lm_head_names:
+            if hasattr(self.model, attr_name):
+                lm_head = getattr(self.model, attr_name)
+                if isinstance(lm_head, nn.Linear):
+                    print(f"Found language model head: {attr_name}")
+                    return lm_head
+        
+        # If no direct lm_head found, look for it in nested modules
+        for name, module in self.model.named_modules():
+            if 'lm_head' in name.lower() and isinstance(module, nn.Linear):
+                print(f"Found language model head in nested module: {name}")
+                return module
+        
+        print("WARNING: Could not find language model head.")
+        return None
+
     def forward(self, input_ids, attention_mask=None):
         """
         Extract features using the Qwen model.
@@ -179,8 +217,13 @@ class QwenFeatureNetwork(FeatureNetworkBase):
                     output_hidden_states=True
                 )
                 
-                # Get the last hidden state [batch_size, seq_len, hidden_size]
-                last_hidden_state = outputs.last_hidden_state
+                # For AutoModelForCausalLM, use hidden_states instead of last_hidden_state
+                if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
+                    last_hidden_state = outputs.hidden_states[-1]  # Last layer hidden states
+                elif hasattr(outputs, 'last_hidden_state'):
+                    last_hidden_state = outputs.last_hidden_state
+                else:
+                    raise AttributeError("Cannot find hidden states in model output")
                 
                 # Pool over the sequence dimension (use mean pooling)
                 if attention_mask is not None:

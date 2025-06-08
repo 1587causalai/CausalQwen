@@ -158,6 +158,14 @@ docsify serve .
 
 ### 基础实验
 
+### 快速训练
+
+```bash
+python scripts/quick_train.py --use_real_qwen --num_epochs 5 --batch_size 8 --num_samples 500
+```
+
+或者：
+
 ```bash
 # 运行基本实验（验证基础功能）
 python src/run_experiments.py basic

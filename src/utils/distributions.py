@@ -125,7 +125,9 @@ class CauchyLinear(nn.Module):
                                   Defaults to True.
         """
         super().__init__()
-        self.linear = nn.Linear(in_features, out_features, bias=bias)
+        # Separate linear layers for location and scale parameters
+        self.loc_layer = nn.Linear(in_features, out_features, bias=bias)
+        self.scale_layer = nn.Linear(in_features, out_features, bias=bias)
         
     def forward(self, loc, scale):
         """
@@ -138,13 +140,13 @@ class CauchyLinear(nn.Module):
         Returns:
             tuple: (transformed_loc, transformed_scale)
         """
-        # Transform location parameter using the linear layer
-        transformed_loc = self.linear(loc)
+        # Transform location parameter using the loc linear layer
+        transformed_loc = self.loc_layer(loc)
         
         # For scale parameter, we need to use the absolute values of weights
         # Scale transforms as: scale_out = sum(|w_i| * scale_in_i)
-        abs_weight = torch.abs(self.linear.weight)
-        transformed_scale = F.linear(scale, abs_weight, None)
+        abs_weight = torch.abs(self.scale_layer.weight)
+        transformed_scale = F.linear(scale, abs_weight, self.scale_layer.bias)
         
         return transformed_loc, transformed_scale
 

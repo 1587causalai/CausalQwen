@@ -127,7 +127,8 @@ def main(args):
         vocab_size=tokenizer.vocab_size,
         num_token_id=tokenizer.num_token_id,
         hidden_size=args.hidden_size,
-        causal_dim=args.causal_dim,
+        # Force causal_dim to be the same as hidden_size for identity initialization
+        causal_dim=args.hidden_size,
         use_real_qwen=True,
         qwen_model_path=args.qwen_model_path
     )
@@ -180,7 +181,9 @@ def main(args):
         config_results = {}
         for name, dataset in evaluation_datasets.items():
             print(f"  on dataset: {name}")
-            results = evaluator.evaluate(dataset, batch_size=args.batch_size)
+            # Define path for saving raw evaluation outputs
+            eval_output_path = os.path.join(results_dir, f"evaluation_outputs_{config_name}_{name}.pt")
+            results = evaluator.evaluate(dataset, batch_size=args.batch_size, save_path=eval_output_path)
             config_results[name] = results
             print(f"    -> Cls F1: {results.get('cls_f1', 0):.4f}, Reg MAE: {results.get('reg_mae', 0):.4f}, Reg PICP: {results.get('reg_picp', 0):.4f}")
             
@@ -217,7 +220,9 @@ if __name__ == '__main__':
     )
     # Model architecture args
     parser.add_argument('--hidden_size', type=int, default=896, help='Hidden size of the model (for Qwen-0.5B).')
-    parser.add_argument('--causal_dim', type=int, default=64, help='Dimension of the causal state.')
+    # The causal_dim argument is now effectively overridden by hidden_size in the script
+    # We keep it for potential future experiments but it's not used by default
+    parser.add_argument('--causal_dim', type=int, default=896, help='Dimension of the causal state. Should match hidden_size for current init strategy.')
     
     # Training args
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs.')

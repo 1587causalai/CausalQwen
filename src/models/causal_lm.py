@@ -124,6 +124,45 @@ class CausalLanguageModel(nn.Module):
         # Initialize action network
         self.action_network = ActionNetwork(self.causal_dim, self.vocab_size, self.num_token_id)
         
+    def init_weights(self, num_target_mean, num_target_std):
+        """
+        Initialize the weights of abduction and action networks using the
+        knowledge transfer strategy.
+        
+        Args:
+            num_target_mean (float): The mean of the numerical target values.
+            num_target_std (float): The standard deviation of the numerical target values.
+        """
+        print("Applying knowledge transfer initialization...")
+        
+        # 1. Initialize Abduction Network
+        # This assumes hidden_size and causal_dim are the same
+        if self.hidden_size == self.causal_dim:
+            self.abduction_network.init_weights()
+            print("  - Abduction network initialized for identity mapping.")
+        else:
+            print("  - WARNING: Abduction network not initialized (hidden_size != causal_dim).")
+
+        # 2. Initialize Action Network
+        qwen_lm_head = None
+        # We need to get the lm_head from the underlying QwenFeatureNetwork
+        if isinstance(self.feature_network, NumAwareFeatureNetwork) and \
+           isinstance(self.feature_network.base_network, QwenFeatureNetwork):
+            qwen_lm_head = self.feature_network.base_network.get_lm_head()
+        elif isinstance(self.feature_network, QwenFeatureNetwork):
+            qwen_lm_head = self.feature_network.get_lm_head()
+
+        if qwen_lm_head is not None:
+            self.action_network.init_weights(
+                qwen_lm_head=qwen_lm_head,
+                num_target_mean=num_target_mean,
+                num_target_std=num_target_std,
+                num_token_id=self.num_token_id
+            )
+            print("  - Action network initialized from Qwen's lm_head and data stats.")
+        else:
+            print("  - WARNING: Action network not initialized (Qwen lm_head not available).")
+
     def forward(self, input_ids, numerical_values=None, attention_mask=None):
         """
         Forward pass of the causal language model.

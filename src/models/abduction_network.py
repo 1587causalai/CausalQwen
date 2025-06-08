@@ -34,6 +34,37 @@ class AbductionNetwork(nn.Module):
         # Output has twice the causal_dim: first half for location, second half for scale
         self.causal_inference_layer = nn.Linear(input_size, causal_dim * 2)
         
+    def init_weights(self):
+        """
+        Initialize weights according to the knowledge transfer strategy.
+        This sets up the abduction network to be an identity-like transformation
+        at the beginning of the training.
+        """
+        # We assume input_size and causal_dim are the same for identity mapping
+        if self.input_size != self.causal_dim:
+            raise ValueError(
+                f"For identity initialization, input_size ({self.input_size}) "
+                f"must equal causal_dim ({self.causal_dim})."
+            )
+
+        # Get the weight and bias from the single linear layer
+        weight = self.causal_inference_layer.weight
+        bias = self.causal_inference_layer.bias
+        
+        # Split the parameters for loc and scale
+        loc_weight, scale_weight = torch.split(weight, self.causal_dim, dim=0)
+        loc_bias, scale_bias = torch.split(bias, self.causal_dim, dim=0)
+        
+        # Initialize loc parameters for identity mapping (loc_U = z)
+        # Weight = Identity matrix, Bias = Zero vector
+        loc_weight.data.copy_(torch.eye(self.causal_dim))
+        loc_bias.data.fill_(0)
+        
+        # Initialize scale parameters for maximum uncertainty (scale_U = large constant)
+        # Weight = Zero matrix, Bias = Large positive value (for log_scale)
+        scale_weight.data.fill_(0)
+        scale_bias.data.fill_(2.3) # Corresponds to exp(2.3) ≈ 10
+
     def forward(self, features):
         """
         Infer the distribution parameters of the latent causal state.
