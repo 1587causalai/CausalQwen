@@ -15,20 +15,29 @@
 
 ## 创建模型
 
-### 使用模拟特征网络
+### 使用Qwen-0.5B作为特征网络
 
-最简单的方式是使用模拟特征网络创建一个因果语言模型：
+推荐的使用方式是基于真实的Qwen-0.5B模型：
 
 ```python
 import torch
 from src.models.causal_lm import CausalLanguageModel, CausalLMConfig
+from src.data.tokenizer import QwenTokenizerWrapper
+
+# 创建分词器
+tokenizer = QwenTokenizerWrapper(
+    model_path="~/models/Qwen2.5-0.5B",
+    use_real_tokenizer=True
+)
 
 # 创建模型配置
 config = CausalLMConfig(
-    vocab_size=1000,  # 词汇表大小
-    hidden_size=768,  # 隐藏层大小
+    vocab_size=tokenizer.vocab_size,  # 使用Qwen词汇表大小
+    num_token_id=tokenizer.num_token_id,  # <NUM>词元ID
+    hidden_size=896,  # Qwen-0.5B的隐藏层大小
     causal_dim=64,    # 因果状态维度
-    use_mock_feature_network=True  # 使用模拟特征网络
+    use_real_qwen=True,  # 使用真实Qwen模型
+    qwen_model_path="~/models/Qwen2.5-0.5B"
 )
 
 # 创建模型
@@ -38,40 +47,30 @@ model = CausalLanguageModel(config)
 print(model)
 ```
 
-### 使用Qwen-0.5B作为特征网络
+### 使用模拟特征网络（用于测试）
 
-如果你想使用Qwen-0.5B作为特征网络，可以这样做：
+如果你想快速测试而不下载大模型，可以使用模拟特征网络：
 
 ```python
 import torch
-from transformers import AutoModel, AutoTokenizer
 from src.models.causal_lm import CausalLanguageModel, CausalLMConfig
-from src.models.feature_network import QwenFeatureNetwork
+from src.data.tokenizer import QwenTokenizerWrapper
 
-# 加载Qwen-0.5B模型
-qwen_model = AutoModel.from_pretrained("Qwen/Qwen-0.5B")
-qwen_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen-0.5B")
+# 创建模拟分词器
+tokenizer = QwenTokenizerWrapper(use_real_tokenizer=False, vocab_size=1000)
 
 # 创建模型配置
 config = CausalLMConfig(
-    vocab_size=len(qwen_tokenizer),  # 使用Qwen词汇表大小
-    hidden_size=qwen_model.config.hidden_size,  # 使用Qwen隐藏层大小
-    causal_dim=64,  # 因果状态维度
-    use_mock_feature_network=False,  # 不使用模拟特征网络
-    num_token_id=qwen_tokenizer.convert_tokens_to_ids('<NUM>')  # 数值词元ID
+    vocab_size=tokenizer.vocab_size,
+    num_token_id=tokenizer.num_token_id,
+    hidden_size=768,  # 模拟隐藏层大小
+    causal_dim=64,    # 因果状态维度
+    use_mock_feature_network=True,  # 使用模拟特征网络
+    use_real_qwen=False
 )
 
 # 创建模型
 model = CausalLanguageModel(config)
-
-# 创建Qwen特征网络
-feature_network = QwenFeatureNetwork(qwen_model)
-
-# 替换模型的特征网络
-model.feature_network = feature_network
-
-# 设置分词器
-model.tokenizer = qwen_tokenizer
 ```
 
 ## 模型推理
@@ -79,160 +78,253 @@ model.tokenizer = qwen_tokenizer
 ### 基本推理
 
 ```python
-# 准备输入
-input_ids = torch.tensor([[1, 2, 3, 4, 5]])  # 批大小为1，序列长度为5的输入
+# 准备输入文本
+texts = ["The price is 42.5 dollars.", "The temperature is 25.3 degrees."]
+
+# 使用分词器处理文本
+inputs = tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
 
 # 模型前向传播
-outputs = model(input_ids)
+outputs = model(
+    inputs['input_ids'], 
+    inputs['numerical_values'], 
+    inputs['attention_mask']
+)
 
 # 查看输出
 print("因果状态位置参数:", outputs['causal_loc'].shape)
 print("因果状态尺度参数:", outputs['causal_scale'].shape)
 print("分类概率:", outputs['cls_probs'].shape)
-print("回归预测:", outputs['reg_loc'].shape)
-print("回归不确定性:", outputs['reg_scale'].shape)
+print("回归预测分布:", outputs['reg_loc'].shape, outputs['reg_scale'].shape)
 
-# 获取预测结果
-predictions = model.predict(input_ids)
+# 获取确定性预测结果
+predictions = model.predict(
+    inputs['input_ids'], 
+    inputs['numerical_values'], 
+    inputs['attention_mask']
+)
 print("预测的词元:", predictions['cls_pred'])
 print("预测的数值:", predictions['reg_pred'])
+print("<NUM>词元概率:", predictions['num_prob'])
 ```
 
-### 处理数值输入
-
-如果输入包含数值，可以使用`numerical_values`参数：
+### 探索性推理（随机采样）
 
 ```python
-# 准备输入
-input_ids = torch.tensor([[1, 2, 3, 4, 5]])
-numerical_values = torch.tensor([[0.0, 0.0, 10.5, 0.0, 0.0]])  # 第3个位置是数值10.5
+# 从因果状态分布中采样进行预测
+sampled_predictions = model.sample_and_predict(
+    inputs['input_ids'], 
+    inputs['numerical_values'], 
+    inputs['attention_mask']
+)
 
-# 模型前向传播
-outputs = model(input_ids, numerical_values)
-
-# 获取预测结果
-predictions = model.predict(input_ids, numerical_values)
+print("采样预测的词元:", sampled_predictions['cls_pred'])
+print("采样预测的数值:", sampled_predictions['reg_pred'])
+print("采样的因果状态:", sampled_predictions['causal_sample'].shape)
 ```
 
 ## 模型训练
 
-### 准备数据
+### 使用训练器
 
 ```python
+from src.training.trainer import Trainer
+from src.data.synthetic import TextWithNumbersGenerator
 from torch.utils.data import DataLoader, TensorDataset
 
-# 准备训练数据
-input_ids = torch.randint(0, 1000, (100, 10))  # 100个样本，每个长度为10
-numerical_values = torch.zeros_like(input_ids, dtype=torch.float32)
-targets = torch.randint(0, 1000, (100,))  # 目标词元
-target_values = torch.rand(100)  # 目标数值
+# 创建合成训练数据
+generator = TextWithNumbersGenerator(seed=42)
+texts, values = generator.generate_text(num_samples=1000)
 
-# 创建数据集
-dataset = TensorDataset(input_ids, numerical_values, targets, target_values)
-dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
-```
+# 使用分词器处理
+inputs = tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
 
-### 训练循环
+# 准备目标
+targets = torch.full((len(texts),), tokenizer.num_token_id, dtype=torch.long)
+target_values = torch.tensor(values, dtype=torch.float32)
 
-```python
-import torch.optim as optim
+# 创建训练器
+trainer = Trainer(
+    model=model,
+    tokenizer=tokenizer,
+    device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+    config=config,  # 传递配置对象
+    learning_rate=1e-4,
+    batch_size=16
+)
 
-# 定义优化器
-optimizer = optim.Adam(model.parameters(), lr=1e-4)
-
-# 训练循环
-model.train()
-for epoch in range(10):
-    total_loss = 0
-    for batch in dataloader:
-        input_ids, numerical_values, targets, target_values = batch
-        
-        # 清零梯度
-        optimizer.zero_grad()
-        
-        # 前向传播
-        outputs = model(input_ids, numerical_values)
-        
-        # 计算损失
-        loss = model.compute_loss(outputs, targets, target_values)
-        
-        # 反向传播
-        loss.backward()
-        
-        # 更新参数
-        optimizer.step()
-        
-        total_loss += loss.item()
-    
-    print(f"Epoch {epoch+1}, Loss: {total_loss/len(dataloader):.4f}")
+# 训练模型
+trainer.train(num_epochs=10, num_samples=1000)
 ```
 
 ## 模型评估
 
+### 使用评估器
+
 ```python
-from src.evaluate import evaluate_model
+from src.evaluation.evaluator import Evaluator
+from src.data.evaluation_data import get_all_evaluation_datasets
 
-# 准备测试数据
-test_input_ids = torch.randint(0, 1000, (50, 10))
-test_numerical_values = torch.zeros_like(test_input_ids, dtype=torch.float32)
-test_targets = torch.randint(0, 1000, (50,))
-test_target_values = torch.rand(50)
+# 创建评估器
+evaluator = Evaluator(
+    model=model,
+    tokenizer=tokenizer,
+    device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+    model_config=config  # 传递配置对象用于指标计算
+)
 
-test_dataset = TensorDataset(test_input_ids, test_numerical_values, test_targets, test_target_values)
-test_dataloader = DataLoader(test_dataset, batch_size=16)
+# 获取评估数据集
+evaluation_datasets = get_all_evaluation_datasets(tokenizer)
 
 # 评估模型
-model.eval()
-metrics = evaluate_model(model, test_dataloader)
-
-# 打印评估指标
-for name, value in metrics.items():
-    print(f"{name}: {value:.4f}")
+for name, dataset in evaluation_datasets.items():
+    print(f"\n=== 评估数据集: {name} ===")
+    metrics = evaluator.evaluate(dataset, batch_size=16)
+    
+    # 打印关键指标
+    print(f"分类F1: {metrics['cls_f1']:.4f}")
+    print(f"分类准确率: {metrics['cls_accuracy']:.4f}")
+    print(f"回归MAE: {metrics['reg_mae']:.4f}")
+    print(f"回归MSE: {metrics['reg_mse']:.4f}")
+    print(f"校准ECE: {metrics['calib_ece']:.4f}")
+    print(f"回归PICP: {metrics['reg_picp']:.4f}")
 ```
 
-## 可视化
+## 运行完整实验
+
+### 使用实验运行器
 
 ```python
-from src.utils.visualization import (
-    visualize_causal_state,
-    visualize_decision_boundary,
-    visualize_regression_performance
-)
+import subprocess
+import os
 
-# 可视化因果状态
-sample_input = {'input_ids': test_input_ids[:1]}
-visualize_causal_state(model, sample_input, output_dir='results')
+# 运行基础实验
+result = subprocess.run([
+    'python', 'src/run_experiments.py', 'basic',
+    '--qwen_model_path', '~/models/Qwen2.5-0.5B',
+    '--epochs', '5',
+    '--num_samples', '500'
+], capture_output=True, text=True)
 
-# 可视化决策边界
-visualize_decision_boundary(model, output_dir='results')
+print("实验输出:", result.stdout)
+print("实验结果保存在:", "results/basic_[timestamp]/")
+```
 
-# 可视化回归性能
-predictions = model.predict(test_input_ids, test_numerical_values)
-visualize_regression_performance(
-    predictions['reg_pred'].numpy(),
-    test_target_values.numpy(),
-    outputs['reg_scale'].numpy(),
-    output_dir='results'
-)
+### 生成可视化图表
+
+```python
+# 假设你有一个消融实验结果目录
+results_dir = "results/ablation_20231208_143000/"
+
+# 生成对比图表
+result = subprocess.run([
+    'python', 'src/visualization/plotter.py', results_dir
+], capture_output=True, text=True)
+
+print("图表生成完成:", result.stdout)
+```
+
+## 处理自定义数据
+
+### 创建自定义数据集
+
+```python
+from torch.utils.data import Dataset, TensorDataset
+
+class CustomNumberDataset(Dataset):
+    def __init__(self, texts, values, tokenizer):
+        self.texts = texts
+        self.values = values
+        self.tokenizer = tokenizer
+        
+        # 预处理数据
+        inputs = tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
+        self.input_ids = inputs['input_ids']
+        self.attention_mask = inputs['attention_mask']
+        self.numerical_values = inputs['numerical_values']
+        
+        # 目标标签
+        self.targets = torch.full((len(texts),), tokenizer.num_token_id)
+        self.target_values = torch.tensor(values, dtype=torch.float32)
+    
+    def __len__(self):
+        return len(self.texts)
+    
+    def __getitem__(self, idx):
+        return (
+            self.input_ids[idx],
+            self.attention_mask[idx],
+            self.numerical_values[idx],
+            self.targets[idx],
+            self.target_values[idx]
+        )
+
+# 使用自定义数据集
+custom_texts = ["Stock price: 150.25", "Temperature: -5.8°C"]
+custom_values = [150.25, -5.8]
+
+custom_dataset = CustomNumberDataset(custom_texts, custom_values, tokenizer)
+
+# 评估自定义数据
+metrics = evaluator.evaluate(custom_dataset, batch_size=2)
+print("自定义数据评估结果:", metrics)
 ```
 
 ## 保存和加载模型
 
-```python
-# 保存模型
-torch.save(model.state_dict(), 'causal_lm_model.pth')
+### 保存模型
 
-# 加载模型
-new_model = CausalLanguageModel(config)
-new_model.load_state_dict(torch.load('causal_lm_model.pth'))
+```python
+import torch
+import json
+
+# 保存模型权重
+model_path = 'trained_causal_lm.pth'
+torch.save(model.state_dict(), model_path)
+
+# 保存配置
+config_path = 'model_config.json'
+config_dict = {
+    'vocab_size': config.vocab_size,
+    'num_token_id': config.num_token_id,
+    'hidden_size': config.hidden_size,
+    'causal_dim': config.causal_dim,
+    'use_real_qwen': config.use_real_qwen,
+    'qwen_model_path': config.qwen_model_path
+}
+with open(config_path, 'w') as f:
+    json.dump(config_dict, f, indent=2)
+
+print(f"模型保存到: {model_path}")
+print(f"配置保存到: {config_path}")
+```
+
+### 加载模型
+
+```python
+# 加载配置
+with open('model_config.json', 'r') as f:
+    config_dict = json.load(f)
+
+# 重建配置对象
+loaded_config = CausalLMConfig(**config_dict)
+
+# 重建模型
+loaded_model = CausalLanguageModel(loaded_config)
+
+# 加载权重
+loaded_model.load_state_dict(torch.load('trained_causal_lm.pth'))
+loaded_model.eval()
+
+print("模型加载完成")
 ```
 
 ## 下一步
 
 现在你已经了解了CausalQwen-0.5B的基本用法，可以：
 
-- 查看[API参考](/guide/api_reference.md)，了解详细的API文档
-- 探索[示例](/guide/examples.md)，学习更多高级用法
-- 阅读[数学理论](/math/mathematical_foundations.md)，深入了解背后的原理
+- 查看[实验设计](/experiments/experiment_design.md)，了解完整的实验框架
+- 探索[数学理论](/math/mathematical_foundations.md)，深入了解背后的原理
 - 查看[架构设计](/architecture/architecture_design.md)，了解系统的设计思想
+- 运行完整的消融实验来验证模型的各个组件
 

@@ -14,7 +14,7 @@ from ..utils.losses import CausalLMLoss
 class Trainer:
     """Handles the training loop, optimizer, and data loading for fine-tuning."""
     
-    def __init__(self, model, tokenizer, device, learning_rate=1e-4, batch_size=16):
+    def __init__(self, model, tokenizer, device, config, learning_rate=1e-4, batch_size=16):
         """
         Initialize the Trainer.
         
@@ -22,19 +22,21 @@ class Trainer:
             model (nn.Module): The model to be trained.
             tokenizer: The tokenizer to use.
             device (torch.device): The device to train on.
+            config (CausalLMConfig): The model's configuration object.
             learning_rate (float): The learning rate for the optimizer.
             batch_size (int): The batch size for training.
         """
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
+        self.config = config
         self.batch_size = batch_size
         
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         self.loss_fn = CausalLMLoss(
             num_classes=self.tokenizer.vocab_size,
             num_token_id=self.tokenizer.num_token_id,
-            regression_weight=1.0
+            regression_weight=self.config.reg_loss_weight
         )
         
     @staticmethod

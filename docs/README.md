@@ -28,23 +28,35 @@ pip install -e .
 ### 基本使用
 
 ```python
+import torch
 from src.models.causal_lm import CausalLanguageModel, CausalLMConfig
+from src.data.tokenizer import QwenTokenizerWrapper
+
+# 创建分词器
+tokenizer = QwenTokenizerWrapper(
+    model_path="~/models/Qwen2.5-0.5B", 
+    use_real_tokenizer=True
+)
 
 # 创建模型配置
 config = CausalLMConfig(
-    vocab_size=1000,
-    hidden_size=768,
+    vocab_size=tokenizer.vocab_size,
+    num_token_id=tokenizer.num_token_id,
+    hidden_size=896,  # For Qwen-0.5B
     causal_dim=64,
-    use_mock_feature_network=True
+    use_real_qwen=True,
+    qwen_model_path="~/models/Qwen2.5-0.5B"
 )
 
 # 创建模型
 model = CausalLanguageModel(config)
 
 # 使用模型进行预测
-input_ids = torch.tensor([[1, 2, 3, 4, 5]])
-outputs = model(input_ids)
-predictions = model.predict(input_ids)
+texts = ["The price is 42.5 dollars."]
+inputs = tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
+
+outputs = model(inputs['input_ids'], inputs['numerical_values'], inputs['attention_mask'])
+predictions = model.predict(inputs['input_ids'], inputs['numerical_values'], inputs['attention_mask'])
 
 print(f"预测的词元: {predictions['cls_pred']}")
 print(f"预测的数值: {predictions['reg_pred']}")
@@ -57,13 +69,32 @@ causal-lm-project/
 ├── docs/                  # 文档
 │   ├── architecture/      # 架构设计文档
 │   ├── experiments/       # 实验设计文档
-│   └── math/              # 数学理论文档
+│   ├── math/              # 数学理论文档
+│   └── guide/             # 使用指南
 ├── examples/              # 示例代码
 ├── src/                   # 源代码
 │   ├── data/              # 数据处理模块
+│   │   ├── tokenizer.py          # 分词器
+│   │   ├── synthetic.py          # 合成数据生成
+│   │   └── evaluation_data.py    # 评估数据集
 │   ├── models/            # 模型定义
-│   └── utils/             # 工具函数
-└── tests/                 # 测试代码
+│   │   ├── causal_lm.py          # 因果语言模型
+│   │   ├── feature_network.py    # 特征网络
+│   │   ├── abduction_network.py  # 推断网络
+│   │   └── action_network.py     # 行动网络
+│   ├── training/          # 训练模块
+│   │   └── trainer.py            # 训练器
+│   ├── evaluation/        # 评估模块
+│   │   └── evaluator.py          # 评估器
+│   ├── utils/             # 工具函数
+│   │   ├── distributions.py      # 分布工具
+│   │   ├── losses.py             # 损失函数
+│   │   └── metrics.py            # 评估指标
+│   ├── visualization/     # 可视化工具
+│   │   └── plotter.py            # 绘图工具
+│   └── run_experiments.py        # 统一实验运行器
+├── tests/                 # 测试代码
+└── results/               # 实验结果
 ```
 
 ## 核心概念
@@ -100,6 +131,34 @@ One-vs-Rest (OvR) 分类相比传统的Softmax分类有以下优势：
 - 分类损失用于所有样本
 - 回归损失仅用于数值样本
 - 确保预测一致性并支持不确定性传播
+
+## 实验运行
+
+### 基础实验
+
+```bash
+# 运行基本实验
+python src/run_experiments.py basic
+
+# 运行综合实验
+python src/run_experiments.py comprehensive
+
+# 运行对比实验（超参数敏感性分析）
+python src/run_experiments.py comparison
+
+# 运行消融实验（架构组件贡献度验证）
+python src/run_experiments.py ablation
+```
+
+### 生成图表
+
+```bash
+# 对消融实验结果生成对比图表
+python src/visualization/plotter.py results/ablation_20231208_143000/
+
+# 对超参数对比实验结果生成图表
+python src/visualization/plotter.py results/comparison_20231208_143000/
+```
 
 ## 文档导航
 

@@ -1,373 +1,235 @@
 #!/usr/bin/env python
 """
-Experiment runner script.
+Unified Experiment Runner for the Causal Language Model.
 
-This script runs experiments to evaluate the causal language model
-on various datasets and configurations.
+This script orchestrates the execution of various experiments as defined
+in the design documents, including:
+- basic: A simple run to validate the baseline model's functionality.
+- comprehensive: Evaluates the baseline model across multiple datasets.
+- comparison: Compares model performance across different hyperparameter settings.
+- ablation: Conducts an ablation study to validate core architectural choices.
 """
-
 import os
 import sys
+import torch
 import json
 import argparse
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
 from datetime import datetime
+from copy import deepcopy
+import numpy as np
 
-# Add the project root to Python path for imports
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
+# Add project root to Python path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.models.causal_lm import CausalLanguageModel, CausalLMConfig
-from src.data.synthetic import TextWithNumbersGenerator
-from src.data.tokenizer import MockTokenizer, QwenTokenizerWrapper
-from src.evaluate import (
-    evaluate_on_synthetic_data,
-    evaluate_on_qa_data,
-    evaluate_on_extreme_data,
-    run_comprehensive_evaluation,
-    compare_models
-)
-from src.utils.visualization import (
-    plot_metrics,
-    visualize_causal_state,
-    visualize_decision_boundary,
-    visualize_uncertainty,
-    visualize_regression_performance,
-    visualize_training_history,
-    visualize_model_comparison
-)
+from src.models.causal_lm import CausalLMConfig, CausalLanguageModel
+from src.data.tokenizer import QwenTokenizerWrapper
+from src.data.evaluation_data import get_all_evaluation_datasets
+from src.training.trainer import Trainer
+from src.evaluation.evaluator import Evaluator
 
-
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Run experiments for causal language model')
+def convert_numpy_types(obj):
+    """
+    Recursively convert numpy types to standard Python types for JSON serialization.
     
-    parser.add_argument('--experiment', type=str, default='basic',
-                        choices=['basic', 'comprehensive', 'comparison', 'ablation'],
-                        help='Type of experiment to run')
-    
-    parser.add_argument('--output_dir', type=str, default='results',
-                        help='Directory to save results')
-    
-    parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed for reproducibility')
-    
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                        help='Device to run experiments on')
-    
-    parser.add_argument('--num_samples', type=int, default=1000,
-                        help='Number of samples for evaluation')
-    
-    parser.add_argument('--batch_size', type=int, default=32,
-                        help='Batch size for evaluation')
-    
-    parser.add_argument('--causal_dim', type=int, default=64,
-                        help='Dimension of causal state')
-    
-    parser.add_argument('--hidden_size', type=int, default=768,
-                        help='Hidden size for feature network')
-    
-    parser.add_argument('--vocab_size', type=int, default=1000,
-                        help='Vocabulary size')
-    
-    parser.add_argument('--use_real_qwen', action='store_true', default=False,
-                        help='Use real Qwen2.5-0.5B model instead of mock implementation')
-    
-    parser.add_argument('--qwen_model_path', type=str, default='~/models/Qwen2.5-0.5B',
-                        help='Path to Qwen model directory')
-    
-    return parser.parse_args()
-
-
-def set_seed(seed):
-    """Set random seed for reproducibility."""
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
-def create_tokenizer_and_config(args):
-    """Create tokenizer and model configuration based on arguments."""
-    if args.use_real_qwen:
-        print("Using real Qwen model and tokenizer...")
-        # Create Qwen tokenizer wrapper
-        tokenizer = QwenTokenizerWrapper(
-            model_path=args.qwen_model_path,
-            use_real_tokenizer=True
-        )
+    Args:
+        obj: Any object that might contain numpy types.
         
-        # Create model configuration with real Qwen
-        config = CausalLMConfig(
-            vocab_size=tokenizer.vocab_size,
-            num_token_id=tokenizer.num_token_id,
-            hidden_size=args.hidden_size,
-            causal_dim=args.causal_dim,
-            use_mock_feature_network=False,
-            use_real_qwen=True,
-            qwen_model_path=args.qwen_model_path
-        )
+    Returns:
+        Object with numpy types converted to standard Python types.
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
     else:
-        print("Using mock model and tokenizer...")
-        # Create mock tokenizer
-        tokenizer = MockTokenizer(vocab_size=args.vocab_size)
-        
-        # Create model configuration with mock feature network
-        config = CausalLMConfig(
-            vocab_size=tokenizer.vocab_size,
-            num_token_id=tokenizer.num_token_id,
-            hidden_size=args.hidden_size,
-            causal_dim=args.causal_dim,
-            use_mock_feature_network=True,
-            use_real_qwen=False
-        )
-    
-    return tokenizer, config
+        return obj
 
+def get_model_configs(base_config, experiment_type='ablation'):
+    """
+    Factory function to get model configurations for a given experiment type.
 
-def create_model(config):
-    """Create a causal language model with the given configuration."""
-    model = CausalLanguageModel(config)
-    return model
+    Args:
+        base_config (CausalLMConfig): The base configuration.
+        experiment_type (str): The type of experiment ('ablation', 'comparison', etc.).
 
-
-def create_config_variants(base_tokenizer, base_config, args, variant_type='comparison'):
-    """Create configuration variants for comparison and ablation experiments."""
+    Returns:
+        dict: A dictionary mapping configuration names to CausalLMConfig objects.
+    """
     configs = {}
     
-    if variant_type == 'comparison':
-        # Comparison experiment variants (hyperparameter sensitivity)
-        configs = {
-            'base': base_config,
-            'small_causal': CausalLMConfig(
-                vocab_size=base_tokenizer.vocab_size,
-                num_token_id=base_tokenizer.num_token_id,
-                hidden_size=args.hidden_size,
-                causal_dim=16,  # Smaller causal dimension
-                use_mock_feature_network=not args.use_real_qwen,
-                use_real_qwen=args.use_real_qwen,
-                qwen_model_path=args.qwen_model_path if args.use_real_qwen else None
-            ),
-            'large_causal': CausalLMConfig(
-                vocab_size=base_tokenizer.vocab_size,
-                num_token_id=base_tokenizer.num_token_id,
-                hidden_size=args.hidden_size,
-                causal_dim=128,  # Larger causal dimension
-                use_mock_feature_network=not args.use_real_qwen,
-                use_real_qwen=args.use_real_qwen,
-                qwen_model_path=args.qwen_model_path if args.use_real_qwen else None
-            ),
-            'high_reg_weight': CausalLMConfig(
-                vocab_size=base_tokenizer.vocab_size,
-                num_token_id=base_tokenizer.num_token_id,
-                hidden_size=args.hidden_size,
-                causal_dim=args.causal_dim,
-                reg_loss_weight=2.0,  # Higher regression loss weight
-                use_mock_feature_network=not args.use_real_qwen,
-                use_real_qwen=args.use_real_qwen,
-                qwen_model_path=args.qwen_model_path if args.use_real_qwen else None
-            )
-        }
-    elif variant_type == 'ablation':
-        # Ablation experiment variants (component contribution)
-        configs = {
-            'full_model': CausalLMConfig(
-                vocab_size=base_tokenizer.vocab_size,
-                num_token_id=base_tokenizer.num_token_id,
-                hidden_size=args.hidden_size,
-                causal_dim=args.causal_dim,
-                use_mock_feature_network=not args.use_real_qwen,
-                use_real_qwen=args.use_real_qwen,
-                qwen_model_path=args.qwen_model_path if args.use_real_qwen else None,
-                use_ovr_classifier=True,
-                use_cauchy_distribution=True
-            ),
-            'no_ovr': CausalLMConfig(
-                vocab_size=base_tokenizer.vocab_size,
-                num_token_id=base_tokenizer.num_token_id,
-                hidden_size=args.hidden_size,
-                causal_dim=args.causal_dim,
-                use_mock_feature_network=not args.use_real_qwen,
-                use_real_qwen=args.use_real_qwen,
-                qwen_model_path=args.qwen_model_path if args.use_real_qwen else None,
-                use_ovr_classifier=False,  # Use softmax instead of OvR
-                use_cauchy_distribution=True
-            ),
-            'no_cauchy': CausalLMConfig(
-                vocab_size=base_tokenizer.vocab_size,
-                num_token_id=base_tokenizer.num_token_id,
-                hidden_size=args.hidden_size,
-                causal_dim=args.causal_dim,
-                use_mock_feature_network=not args.use_real_qwen,
-                use_real_qwen=args.use_real_qwen,
-                qwen_model_path=args.qwen_model_path if args.use_real_qwen else None,
-                use_ovr_classifier=True,
-                use_cauchy_distribution=False  # Use normal distribution instead of Cauchy
-            ),
-            'no_ovr_no_cauchy': CausalLMConfig(
-                vocab_size=base_tokenizer.vocab_size,
-                num_token_id=base_tokenizer.num_token_id,
-                hidden_size=args.hidden_size,
-                causal_dim=args.causal_dim,
-                use_mock_feature_network=not args.use_real_qwen,
-                use_real_qwen=args.use_real_qwen,
-                qwen_model_path=args.qwen_model_path if args.use_real_qwen else None,
-                use_ovr_classifier=False,
-                use_cauchy_distribution=False
-            )
-        }
-    
+    if experiment_type == 'ablation':
+        # Full model (baseline for ablation)
+        configs['full_model'] = deepcopy(base_config)
+        
+        # Ablation: No OVR (use Softmax)
+        config_no_ovr = deepcopy(base_config)
+        config_no_ovr.use_ovr_classifier = False
+        configs['no_ovr'] = config_no_ovr
+        
+        # Ablation: No Cauchy (use Normal distribution)
+        config_no_cauchy = deepcopy(base_config)
+        config_no_cauchy.use_cauchy_distribution = False
+        configs['no_cauchy'] = config_no_cauchy
+        
+        # Ablation: No OVR and No Cauchy (traditional baseline)
+        config_no_ovr_no_cauchy = deepcopy(base_config)
+        config_no_ovr_no_cauchy.use_ovr_classifier = False
+        config_no_ovr_no_cauchy.use_cauchy_distribution = False
+        configs['no_ovr_no_cauchy'] = config_no_ovr_no_cauchy
+
+    elif experiment_type == 'comparison':
+        # Base model (baseline for comparison)
+        configs['base'] = deepcopy(base_config)
+        
+        # Comparison: Smaller causal dimension
+        config_small_causal = deepcopy(base_config)
+        config_small_causal.causal_dim = 16
+        configs['small_causal'] = config_small_causal
+        
+        # Comparison: Larger causal dimension
+        config_large_causal = deepcopy(base_config)
+        config_large_causal.causal_dim = 128
+        configs['large_causal'] = config_large_causal
+        
+        # Comparison: Higher regression loss weight
+        config_high_reg_weight = deepcopy(base_config)
+        config_high_reg_weight.reg_loss_weight = 2.0
+        configs['high_reg_weight'] = config_high_reg_weight
+        
+    elif experiment_type in ['basic', 'comprehensive']:
+        configs['base'] = deepcopy(base_config)
+        
+    else:
+        raise ValueError(f"Unknown experiment type: {experiment_type}")
+        
     return configs
 
-
-def run_basic_experiment(args):
-    """Run a basic experiment to validate the model."""
-    print("Running basic experiment...")
-    
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Create tokenizer and model configuration
-    tokenizer, config = create_tokenizer_and_config(args)
-    
-    # Create model
-    model = create_model(config)
-    model.to(args.device)
-    
-    # Evaluate on synthetic data
-    metrics = evaluate_on_synthetic_data(
-        model,
-        tokenizer,
-        num_samples=args.num_samples,
-        batch_size=args.batch_size,
-        device=args.device,
-        seed=args.seed
-    )
-    
-    # Plot metrics
-    plot_metrics(metrics, output_dir=args.output_dir, prefix='basic')
-    
-    # Save metrics to file
-    with open(os.path.join(args.output_dir, 'basic_metrics.json'), 'w') as f:
-        json.dump(metrics, f, indent=2)
-    
-    print("Basic experiment completed.")
-    print(f"Results saved to {args.output_dir}")
-
-
-def run_comprehensive_experiment(args):
-    """Run a comprehensive experiment to evaluate the model on various datasets."""
-    print("Running comprehensive experiment...")
-    
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Create tokenizer and model configuration
-    tokenizer, config = create_tokenizer_and_config(args)
-    
-    # Create model
-    model = create_model(config)
-    model.to(args.device)
-    
-    # Run comprehensive evaluation
-    all_metrics = run_comprehensive_evaluation(
-        model,
-        tokenizer,
-        output_dir=args.output_dir,
-        device=args.device,
-        seed=args.seed
-    )
-    
-    print("Comprehensive experiment completed.")
-    print(f"Results saved to {args.output_dir}")
-
-
-def run_comparison_experiment(args):
-    """Run an experiment to compare different model configurations."""
-    print("Running comparison experiment...")
-    
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Create tokenizer and base configuration
-    tokenizer, base_config = create_tokenizer_and_config(args)
-    
-    # Create configuration variants
-    configs = create_config_variants(tokenizer, base_config, args, variant_type='comparison')
-    
-    # Create models
-    models = {name: create_model(config).to(args.device) for name, config in configs.items()}
-    
-    # Compare models
-    comparison_results = compare_models(
-        models,
-        tokenizer,
-        output_dir=args.output_dir,
-        device=args.device,
-        seed=args.seed
-    )
-    
-    print("Comparison experiment completed.")
-    print(f"Results saved to {args.output_dir}")
-
-
-def run_ablation_experiment(args):
-    """Run an ablation study to evaluate the contribution of different components."""
-    print("Running ablation experiment...")
-    
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Create tokenizer and base configuration
-    tokenizer, base_config = create_tokenizer_and_config(args)
-    
-    # Create configuration variants for ablation study
-    configs = create_config_variants(tokenizer, base_config, args, variant_type='ablation')
-    
-    # Create models
-    models = {name: create_model(config).to(args.device) for name, config in configs.items()}
-    
-    # Compare models
-    comparison_results = compare_models(
-        models,
-        tokenizer,
-        output_dir=args.output_dir,
-        device=args.device,
-        seed=args.seed
-    )
-    
-    print("Ablation experiment completed.")
-    print(f"Results saved to {args.output_dir}")
-
-
-def main():
-    """Main function to run experiments."""
-    args = parse_args()
-    
-    # Set random seed
-    set_seed(args.seed)
-    
-    # Create timestamp for output directory
+def main(args):
+    """Main function to orchestrate the experiments."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    args.output_dir = os.path.join(args.output_dir, f"{args.experiment}_{timestamp}")
+    results_dir = os.path.join(args.results_base_dir, f"{args.experiment}_{timestamp}")
+    os.makedirs(results_dir, exist_ok=True)
     
-    # Run the specified experiment
+    print(f"=== Running Experiment: {args.experiment} ===")
+    print(f"Results will be saved to: {results_dir}")
+    
+    # --- 1. Setup ---
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    tokenizer = QwenTokenizerWrapper(model_path=args.qwen_model_path, use_real_tokenizer=True)
+    
+    base_config = CausalLMConfig(
+        vocab_size=tokenizer.vocab_size,
+        num_token_id=tokenizer.num_token_id,
+        hidden_size=args.hidden_size,
+        causal_dim=args.causal_dim,
+        use_real_qwen=True,
+        qwen_model_path=args.qwen_model_path
+    )
+    
+    # --- 2. Get configurations and datasets ---
+    model_configs = get_model_configs(base_config, args.experiment)
+    evaluation_datasets = get_all_evaluation_datasets(tokenizer)
+    
     if args.experiment == 'basic':
-        run_basic_experiment(args)
-    elif args.experiment == 'comprehensive':
-        run_comprehensive_experiment(args)
-    elif args.experiment == 'comparison':
-        run_comparison_experiment(args)
-    elif args.experiment == 'ablation':
-        run_ablation_experiment(args)
-    else:
-        print(f"Unknown experiment type: {args.experiment}")
-        sys.exit(1)
+        # Basic experiment only runs on the basic dataset
+        evaluation_datasets = {'basic': evaluation_datasets['basic']}
 
+    # --- 3. Run Experiment Loop ---
+    all_results = {}
+    for config_name, config in model_configs.items():
+        print(f"\n--- Running configuration: {config_name} ---")
+        
+        # Instantiate model
+        model = CausalLanguageModel(config).to(device)
+        
+        # Train model if not skipped
+        if not args.no_train:
+            print("Training model...")
+            # Apply custom weight initialization for new components
+            # This is crucial to prevent gradient explosion
+            if hasattr(model, 'abduction_network'):
+                 model.abduction_network.apply(Trainer.weights_init)
+            if hasattr(model, 'action_network'):
+                 model.action_network.apply(Trainer.weights_init)
 
-if __name__ == "__main__":
-    main()
+            trainer = Trainer(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                learning_rate=args.lr,
+                batch_size=args.batch_size,
+                config=config
+            )
+            trainer.train(num_epochs=args.epochs, num_samples=args.num_samples)
+            
+            # Save the trained model
+            model_path = os.path.join(results_dir, f"model_{config_name}.pth")
+            torch.save(model.state_dict(), model_path)
+            print(f"Saved trained model to {model_path}")
+        
+        # Evaluate model
+        print("Evaluating model...")
+        evaluator = Evaluator(model, tokenizer, device, config)
+        
+        config_results = {}
+        for name, dataset in evaluation_datasets.items():
+            print(f"  on dataset: {name}")
+            results = evaluator.evaluate(dataset, batch_size=args.batch_size)
+            config_results[name] = results
+            print(f"    -> Cls F1: {results.get('cls_f1', 0):.4f}, Reg MAE: {results.get('reg_mae', 0):.4f}, Reg PICP: {results.get('reg_picp', 0):.4f}")
+            
+        all_results[config_name] = config_results
+
+    # --- 4. Save all results ---
+    # Convert numpy types to standard Python types for JSON serialization
+    all_results_serializable = convert_numpy_types(all_results)
+    
+    results_path = os.path.join(results_dir, "results.json")
+    with open(results_path, 'w') as f:
+        json.dump(all_results_serializable, f, indent=4)
+    print(f"\nExperiment complete. All results saved to {results_path}")
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Unified Experiment Runner for Causal Language Model.")
+    parser.add_argument(
+        'experiment', 
+        type=str, 
+        choices=['basic', 'comprehensive', 'comparison', 'ablation'],
+        help='The type of experiment to run.'
+    )
+    parser.add_argument(
+        '--qwen_model_path', 
+        type=str, 
+        default='~/models/Qwen2.5-0.5B',
+        help='Path to the pre-trained Qwen model.'
+    )
+    parser.add_argument(
+        '--results_base_dir', 
+        type=str, 
+        default='docs/results',
+        help='Base directory to save experiment results.'
+    )
+    # Model architecture args
+    parser.add_argument('--hidden_size', type=int, default=896, help='Hidden size of the model (for Qwen-0.5B).')
+    parser.add_argument('--causal_dim', type=int, default=64, help='Dimension of the causal state.')
+    
+    # Training args
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs.')
+    parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training and evaluation.')
+    parser.add_argument('--num_samples', type=int, default=1000, help='Number of synthetic samples for training.')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for training.')
+    parser.add_argument('--no_train', action='store_true', help="Skip training and only run evaluation.")
+
+    args = parser.parse_args()
+    
+    # Expand user path
+    args.qwen_model_path = os.path.expanduser(args.qwen_model_path)
+    
+    main(args)
 

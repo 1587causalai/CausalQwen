@@ -54,46 +54,35 @@ python examples/basic_example.py
 ```python
 import torch
 from src.models.causal_lm import CausalLanguageModel, CausalLMConfig
+from src.data.tokenizer import QwenTokenizerWrapper
+
+# 创建分词器
+tokenizer = QwenTokenizerWrapper(model_path="~/models/Qwen2.5-0.5B", use_real_tokenizer=True)
 
 # 创建模型配置
 config = CausalLMConfig(
-    vocab_size=1000,
-    hidden_size=768,
+    vocab_size=tokenizer.vocab_size,
+    num_token_id=tokenizer.num_token_id,
+    hidden_size=896,  # For Qwen-0.5B
     causal_dim=64,
-    use_mock_feature_network=True
+    use_real_qwen=True,
+    qwen_model_path="~/models/Qwen2.5-0.5B"
 )
 
 # 创建模型
 model = CausalLanguageModel(config)
 
 # 准备输入
-input_ids = torch.tensor([[1, 2, 3, 4, 5]])
+texts = ["The price is 42.5 dollars."]
+inputs = tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
 
 # 模型前向传播
-outputs = model(input_ids)
+outputs = model(inputs['input_ids'], inputs['numerical_values'], inputs['attention_mask'])
 
 # 获取预测结果
-predictions = model.predict(input_ids)
+predictions = model.predict(inputs['input_ids'], inputs['numerical_values'], inputs['attention_mask'])
 print(f"预测的词元: {predictions['cls_pred']}")
 print(f"预测的数值: {predictions['reg_pred']}")
-```
-
-### 使用Qwen-0.5B作为特征网络
-
-```python
-from transformers import AutoModel, AutoTokenizer
-from src.models.feature_network import QwenFeatureNetwork
-
-# 加载Qwen-0.5B模型
-qwen_model = AutoModel.from_pretrained("Qwen/Qwen-0.5B")
-qwen_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen-0.5B")
-
-# 创建Qwen特征网络
-feature_network = QwenFeatureNetwork(qwen_model)
-
-# 替换模型的特征网络
-model.feature_network = feature_network
-model.tokenizer = qwen_tokenizer
 ```
 
 ## 项目结构
@@ -106,25 +95,29 @@ causal-lm-project/
 │   │   ├── feature_network.py    # 特征网络
 │   │   ├── abduction_network.py  # 推断网络
 │   │   └── action_network.py     # 行动网络
+│   ├── data/             # 数据处理
+│   │   ├── tokenizer.py          # 分词器
+│   │   ├── synthetic.py          # 合成数据生成
+│   │   └── evaluation_data.py    # 评估数据集
+│   ├── training/         # 训练模块
+│   │   └── trainer.py            # 训练器
+│   ├── evaluation/       # 评估模块
+│   │   └── evaluator.py          # 评估器
 │   ├── utils/            # 工具函数
 │   │   ├── distributions.py      # 分布工具
 │   │   ├── losses.py             # 损失函数
-│   │   ├── metrics.py            # 评估指标
-│   │   └── visualization.py      # 可视化工具
-│   └── data/             # 数据处理
-│       ├── dataset.py            # 数据集类
-│       ├── tokenizer.py          # 分词器
-│       └── synthetic.py          # 合成数据生成
+│   │   └── metrics.py            # 评估指标
+│   ├── visualization/    # 可视化工具
+│   │   └── plotter.py            # 绘图工具
+│   └── run_experiments.py        # 统一实验运行器
 ├── docs/                 # 文档
 │   ├── math/             # 数学理论
 │   ├── architecture/     # 架构设计
 │   ├── experiments/      # 实验说明
-│   └── api/              # API文档
-├── docs-site/            # docsify网站
+│   └── guide/            # 使用指南
 ├── tests/                # 测试代码
 ├── examples/             # 示例代码
-├── experiments/          # 实验代码和结果
-└── data/                 # 数据集
+└── results/              # 实验结果
 ```
 
 ## 核心哲学
@@ -143,7 +136,7 @@ causal-lm-project/
 
 ```bash
 # 启动文档网站
-cd docs-site
+cd docs
 docsify serve .
 ```
 
@@ -163,63 +156,70 @@ docsify serve .
 
 ## 实验运行
 
-### 使用模拟模型运行实验
+### 基础实验
 
 ```bash
-# 运行基本实验
-python src/run_experiments.py --experiment basic
+# 运行基本实验（验证基础功能）
+python src/run_experiments.py basic
 
-# 运行综合实验
-python src/run_experiments.py --experiment comprehensive
+# 运行综合实验（多数据集评估）
+python src/run_experiments.py comprehensive
 
-# 运行模型比较实验
-python src/run_experiments.py --experiment comparison
+# 运行对比实验（超参数敏感性分析）
+python src/run_experiments.py comparison
 
-# 运行消融实验
-python src/run_experiments.py --experiment ablation
+# 运行消融实验（架构组件贡献度验证）
+python src/run_experiments.py ablation
 ```
 
-### 使用真实 Qwen2.5-0.5B 模型运行实验
+### 使用真实 Qwen2.5-0.5B 模型
 
-确保您已经下载了 Qwen2.5-0.5B 模型到 `~/models/Qwen2.5-0.5B` 目录。
+确保您已经下载了 Qwen2.5-0.5B 模型到本地：
 
 ```bash
-# 使用便捷脚本运行（推荐）
-python src/run_qwen_experiments.py --experiment basic
-python src/run_qwen_experiments.py --experiment comprehensive
-python src/run_qwen_experiments.py --experiment comparison
-python src/run_qwen_experiments.py --experiment ablation
+# 指定 Qwen 模型路径
+python src/run_experiments.py ablation --qwen_model_path ~/models/Qwen2.5-0.5B
 
-# 或者使用原脚本的Qwen选项
-python src/run_experiments.py --experiment basic --use_real_qwen --qwen_model_path ~/models/Qwen2.5-0.5B
+# 调整训练参数
+python src/run_experiments.py basic --epochs 5 --batch_size 8 --num_samples 500
 
-# 如果模型在其他位置，指定路径
-python src/run_qwen_experiments.py --experiment basic --qwen_model_path /path/to/your/qwen/model
-
-# 调整批处理大小和样本数量（如果遇到内存问题）
-python src/run_qwen_experiments.py --experiment basic --batch_size 8 --num_samples 200
+# 只运行评估，跳过训练
+python src/run_experiments.py comprehensive --no_train
 ```
 
 ### 实验参数说明
 
-**模拟模型实验参数:**
-- `--num_samples`: 评估样本数量 (默认: 1000)
-- `--batch_size`: 批处理大小 (默认: 32)
-- `--hidden_size`: 隐藏层大小 (默认: 768)
-
-**真实 Qwen 模型实验参数:**
-- `--num_samples`: 评估样本数量 (默认: 500，因为真实模型更慢)
-- `--batch_size`: 批处理大小 (默认: 16，因为真实模型需要更多内存)
-- `--hidden_size`: 隐藏层大小 (默认: 896，匹配 Qwen2.5-0.5B)
 - `--qwen_model_path`: Qwen 模型路径 (默认: ~/models/Qwen2.5-0.5B)
+- `--hidden_size`: 隐藏层大小 (默认: 896，匹配 Qwen-0.5B)
+- `--causal_dim`: 因果状态维度 (默认: 64)
+- `--epochs`: 训练轮数 (默认: 10)
+- `--batch_size`: 批处理大小 (默认: 16)
+- `--num_samples`: 训练样本数量 (默认: 1000)
+- `--lr`: 学习率 (默认: 1e-4)
+- `--no_train`: 跳过训练，只运行评估
 
-### 实验结果对比
+### 生成实验图表
 
-使用真实 Qwen 模型的实验会生成以 `qwen_` 为前缀的结果目录，例如：
-- `results/qwen_basic_20231208_143000/`
-- `results/qwen_comprehensive_20231208_143000/`
+```bash
+# 对消融实验结果生成对比图表
+python src/visualization/plotter.py results/ablation_20231208_143000/
 
-这样可以方便地将真实模型和模拟模型的结果进行对比分析。
+# 对超参数对比实验结果生成图表
+python src/visualization/plotter.py results/comparison_20231208_143000/
+```
+
+## 实验结果
+
+实验结果将保存在 `results/` 目录下，包含：
+
+- `results.json`: 详细的评估指标数据
+- `model_*.pth`: 训练好的模型权重
+- `*.png`: 自动生成的对比图表（消融和对比实验）
+
+关键评估指标包括：
+- **分类指标**: `cls_accuracy`, `cls_f1`, `cls_precision`, `cls_recall`
+- **回归指标**: `reg_mse`, `reg_mae`
+- **校准指标**: `calib_ece`（分类校准）, `reg_picp`（回归校准）
 
 ## 贡献
 

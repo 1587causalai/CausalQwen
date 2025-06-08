@@ -2,6 +2,83 @@
 
 本文档记录了CausalQwen-0.5B项目的所有重要更改。
 
+## [0.2.0] - 2024-12-XX
+
+### 重大重构 🔄
+
+- **统一实验框架**：完全重写了实验运行系统
+  - 删除了多个冗余的实验脚本
+  - 创建了统一的 `src/run_experiments.py` 实验运行器
+  - 支持 `basic`, `comprehensive`, `comparison`, `ablation` 四种实验类型
+  - 实现了模型配置工厂模式，便于消融和对比实验
+
+- **全面重构评估系统**：
+  - 完全重写了 `src/evaluation/evaluator.py`
+  - 实现了完整的评估指标体系：
+    - 分类指标：`cls_accuracy`, `cls_f1`, `cls_precision`, `cls_recall`
+    - 回归指标：`reg_mse`, `reg_mae`
+    - 校准指标：`calib_ece`（分类校准）, `reg_picp`（回归校准）
+  - 添加了对柯西分布和正态分布的自动识别和处理
+  - 修复了回归误差计算逻辑
+
+### 新增功能 ✨
+
+- **预测区间覆盖率 (PICP)**：新增了关键的回归校准指标
+- **可视化系统重构**：
+  - 重写了 `src/visualization/plotter.py`
+  - 支持从结构化 JSON 结果自动生成对比图表
+  - 自动识别实验类型并生成相应的可视化图表
+- **JSON 序列化改进**：添加了 numpy 类型自动转换功能
+- **数据集命名统一**：标准化了评估数据集的命名
+
+### 改进优化 🚀
+
+- **训练器配置修复**：修复了回归损失权重参数传递问题
+- **代码结构优化**：
+  - 清理了重复和过时的代码文件
+  - 改进了模块间的依赖关系
+  - 统一了 API 接口设计
+- **性能优化**：
+  - 无采样训练路径的完整实现
+  - 改进了柯西分布参数计算的数值稳定性
+
+### 文档大更新 📚
+
+- **全面更新所有 Markdown 文档**：
+  - 根目录 `README.md`：更新了代码示例、实验说明、项目结构
+  - `docs/README.md`：同步更新文档站点主页
+  - `docs/experiments/qwen_finetuning_report.md`：修正脚本引用和流程描述
+  - `docs/guide/quickstart.md`：全面重写快速开始指南
+- **代码示例修正**：所有文档中的代码示例都已更新为可工作的版本
+- **API 文档同步**：确保文档与重构后的代码 API 完全一致
+
+### 修复问题 🐛
+
+- 修复了评估器中回归误差只在分类正确时计算的逻辑错误
+- 修复了训练器中回归损失权重被硬编码的问题
+- 修复了可视化脚本与新实验框架不兼容的问题
+- 修复了文档中过时的脚本引用和 API 调用
+
+### 破坏性变更 ⚠️
+
+- 删除了 `run_qwen_finetuning_experiment.py` 和 `run_qwen_experiments.py`
+- 删除了 `evaluate.py`（功能整合到新的评估器中）
+- 更改了实验结果的文件结构和命名方式
+- 重构了 `Trainer` 类的构造函数签名
+
+### 迁移指南 📖
+
+**旧的实验运行方式：**
+```bash
+python src/run_qwen_finetuning_experiment.py --qwen_model_path ~/models/Qwen2.5-0.5B
+```
+
+**新的实验运行方式：**
+```bash
+python src/run_experiments.py ablation --qwen_model_path ~/models/Qwen2.5-0.5B
+python src/visualization/plotter.py results/ablation_YYYYMMDD_HHMMSS/
+```
+
 ## [0.1.0] - 2023-06-07
 
 ### 新增
@@ -41,7 +118,7 @@
 
 ## 未来计划
 
-### [0.2.0] - 计划中
+### [0.3.0] - 计划中
 
 - 添加更多分布类型（如学生t分布）
 - 改进特征网络，支持更长的序列
@@ -49,7 +126,7 @@
 - 优化多GPU训练性能
 - 添加更多实验和基准测试
 
-### [0.3.0] - 计划中
+### [0.4.0] - 计划中
 
 - 添加多模态支持
 - 实现时序因果建模
