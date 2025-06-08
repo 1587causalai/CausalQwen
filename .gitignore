@@ -75,3 +75,9 @@ Thumbs.db
 *.tar
 *.gz
 
+# model files
+*.pt
+*.pth
+*.ckpt
+
+

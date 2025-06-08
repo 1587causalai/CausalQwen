@@ -13,7 +13,9 @@ import numpy as np
 from tqdm import tqdm
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Correctly point to the project root, which is one level up from the /scripts directory
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
 
 from src.data.tokenizer import QwenTokenizerWrapper, MockTokenizer
 from src.models.causal_lm import CausalLMConfig, CausalLanguageModel
@@ -206,7 +208,7 @@ def train_quick_model(use_real_qwen=False, num_epochs=5, batch_size=8, num_sampl
     print("\n训练完成！")
     
     # Save model
-    save_path = f"trained_model_{'qwen' if use_real_qwen else 'mock'}.pth"
+    save_path = f"results/trained_model_{'qwen' if use_real_qwen else 'mock'}.pth"
     torch.save(model.state_dict(), save_path)
     print(f"模型已保存到: {save_path}")
     
