@@ -36,6 +36,7 @@ class CausalLMConfig:
     use_ovr_classifier: bool = True
     use_cauchy_distribution: bool = True
     reg_loss_weight: float = 1.0
+    ovr_threshold: float = 0.0
     
     def __post_init__(self):
         if self.num_token_id is None:

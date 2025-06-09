@@ -139,7 +139,7 @@ class CausalLMLoss(nn.Module):
     This combines the OvR classification loss and the gated regression loss.
     """
     
-    def __init__(self, num_classes, num_token_id, regression_weight=1.0):
+    def __init__(self, num_classes, num_token_id, regression_weight=1.0, ovr_threshold=0.0):
         """
         Initialize the combined loss function.
         
@@ -147,11 +147,12 @@ class CausalLMLoss(nn.Module):
             num_classes (int): Number of classes (vocabulary size)
             num_token_id (int): Token ID for the <NUM> token
             regression_weight (float, optional): Weight for the regression loss. Defaults to 1.0.
+            ovr_threshold (float, optional): Decision threshold for OvR loss. Defaults to 0.0.
         """
         super().__init__()
         self.num_classes = num_classes
         self.num_token_id = num_token_id
-        self.cls_loss_fn = OvRClassificationLoss(num_classes)
+        self.cls_loss_fn = OvRClassificationLoss(num_classes, threshold=ovr_threshold)
         self.regression_weight = regression_weight
         
     def forward(self, cls_loc, cls_scale, reg_loc, reg_scale, targets, target_values):

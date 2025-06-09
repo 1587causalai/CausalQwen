@@ -61,7 +61,8 @@ class Trainer:
         self.loss_fn = CausalLMLoss(
             num_classes=self.tokenizer.vocab_size,
             num_token_id=self.tokenizer.num_token_id,
-            regression_weight=self.config.reg_loss_weight
+            regression_weight=self.config.reg_loss_weight,
+            ovr_threshold=self.config.ovr_threshold
         )
         
     @staticmethod
@@ -137,12 +138,24 @@ class Trainer:
                         print("  Target Values: No regression targets in this batch.")
 
                     # 2. Analyze model's regression predictions
-                    reg_loc = outputs["reg_loc"][is_num_mask]
-                    reg_scale = outputs["reg_scale"][is_num_mask]
-                    if len(reg_loc) > 0:
-                        print(f"  Model Predictions (for regression):")
-                        print(f"    - Predicted Loc (μ): Mean={reg_loc.mean().item():.4f}, Std={reg_loc.std().item():.4f}, Range=[{reg_loc.min().item():.4f}, {reg_loc.max().item():.4f}]")
-                        print(f"    - Predicted Scale (γ): Mean={reg_scale.mean().item():.4f}, Std={reg_scale.std().item():.4f}, Range=[{reg_scale.min().item():.4f}, {reg_scale.max().item():.4f}]")
+                    if torch.any(is_num_mask):
+                        pred_locs = outputs['reg_loc'][is_num_mask]
+                        pred_scales = torch.exp(outputs['reg_scale'][is_num_mask])
+                        print("  Model Predictions (for regression):")
+                        print(f"    - Predicted Loc (μ): Mean={pred_locs.mean().item():.4f}, Std={pred_locs.std().item():.4f}, Range=[{pred_locs.min().item():.4f}, {pred_locs.max().item():.4f}]")
+                        print(f"    - Predicted Scale (γ): Mean={pred_scales.mean().item():.4f}, Std={pred_scales.std().item():.4f}, Range=[{pred_scales.min().item():.4f}, {pred_scales.max().item():.4f}]")
+
+                    # 3. OvR Probability Sum Diagnostics
+                    cls_loc = outputs['cls_loc']
+                    cls_scale = torch.exp(outputs['cls_scale'])
+                    threshold = self.loss_fn.cls_loss_fn.threshold
+                    ovr_probs = 0.5 + (1 / torch.pi) * torch.atan((cls_loc - threshold) / cls_scale)
+                    sum_ovr_probs = ovr_probs.sum(dim=1)
+                    
+                    print("  OvR Probability Sum (Σ Pk) Diagnostics:")
+                    print(f"    - Mean: {sum_ovr_probs.mean().item():.4f}")
+                    print(f"    - Std: {sum_ovr_probs.std().item():.4f}")
+                    print(f"    - Range: [{sum_ovr_probs.min().item():.4f}, {sum_ovr_probs.max().item():.4f}]")
                 # --- END DIAGNOSTIC LOGGING ---
 
                 # Compute loss

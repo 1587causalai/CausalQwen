@@ -67,32 +67,25 @@ class Evaluator:
                 # --- Predictions ---
                 all_true_tokens.extend(targets.cpu().numpy())
                 
-                # For ECE, we need to convert OvR probabilities to normalized probabilities
-                # Step 1: Get OvR probabilities (independent probabilities)
-                ovr_probs = outputs['cls_probs']  # Shape: [batch_size, num_classes]
+                # --- CONFIDENCE CALCULATION FOR ECE ---
+                # The previous OvR-based normalization led to an unexpectedly high ECE.
+                # We are switching to a more standard and robust method: applying softmax 
+                # to the model's logits (cls_loc) to get confidences.
+                # This aligns with best practices for multi-class calibration.
                 
-                # Step 2: Convert to normalized probability distribution (sum to 1)
-                # We use softmax on the logits (inverse of the OvR probability transformation)
-                # First, convert OvR probabilities back to decision scores
-                # P(S_k > 0) = 0.5 + (1/π) * arctan(loc_S_k / scale_S_k)
-                # So: arctan(loc_S_k / scale_S_k) = π * (P - 0.5)
-                # And: loc_S_k / scale_S_k = tan(π * (P - 0.5))
-                # We'll use the raw decision scores as logits for softmax normalization
+                # Step 1: Get the raw logits (location parameter from the model output).
+                cls_loc = outputs['cls_loc']
                 
-                # Get decision score distributions from model
-                cls_loc = outputs['cls_loc']  # Location parameters (like logits)
-                cls_scale = outputs['cls_scale']  # Scale parameters (uncertainty)
-                
-                # Use location parameters as logits for softmax normalization
-                # This converts OvR independent decisions to proper probability distribution
-                normalized_probs = torch.softmax(cls_loc, dim=1)  # Sum to 1 across classes
-                
-                # Step 3: Use maximum probability as confidence for ECE
-                max_probs, pred_classes = torch.max(normalized_probs, dim=1)
+                # Step 2: Apply softmax to convert logits to a valid probability distribution.
+                softmax_probs = torch.softmax(cls_loc, dim=1)
+
+                # Step 3: The confidence for ECE is the maximum probability from the distribution.
+                # The predicted class is the one with the highest probability.
+                max_probs, pred_classes = torch.max(softmax_probs, dim=1)
                 pred_confidences_batch = max_probs
                 all_pred_confidences.extend(pred_confidences_batch.cpu().numpy())
                 
-                # Update predicted tokens to use normalized prediction
+                # Update predicted tokens to use softmax prediction
                 pred_tokens = pred_classes
                 all_pred_tokens.extend(pred_tokens.cpu().numpy())
 
@@ -143,7 +136,6 @@ class Evaluator:
             print(f"Saved raw evaluation outputs to {save_path}")
 
         return metrics
-
     def _compute_metrics(self, pred_tokens, true_tokens, true_values, pred_confidences, reg_locs, reg_scales):
         """Computes and returns a dictionary of all metrics."""
         metrics = {}

@@ -130,7 +130,8 @@ def main(args):
         # Force causal_dim to be the same as hidden_size for identity initialization
         causal_dim=args.hidden_size,
         use_real_qwen=True,
-        qwen_model_path=args.qwen_model_path
+        qwen_model_path=args.qwen_model_path,
+        ovr_threshold=100.0  # Set a high threshold to initialize probabilities near zero
     )
     
     # --- 2. Get configurations and datasets ---
@@ -215,7 +216,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--results_base_dir', 
         type=str, 
-        default='docs/results',
+        default='results',
         help='Base directory to save experiment results.'
     )
     # Model architecture args

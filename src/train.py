@@ -335,6 +335,44 @@ def train_model(
                 best_val_loss = val_metrics["loss"]
                 torch.save(model.state_dict(), save_path)
                 print(f"Saved best model to {save_path}")
+
+            # Batch diagnostics
+            if (epoch + 1) % log_interval == 0:
+                print(f"--- Epoch {epoch+1} Diagnostics ---")
+                is_num_mask = (all_targets == num_token_id)
+                
+                # Target Values
+                if torch.any(is_num_mask):
+                    target_reg_values = all_target_values[is_num_mask]
+                    print("  Target Values (for regression):")
+                    print(f"    - Count: {len(target_reg_values)}")
+                    print(f"    - Mean: {target_reg_values.mean():.2f}")
+                    print(f"    - Std: {target_reg_values.std():.2f}")
+                    print(f"    - Range: [{target_reg_values.min():.2f}, {target_reg_values.max():.2f}]")
+
+                # Model Predictions
+                if torch.any(is_num_mask):
+                    pred_locs = all_reg_preds[is_num_mask]
+                    pred_scales = torch.exp(all_reg_preds[is_num_mask])
+                    print("  Model Predictions (for regression):")
+                    print(f"    - Predicted Loc (μ): Mean={pred_locs.mean().item():.4f}, Std={pred_locs.std().item():.4f}, Range=[{pred_locs.min().item():.4f}, {pred_locs.max().item():.4f}]")
+                    print(f"    - Predicted Scale (γ): Mean={pred_scales.mean().item():.4f}, Std={pred_scales.std().item():.4f}, Range=[{pred_scales.min().item():.4f}, {pred_scales.max().item():.4f}]")
+                
+                # OvR Probability Sum Diagnostics
+                cls_loc = all_cls_preds
+                cls_scale = torch.exp(all_cls_preds)
+                ovr_probs = 0.5 + (1 / torch.pi) * torch.atan(cls_loc / cls_scale)
+                sum_ovr_probs = ovr_probs.sum(dim=1)
+                
+                print("  OvR Probability Sum (Σ Pk) Diagnostics:")
+                print(f"    - Mean: {sum_ovr_probs.mean().item():.4f}")
+                print(f"    - Std: {sum_ovr_probs.std().item():.4f}")
+                print(f"    - Range: [{sum_ovr_probs.min().item():.4f}, {sum_ovr_probs.max().item():.4f}]")
+
+                # Loss Components
+                print("  Loss Components:")
+                print(f"    - Classification Loss: {val_metrics['cls_loss']:.4f}")
+                print(f"    - Regression Loss: {val_metrics['reg_loss']:.4f}")
     
     return history
 

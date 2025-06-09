@@ -1,7 +1,7 @@
 * [首页](/)
 * [项目概述](overview.md)
 
-* [数学基础](math/mathematical_foundations.md)
+* [数学基础](mathematical_foundations.md)
 
 * [整体架构](architecture/architecture_design.md)
 
@@ -16,6 +16,4 @@
   * [快速开始](guide/quickstart.md)
 
 * [常见问题](faq.md)
-* [贡献指南](contributing.md)
-* [更新日志](changelog.md)
 
