@@ -82,7 +82,7 @@ if all_target_values:
 
 ### 3.1. 恒等映射策略 (Identity Mapping Strategy)
 
-当 `hidden_size == causal_dim` 时，`AbductionNetwork` 被初始化为一个近似的恒等映射：
+当 `hidden_size == causal_dim` 时(为了方便初始化，是我们的默认设置，除非有充足理由，我们不会改变这个设置)，`AbductionNetwork` 被初始化为一个近似的恒等映射：
 
 ```python
 def init_weights(self):

@@ -180,24 +180,28 @@ class CausalLMLoss(nn.Module):
 
         if num_count == 0:
             # If no <NUM> tokens, regression loss is zero
-            unweighted_regression_loss = torch.tensor(0.0, device=reg_loc.device)
+            unweighted_regression_loss_mean = torch.tensor(0.0, device=reg_loc.device)
             gated_regression_loss = torch.tensor(0.0, device=reg_loc.device)
-            num_prob = torch.tensor(0.0, device=reg_loc.device)
+            num_prob_mean = torch.tensor(0.0, device=reg_loc.device)
         else:
-            # Compute the base Cauchy NLL loss only for the <NUM> samples
-            unweighted_regression_loss = cauchy_nll_loss(reg_loc, reg_scale, target_values)
+            # Compute the base Cauchy NLL loss for each sample ('none' reduction)
+            unweighted_regression_loss_per_sample = cauchy_nll_loss(
+                reg_loc, reg_scale, target_values, reduction='none'
+            )
+            unweighted_regression_loss_mean = unweighted_regression_loss_per_sample.mean() # For logging
             
             # Get the probability of the <NUM> token, which acts as the gate
             all_probs = compute_ovr_probabilities(cls_loc, cls_scale, self.cls_loss_fn.threshold)
             num_prob = all_probs[:, self.num_token_id]
+            num_prob_mean = num_prob.mean() # For logging
             
-            # Apply the soft gate: P(<NUM>) * L_cauchy
-            gated_loss_per_sample = num_prob * unweighted_regression_loss
+            # Apply the soft gate at a per-sample level: P(<NUM>) * L_cauchy
+            gated_loss_per_sample = num_prob * unweighted_regression_loss_per_sample
             
             # Only consider the loss for samples that are actually <NUM>
             final_gated_loss_component = gated_loss_per_sample * is_num_mask
             
-            # Average over the number of <NUM> samples
+            # Average over the number of <NUM> samples to get the final batch loss
             gated_regression_loss = final_gated_loss_component.sum() / num_count
 
         # 3. Combine losses
@@ -210,8 +214,8 @@ class CausalLMLoss(nn.Module):
             'loss': total_loss,
             'cls_loss': classification_loss,
             'gated_reg_loss': gated_regression_loss,
-            'unweighted_reg_loss': unweighted_regression_loss.mean() if num_count > 0 else torch.tensor(0.0), # For logging
-            'num_prob': num_prob.mean() if num_count > 0 else torch.tensor(0.0), # For logging
+            'unweighted_reg_loss': unweighted_regression_loss_mean, # For logging
+            'num_prob': num_prob_mean, # For logging
             'cls_probs': cls_probs,
         }
 

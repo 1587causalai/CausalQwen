@@ -91,7 +91,7 @@ def cauchy_log_prob(x, loc, scale):
     return -torch.log(math.pi * scale) - torch.log(1 + ((x - loc) / scale) ** 2)
 
 
-def cauchy_nll_loss(pred_loc, pred_scale, target):
+def cauchy_nll_loss(pred_loc, pred_scale, target, reduction='mean'):
     """
     Compute the negative log-likelihood loss for Cauchy distribution.
     
@@ -99,11 +99,24 @@ def cauchy_nll_loss(pred_loc, pred_scale, target):
         pred_loc (torch.Tensor): Predicted location parameter
         pred_scale (torch.Tensor): Predicted scale parameter
         target (torch.Tensor): Target values
+        reduction (str, optional): Specifies the reduction to apply to the output:
+                                   'none' | 'mean' | 'sum'. Defaults to 'mean'.
         
     Returns:
-        torch.Tensor: Negative log-likelihood loss
+        torch.Tensor: Negative log-likelihood loss, shape depends on reduction.
     """
-    return -cauchy_log_prob(target, pred_loc, pred_scale).mean()
+    # Calculate the log probability for each sample
+    log_prob = - (math.log(math.pi) + torch.log(pred_scale) + torch.log(1 + ((target - pred_loc) / pred_scale)**2))
+    
+    # Apply reduction
+    if reduction == 'mean':
+        return -log_prob.mean()
+    elif reduction == 'sum':
+        return -log_prob.sum()
+    elif reduction == 'none':
+        return -log_prob
+    else:
+        raise ValueError(f"Invalid reduction type: {reduction}")
 
 
 class CauchyLinear(nn.Module):

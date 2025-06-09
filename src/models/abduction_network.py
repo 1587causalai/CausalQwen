@@ -61,8 +61,18 @@ class AbductionNetwork(nn.Module):
                 # reflecting high initial uncertainty about the causal representation.
                 self.fc.bias.data[causal_dim:].fill_(2.3) # exp(2.3) ≈ 10
         else:
-            # For other cases, use a standard initialization
-            pass
+            # For other cases, use a conservative initialization
+            with torch.no_grad():
+                # Use Xavier initialization for weights with small gain
+                torch.nn.init.xavier_uniform_(self.fc.weight, gain=0.1)
+                
+                # Initialize loc bias to zero
+                self.fc.bias.data[:causal_dim].fill_(0.0)
+                # Initialize log_scale bias to a value that results in a large scale,
+                # reflecting high initial uncertainty about the causal representation.
+                self.fc.bias.data[causal_dim:].fill_(2.3) # exp(2.3) ≈ 10
+                
+                print(f"  - AbductionNetwork initialized with Xavier (hidden_size={hidden_size} != causal_dim={causal_dim})")
 
 
     def forward(self, features):

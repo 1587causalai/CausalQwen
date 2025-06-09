@@ -110,6 +110,7 @@ class Trainer:
             num_samples (int): Number of synthetic samples to generate for training.
         """
         self.model.train()
+        
         print("Creating final training data loader...")
         dataloader = self._create_training_data(num_samples, shuffle=True)
         
@@ -182,11 +183,12 @@ class Trainer:
                         "cls_loss": loss_dict["cls_loss"].item(),
                         "reg_mae": reg_mae,
                         "units_mean_loc": outputs['causal_loc'].mean().item(),
-                        "units_mean_scale": torch.exp(outputs['causal_scale']).mean().item(),
+                        "units_mean_scale": outputs['causal_scale'].mean().item(),
                         "ovr_prob_sum": cls_probs.sum(dim=1).mean().item(),
                         "num_accuracy": num_acc,
                         "accuracy": (pred_tokens == batch_targets).sum().item() / batch_targets.size(0)
                     }
+                    
                     self.wandb_run.log({k: v for k, v in log_data.items() if v is not None}, step=global_step)
                 
                 global_step += 1
