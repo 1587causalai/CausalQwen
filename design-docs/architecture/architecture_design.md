@@ -10,8 +10,8 @@
 因果语言模型（Causal Language Model）是一种将标准大语言模型（如Qwen-0.5B）改造为具有因果推断能力的架构。其核心思想是在语言模型强大的符号推理能力之上，嫁接一个结构化的数值因果推断框架，使模型能够同时处理文本生成和数值预测任务。
 
 整体架构遵循"推断-行动"范式（Abduction-Action Paradigm），将决策过程分为两个明确的阶段：
-1. **推断（Abduction）**：从观测特征推断潜在因果状态的概率分布
-2. **行动（Action）**：基于因果状态生成预测结果
+1. **推断（Abduction）**：从观测特征推断潜在个体因果表征的概率分布
+2. **行动（Action）**：基于个体因果表征生成预测结果
 
 ### 1.2 架构图
 
@@ -33,14 +33,14 @@
     │
     ▼
 ┌─────────────────┐
-│   推断网络      │ ─── 推断因果状态分布参数
+│   推断网络      │ ─── 推断个体因果表征分布参数
 │(AbductionNetwork)│     loc(z), scale(z)
 └─────────────────┘
     │
     ▼
 ┌─────────────────┐
-│   因果状态      │ ─── U ~ Cauchy(loc(z), scale(z))
-│  (CausalState)   │
+│个体因果表征     │ ─── U ~ Cauchy(loc(z), scale(z))
+│(IndividualRep)   │
 └─────────────────┘
     │
     ▼
@@ -87,11 +87,11 @@
    - 可以是预训练的语言模型（如Qwen-0.5B）或简化的模拟器
 
 3. **推断网络（AbductionNetwork）**：
-   - 从特征表示推断潜在因果状态的概率分布参数
+   - 从特征表示推断潜在个体因果表征的概率分布参数
    - 输出柯西分布的位置参数（loc）和尺度参数（scale）
 
 4. **行动网络（ActionNetwork）**：
-   - 从因果状态生成预测结果
+   - 从个体因果表征生成预测结果
    - 包含分类头和回归头两个子组件：
      - **分类头（ClassificationHead）**：预测下一个词元
      - **回归头（RegressionHead）**：预测数值
@@ -113,12 +113,12 @@
    - 对于包含`<NUM>`词元的输入，特征可能被数值调制
 
 3. **因果推断**：
-   - 推断网络将特征表示 $z$ 映射为因果状态 $U$ 的分布参数：$\text{loc}_U, \text{scale}_U = g(z)$
-   - 因果状态表示为柯西分布：$U \sim \text{Cauchy}(\text{loc}_U, \text{scale}_U)$
+   - 推断网络将特征表示 $z$ 映射为个体因果表征 $U$ 的分布参数：$\text{loc}_U, \text{scale}_U = g(z)$
+- 个体因果表征表示为柯西分布：$U \sim \text{Cauchy}(\text{loc}_U, \text{scale}_U)$
 
 4. **行动生成**：
-   - 分类头将因果状态 $U$ 映射为词元决策分数：$S_k = \vec{A}_k \cdot U + B_k$
-   - 回归头将因果状态 $U$ 映射为数值预测：$Y = \vec{W} \cdot U + b$
+   - 分类头将个体因果表征 $U$ 映射为词元决策分数：$S_k = \vec{A}_k \cdot U + B_k$
+- 回归头将个体因果表征 $U$ 映射为数值预测：$Y = \vec{W} \cdot U + b$
 
 5. **输出预测**：
    - OvR分类器计算每个词元的概率：$P(S_k > C_k)$
@@ -454,7 +454,8 @@ class AbductionNetwork(nn.Module):
 
 2. **初始化策略**：
    - 使用适当的权重初始化，避免初始分布过于极端
-   - 可以考虑将初始尺度参数设置为较小值，随着训练逐渐增加
+   - 推断网络的尺度参数应设置为较大值，体现高初始不确定性，更接近均匀分布的先验认知
+   - 行动网络的决策阈值应设置为较大值，确保初始预测保持谨慎
 
 3. **因果维度选择**：
    - 因果维度是一个重要的超参数，影响模型的表达能力和计算效率
@@ -529,7 +530,7 @@ class ActionNetwork(nn.Module):
 
 ```python
 class ClassificationHead(nn.Module):
-    def __init__(self, causal_dim: int, num_classes: int, threshold: float = 0.0):
+    def __init__(self, causal_dim: int, num_classes: int, threshold: float = 10.0):
         super().__init__()
         self.causal_dim = causal_dim
         self.num_classes = num_classes

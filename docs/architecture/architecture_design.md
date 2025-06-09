@@ -320,7 +320,7 @@ class FeatureNetworkBase(nn.Module):
 
 #### 2.2.4 数值感知机制
 
-为了处理数值信息，特征网络包含一个数值感知包装器：
+为了处理数值信息，特征网络包含一个数值感知包装器：a
 
 ```python
 class NumAwareFeatureNetwork(nn.Module):

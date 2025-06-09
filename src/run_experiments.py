@@ -17,6 +17,8 @@ import argparse
 from datetime import datetime
 from copy import deepcopy
 import numpy as np
+from dataclasses import asdict
+import wandb
 
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -147,6 +149,21 @@ def main(args):
     for config_name, config in model_configs.items():
         print(f"\n--- Running configuration: {config_name} ---")
         
+        # --- WandB Initialization ---
+        wandb_run = None
+        if args.use_wandb:
+            try:
+                wandb_run = wandb.init(
+                    project="CausalQwen2",
+                    name=f"{args.experiment}_{config_name}_{timestamp}",
+                    config=asdict(config),
+                    reinit=True # Allows multiple runs in one script
+                )
+                print("Weights & Biases initialized successfully.")
+            except Exception as e:
+                print(f"Could not initialize Weights & Biases. Error: {e}")
+                wandb_run = None
+
         # Instantiate model
         model = CausalLanguageModel(config).to(device)
         
@@ -166,7 +183,8 @@ def main(args):
                 device=device,
                 learning_rate=args.lr,
                 batch_size=args.batch_size,
-                config=config
+                config=config,
+                wandb_run=wandb_run
             )
             trainer.train(num_epochs=args.epochs, num_samples=args.num_samples)
             
@@ -189,6 +207,11 @@ def main(args):
             print(f"    -> Cls F1: {results.get('cls_f1', 0):.4f}, Reg MAE: {results.get('reg_mae', 0):.4f}, Reg PICP: {results.get('reg_picp', 0):.4f}")
             
         all_results[config_name] = config_results
+
+        # --- Finish WandB Run ---
+        if wandb_run:
+            wandb_run.finish()
+            print("Weights & Biases run finished.")
 
     # --- 4. Save all results ---
     # Convert numpy types to standard Python types for JSON serialization
@@ -231,6 +254,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_samples', type=int, default=1000, help='Number of synthetic samples for training.')
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for training.')
     parser.add_argument('--no_train', action='store_true', help="Skip training and only run evaluation.")
+    parser.add_argument('--use_wandb', action='store_true', help="Use Weights & Biases for logging.")
 
     args = parser.parse_args()
     

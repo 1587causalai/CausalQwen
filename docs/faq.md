@@ -6,7 +6,7 @@
 
 ### Q: 什么是因果语言模型？
 
-A: 因果语言模型是一种将决策过程分解为推断和行动两个阶段的语言模型。在推断阶段，模型从输入特征推断潜在的因果状态分布；在行动阶段，模型基于因果状态分布做出决策（分类或回归）。这种分解使模型能够更好地处理不确定性，并在统一的框架下处理分类和回归任务。
+A: 因果语言模型是一种将决策过程分解为推断和行动两个阶段的语言模型。在推断阶段，模型从输入特征推断潜在的个体因果表征分布；在行动阶段，模型基于个体因果表征分布做出决策（分类或回归）。这种分解使模型能够更好地处理不确定性，并在统一的框架下处理分类和回归任务。
 
 ### Q: 因果语言模型与传统语言模型有什么区别？
 
@@ -122,7 +122,7 @@ config = CausalLMConfig(
 
 主要的超参数包括：
 
-- `causal_dim`：因果状态的维度，影响模型的表达能力。
+- `causal_dim`：个体因果表征的维度，影响模型的表达能力。
 - `cls_loss_weight`和`reg_loss_weight`：分类损失和回归损失的权重，影响模型对不同任务的关注度。
 - `use_ovr_classifier`：是否使用OvR分类，如果设为False则使用Softmax分类。
 - `use_cauchy_distribution`：是否使用柯西分布，如果设为False则使用高斯分布。
@@ -354,7 +354,7 @@ from src.utils.visualization import (
     visualize_uncertainty
 )
 
-# 可视化因果状态
+# 可视化个体因果表征
 visualize_causal_state(model, sample_input, output_dir='results')
 
 # 可视化决策边界

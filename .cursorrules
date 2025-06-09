@@ -4,6 +4,7 @@ design-docs/math/mathematical_foundations.md 是整个项目数学内核的文�
 
 design-docs/core-design.md 是严格依照数学内核设计的架构文档.
 
+design-docs/U_deep_dive.md 是因果表征变量 U 的深度解读文档.
 
 
 ## 项目目录结构
@@ -18,3 +19,5 @@ design-docs/PROJECT_BLUEPRINT.md 是项目目录结构的文档.
 ## 偏好设置
 
 所有 python 画图都要使用英文图标避免字体问题和方便分享
+
+Qwen 的词汇表大小为K， CausalQwen 的词汇表大小为K+1, 其中新增的 <NUM> 词元用于表示数值预测。

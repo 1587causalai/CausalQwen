@@ -12,76 +12,76 @@ import torch.nn.functional as F
 
 class AbductionNetwork(nn.Module):
     """
-    Abduction Network for inferring causal state distribution.
+    Abduction Network for inferring individual causal representation distribution.
     
-    Given feature representation z, this network outputs the parameters
-    (location and scale) of the Cauchy distribution for the latent causal state U.
+    This network takes the feature representation from the Feature Network and outputs
+    the parameters (location and scale) of the Cauchy distribution for the latent
+    individual causal representation U.
     """
     
-    def __init__(self, input_size, causal_dim):
+    def __init__(self, hidden_size, causal_dim):
         """
-        Initialize the abduction network.
+        Initialize the Abduction Network.
         
         Args:
-            input_size (int): Size of the input feature representation
-            causal_dim (int): Dimensionality of the latent causal state
+            hidden_size (int): Size of the input feature representation
+            causal_dim (int): Dimensionality of the individual causal representation
         """
         super().__init__()
-        self.input_size = input_size
-        self.causal_dim = causal_dim
-        
-        # Linear layer to map features to distribution parameters
-        # Output has twice the causal_dim: first half for location, second half for scale
-        self.causal_inference_layer = nn.Linear(input_size, causal_dim * 2)
-        
+        # A simple linear layer to map from feature space to causal space
+        # It outputs two values for each dimension: one for loc, one for log_scale
+        self.fc = nn.Linear(hidden_size, causal_dim * 2)
+
     def init_weights(self):
         """
-        Initialize weights according to the knowledge transfer strategy.
-        This sets up the abduction network to be an identity-like transformation
-        at the beginning of the training.
+        Initialize weights for identity mapping.
+        This is a specific strategy for the case where hidden_size == causal_dim.
         """
-        # We assume input_size and causal_dim are the same for identity mapping
-        if self.input_size != self.causal_dim:
-            raise ValueError(
-                f"For identity initialization, input_size ({self.input_size}) "
-                f"must equal causal_dim ({self.causal_dim})."
-            )
+        # Initialize the linear layer for an identity-like mapping
+        # where loc is the feature and scale is small.
+        # This requires hidden_size to be equal to causal_dim.
+        hidden_size = self.fc.in_features
+        causal_dim = self.fc.out_features // 2
+        
+        if hidden_size == causal_dim:
+            # Create an identity matrix for the location part
+            identity_matrix = torch.eye(hidden_size, causal_dim)
+            # Create a zero matrix for the scale part
+            zero_matrix = torch.zeros(hidden_size, causal_dim)
+            
+            # Concatenate to form the final weight matrix [causal_dim * 2, hidden_size]
+            # The first half of weights for loc, second half for scale.
+            final_weight = torch.cat((identity_matrix, zero_matrix), dim=1).t()
+            
+            with torch.no_grad():
+                self.fc.weight.copy_(final_weight)
+                # Initialize loc bias to zero
+                self.fc.bias.data[:causal_dim].fill_(0.0)
+                # Initialize log_scale bias to a value that results in a large scale,
+                # reflecting high initial uncertainty about the causal representation.
+                self.fc.bias.data[causal_dim:].fill_(2.3) # exp(2.3) ≈ 10
+        else:
+            # For other cases, use a standard initialization
+            pass
 
-        # Get the weight and bias from the single linear layer
-        weight = self.causal_inference_layer.weight
-        bias = self.causal_inference_layer.bias
-        
-        # Split the parameters for loc and scale
-        loc_weight, scale_weight = torch.split(weight, self.causal_dim, dim=0)
-        loc_bias, scale_bias = torch.split(bias, self.causal_dim, dim=0)
-        
-        # Initialize loc parameters for identity mapping (loc_U = z)
-        # Weight = Identity matrix, Bias = Zero vector
-        loc_weight.data.copy_(torch.eye(self.causal_dim))
-        loc_bias.data.fill_(0)
-        
-        # Initialize scale parameters for maximum uncertainty (scale_U = large constant)
-        # Weight = Zero matrix, Bias = Large positive value (for log_scale)
-        scale_weight.data.fill_(0)
-        scale_bias.data.fill_(2.3) # Corresponds to exp(2.3) ≈ 10
 
     def forward(self, features):
         """
-        Infer the distribution parameters of the latent causal state.
+        Infer the distribution parameters of the individual causal representation.
         
         Args:
-            features (torch.Tensor): Feature representation
-                                    Shape: [batch_size, input_size]
+            features (torch.Tensor): Input feature representation
+                                     Shape: [batch_size, hidden_size]
         
         Returns:
             tuple: (loc, scale) - Parameters of the Cauchy distribution
-                  Each has shape: [batch_size, causal_dim]
+                   Each has shape: [batch_size, causal_dim]
         """
-        # Map features to distribution parameters
-        params = self.causal_inference_layer(features)
+        # The output has shape [batch_size, causal_dim * 2]
+        output = self.fc(features)
         
-        # Split into location and scale parameters
-        loc, log_scale = torch.split(params, self.causal_dim, dim=-1)
+        # Split the output into loc and log_scale
+        loc, log_scale = torch.chunk(output, 2, dim=-1)
         
         # Ensure scale parameter is positive using exponential function
         scale = torch.exp(log_scale)
@@ -103,7 +103,7 @@ class DeepAbductionNetwork(nn.Module):
         
         Args:
             input_size (int): Size of the input feature representation
-            causal_dim (int): Dimensionality of the latent causal state
+            causal_dim (int): Dimensionality of the individual causal representation
             hidden_sizes (list, optional): Sizes of hidden layers. Defaults to [512, 256].
         """
         super().__init__()
@@ -126,11 +126,11 @@ class DeepAbductionNetwork(nn.Module):
         
     def forward(self, features):
         """
-        Infer the distribution parameters of the latent causal state.
+        Infer the distribution parameters of the individual causal representation.
         
         Args:
-            features (torch.Tensor): Feature representation
-                                    Shape: [batch_size, input_size]
+            features (torch.Tensor): Input feature representation
+                                     Shape: [batch_size, input_size]
         
         Returns:
             tuple: (loc, scale) - Parameters of the Cauchy distribution
@@ -149,4 +149,41 @@ class DeepAbductionNetwork(nn.Module):
         scale = torch.exp(log_scale)
         
         return loc, scale
+
+
+class MockAbductionNetwork(nn.Module):
+    """
+    A mock abduction network for testing and simplified setups.
+    This network simply passes through the features, assuming hidden_size equals
+    causal_dim.
+    """
+    
+    def __init__(self, hidden_size, causal_dim):
+        """
+        Initialize the Mock Abduction Network.
+        
+        Args:
+            hidden_size (int): Size of the input feature representation
+            causal_dim (int): Dimensionality of the individual causal representation
+        """
+        super().__init__()
+        assert hidden_size == causal_dim, "MockAbductionNetwork requires hidden_size == causal_dim"
+        self.causal_dim = causal_dim
+
+    def forward(self, features):
+        """
+        Infer the distribution parameters of the individual causal representation.
+        
+        Args:
+            features (torch.Tensor): Input feature representation
+                                     Shape: [batch_size, hidden_size]
+        
+        Returns:
+            tuple: (loc, scale) - Parameters of the Cauchy distribution
+                  Each has shape: [batch_size, causal_dim]
+        """
+        # Ensure scale parameter is positive using exponential function
+        scale = torch.exp(features)
+        
+        return features, scale
 

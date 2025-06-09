@@ -4,7 +4,9 @@
 
 ## 核心数学框架
 
-模型的核心是 **"推断-行动"（Abduction-Action）范式**。与直接从输入预测输出的传统模型不同，我们的模型首先"推断"出一个描述系统状态的、高维的、潜在的**因果变量**（Latent Causal State）的概率分布，然后基于此分布进行"行动"（即，预测）。
+模型的核心是 **"推断-行动"（Abduction-Action）范式**。与直接从输入预测输出的传统模型不同，我们的模型首先"推断"出一个描述系统状态的、高维的、潜在的**个体因果表征**（Latent Individual Causal Representation）的概率分布，然后基于此分布进行"行动"（即，预测）。
+
+这种设计的核心优势在于，它将"认知"（推断）和"决策"（行动）明确分离，并使用统一的数学框架（柯西分布）来处理不确定性，无论是对于分类任务（选择下一个词元）还是回归任务（预测一个具体的数值）。
 
 这个潜在因果变量我们用 \(U\) 表示，它是一个 \(d_{causal}\) 维的向量。模型并不直接计算 \(U\) 的一个具体值，而是推断出它的概率分布。
 
@@ -20,11 +22,11 @@
 
 其中 \(W_{inf}\) 和 \(\boldsymbol{b}_{inf}\) 是该线性层的权重和偏置。我们预测的是 \(\log \boldsymbol{\gamma}_U\)，然后通过指数函数确保尺度参数 \(\boldsymbol{\gamma}_U = \exp(\log \boldsymbol{\gamma}_U)\) 始终为正。
 
-所以，对于给定的输入，推断网络的输出是因果状态 \(U\) 的分布：\(\boldsymbol{U} \sim \text{Cauchy}(\boldsymbol{\mu}_U, \boldsymbol{\gamma}_U)\)。
+所以，对于给定的输入，推断网络的输出是个体因果表征 \(U\) 的分布：\(\boldsymbol{U} \sim \text{Cauchy}(\boldsymbol{\mu}_U, \boldsymbol{\gamma}_U)\)。
 
 ### 2. 行动网络 (Action Network)
 
-行动网络接收推断出的因果状态分布（即 \(\boldsymbol{\mu}_U\) 和 \(\boldsymbol{\gamma}_U\)），并将其转换为最终的预测输出。这一步的关键是**保持柯西分布的特性**。
+行动网络接收推断出的个体因果表征分布（即 \(\boldsymbol{\mu}_U\) 和 \(\boldsymbol{\gamma}_U\)），并将其转换为最终的预测输出。这一步的关键是**保持柯西分布的特性**。
 
 #### 柯西保持线性层 (`CauchyLinear`)
 
@@ -40,7 +42,7 @@ S \sim \text{Cauchy}\left(\sum_i w_i \mu_i + b, \sum_i |w_i| \gamma_i\right)
 
 分类头的目标是预测下一个词元（token）。它采用 **"一对多"（One-vs-Rest, OvR）** 的策略。对于词汇表中的每个词元，模型都会独立地预测一个"决策分数" \(S_k\)，而不是像 Softmax 那样输出一个归一化的概率分布。
 
-每个决策分数 \(S_k\) 都是通过 `CauchyLinear` 层从潜因果状态 \(U\) 变换而来的，因此 \(S_k\) 也服从柯西分布：\(S_k \sim \text{Cauchy}(\mu_{S_k}, \gamma_{S_k})\)。
+每个决策分数 \(S_k\) 都是通过 `CauchyLinear` 层从潜在个体因果表征 \(U\) 变换而来的，因此 \(S_k\) 也服从柯西分布：\(S_k \sim \text{Cauchy}(\mu_{S_k}, \gamma_{S_k})\)。
 
 然后，模型计算每个分数超过一个固定阈值 \(\theta\)（默认为 0）的概率。根据柯西分布的累积分布函数 (CDF)，这个概率是：
 
@@ -52,7 +54,7 @@ P(S_k > \theta) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\mu_{S_k} - \th
 
 #### 回归头 (Regression Head)
 
-当模型需要预测一个具体的数值时（即，当它预测下一个词元是 `<NUM>` 时），回归头就会生效。回归头同样使用一个 `CauchyLinear` 层，将潜因果状态 \(U\) 变换为一个一维的柯西分布 \(Y \sim \text{Cauchy}(\mu_Y, \gamma_Y)\)。
+当模型需要预测一个具体的数值时（即，当它预测下一个词元是 `<NUM>` 时），回归头就会生效。回归头同样使用一个 `CauchyLinear` 层，将潜在个体因果表征 \(U\) 变换为一个一维的柯西分布 \(Y \sim \text{Cauchy}(\mu_Y, \gamma_Y)\)。
 
 对于柯西分布，它的期望值（均值）是未定义的，但它的中位数是明确的，就是其位置参数 \(\mu\)。因此，模型将 \(\mu_Y\) 作为对数值的最佳点估计（point estimate）进行输出。
 
@@ -211,7 +213,7 @@ P(S_k > \theta) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\mu_{S_k} - \th
     - 过程：比较四种不同配置的模型在所有三种标准数据集上的性能。
     - **模型配置详解**:
         - `base`: 标准配置，作为比较的基准。
-        - `small_causal`: 使用了更小的因果维度 (`causal_dim=16`)。目的是探究因果状态空间的维度对模型表达能力的影响。维度过小可能会导致信息瓶颈，性能下降。
+        - `small_causal`: 使用了更小的因果维度 (`causal_dim=16`)。目的是探究个体因果表征空间的维度对模型表达能力的影响。维度过小可能会导致信息瓶颈，性能下降。
         - `large_causal`: 使用了更大的因果维度 (`causal_dim=128`)。目的是探究增加模型复杂度是否能带来性能提升。
         - `high_reg_weight`: 增加了回归损失的权重 (`reg_loss_weight=2.0`)。目的是探究在训练中让模型更"偏重"于数值预测的准确性，会对整体性能（包括分类）带来什么影响。
 

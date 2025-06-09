@@ -12,12 +12,12 @@
    - 接口：`forward(input_ids) -> feature_representation`
 
 2. **AbductionNetwork（推断网络）**
-   - 职责：从特征表示推断潜在因果状态的概率分布参数
+   - 职责：从特征表示推断潜在个体因果表征的概率分布参数
    - 实现：线性层将特征映射到柯西分布的位置和尺度参数
    - 接口：`forward(features) -> (loc, scale)`
 
 3. **ActionNetwork（行动网络）**
-   - 职责：从因果状态生成分类和回归预测
+   - 职责：从个体因果表征生成分类和回归预测
    - 子组件：
      - 分类头：生成词元预测概率
      - 回归头：生成数值预测
@@ -41,7 +41,7 @@
 ```
 输入序列 → 分词器 → FeatureNetwork → AbductionNetwork → 
                                       ↓
-                                 因果状态分布
+                              个体因果表征分布
                                       ↓
                                  ActionNetwork → 分类预测 + 回归预测
 ```
@@ -49,7 +49,7 @@
 ### 训练与推理流程
 
 1. **训练流程**
-   - 前向传播：计算因果状态分布参数，解析计算输出分布
+   - 前向传播：计算个体因果表征分布参数，解析计算输出分布
    - 损失计算：分类损失 + 门控回归损失
    - 反向传播：更新网络参数
 
@@ -66,7 +66,7 @@
   - `QwenFeatureNetwork`: 封装Qwen-0.5B作为特征提取器（后续实现）
 
 - **abduction_network.py**
-  - `AbductionNetwork`: 推断因果状态分布参数的线性网络
+  - `AbductionNetwork`: 推断个体因果表征分布参数的线性网络
 
 - **action_network.py**
   - `ActionNetwork`: 包含分类头和回归头的行动网络
@@ -110,7 +110,7 @@
   - 测试收敛性和性能
 
 - **visualization/**
-  - 可视化因果状态分布
+  - 可视化个体因果表征分布
   - 可视化决策边界
 
 ## 开发路线图

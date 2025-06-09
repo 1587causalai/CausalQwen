@@ -50,8 +50,8 @@ class CausalLanguageModel(nn.Module):
     
     This model integrates all components of the causal language model architecture:
     1. Feature Network: Extracts features from input tokens
-    2. Abduction Network: Infers the distribution of the latent causal state
-    3. Action Network: Transforms the causal state into classification and regression outputs
+    2. Abduction Network: Infers the distribution of the latent individual causal representation
+    3. Action Network: Transforms the individual causal representation into classification and regression outputs
     """
     
     def __init__(
@@ -72,7 +72,7 @@ class CausalLanguageModel(nn.Module):
             vocab_size (int, optional): Size of the vocabulary
             num_token_id (int, optional): Token ID for the <NUM> token
             hidden_size (int, optional): Size of the hidden representation. Defaults to 1024.
-            causal_dim (int, optional): Dimensionality of the latent causal state. Defaults to 64.
+            causal_dim (int, optional): Dimensionality of the latent individual causal representation. Defaults to 64.
             use_mock_feature_network (bool, optional): Whether to use a mock feature network. 
                                                       Defaults to True.
             use_num_aware_features (bool, optional): Whether to use numerical-aware features. 
@@ -125,14 +125,14 @@ class CausalLanguageModel(nn.Module):
         # Initialize action network
         self.action_network = ActionNetwork(self.causal_dim, self.vocab_size, self.num_token_id)
         
-    def init_weights(self, num_target_mean, num_target_std):
+    def init_weights(self, num_target_median, num_target_scale):
         """
         Initialize the weights of abduction and action networks using the
         knowledge transfer strategy.
         
         Args:
-            num_target_mean (float): The mean of the numerical target values.
-            num_target_std (float): The standard deviation of the numerical target values.
+            num_target_median (float): The median of the numerical target values (Cauchy location parameter).
+            num_target_scale (float): The scale parameter for numerical targets (Cauchy scale parameter).
         """
         print("Applying knowledge transfer initialization...")
         
@@ -156,8 +156,8 @@ class CausalLanguageModel(nn.Module):
         if qwen_lm_head is not None:
             self.action_network.init_weights(
                 qwen_lm_head=qwen_lm_head,
-                num_target_mean=num_target_mean,
-                num_target_std=num_target_std,
+                num_target_median=num_target_median,
+                num_target_scale=num_target_scale,
                 num_token_id=self.num_token_id
             )
             print("  - Action network initialized from Qwen's lm_head and data stats.")
@@ -182,10 +182,10 @@ class CausalLanguageModel(nn.Module):
         # Extract features
         features = self.feature_network(input_ids, numerical_values, attention_mask)
         
-        # Infer causal state distribution
+        # Infer individual causal representation distribution
         causal_loc, causal_scale = self.abduction_network(features)
         
-        # Transform causal state to outputs
+        # Transform individual causal representation to outputs
         outputs = self.action_network(causal_loc, causal_scale)
         
         # Add intermediate states to outputs
@@ -199,7 +199,7 @@ class CausalLanguageModel(nn.Module):
     
     def sample_and_predict(self, input_ids, numerical_values=None, attention_mask=None):
         """
-        Sample from the causal state distribution and make predictions.
+        Sample from the individual causal representation distribution and make predictions.
         
         This method is used for exploration or when simulating real-world randomness.
         
@@ -217,13 +217,13 @@ class CausalLanguageModel(nn.Module):
         # Extract features
         features = self.feature_network(input_ids, numerical_values, attention_mask)
         
-        # Infer causal state distribution
+        # Infer individual causal representation distribution
         causal_loc, causal_scale = self.abduction_network(features)
         
-        # Sample from the causal state distribution
+        # Sample from the individual causal representation distribution
         causal_sample = cauchy_sample_reparameterized(causal_loc, causal_scale)
         
-        # Make predictions using the sampled causal state
+        # Make predictions using the sampled individual causal representation
         # For sampled prediction, we use the same location parameter for all samples
         # but with zero scale (deterministic)
         predictions = self.action_network.predict(causal_sample, torch.zeros_like(causal_scale))
@@ -237,7 +237,7 @@ class CausalLanguageModel(nn.Module):
         """
         Make deterministic predictions without sampling.
         
-        This method uses the median (location parameter) of the causal state distribution
+        This method uses the median (location parameter) of the individual causal representation distribution
         for prediction, which is more stable and efficient.
         
         Args:
@@ -254,11 +254,11 @@ class CausalLanguageModel(nn.Module):
         # Extract features
         features = self.feature_network(input_ids, numerical_values, attention_mask)
         
-        # Infer causal state distribution
+        # Infer individual causal representation distribution
         causal_loc, causal_scale = self.abduction_network(features)
         
-        # Make predictions using the median of the causal state distribution
-        predictions = self.action_network.predict(causal_loc, causal_scale)
+        # Make predictions using the median of the individual causal representation distribution
+        predictions = self.action_network.predict(causal_loc, torch.zeros_like(causal_scale))
         
         return predictions
 
@@ -285,7 +285,7 @@ class CausalQwen(nn.Module):
             vocab_size (int): Size of the vocabulary
             num_token_id (int): Token ID for the <NUM> token
             hidden_size (int, optional): Size of the hidden representation. Defaults to 1024.
-            causal_dim (int, optional): Dimensionality of the latent causal state. Defaults to 64.
+            causal_dim (int, optional): Dimensionality of the latent individual causal representation. Defaults to 64.
         """
         super().__init__()
         
@@ -335,7 +335,7 @@ class CausalQwen(nn.Module):
     
     def sample_and_predict(self, input_ids, numerical_values=None, attention_mask=None):
         """
-        Sample from the causal state distribution and make predictions.
+        Sample from the individual causal representation distribution and make predictions.
         
         Args:
             input_ids (torch.Tensor): Input token IDs

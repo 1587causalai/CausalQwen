@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
+import numpy as np
 
 from ..data.synthetic import TextWithNumbersGenerator
 from ..utils.losses import CausalLMLoss, compute_ovr_probabilities
@@ -14,7 +15,7 @@ from ..utils.losses import CausalLMLoss, compute_ovr_probabilities
 class Trainer:
     """Handles the training loop, optimizer, and data loading for fine-tuning."""
     
-    def __init__(self, model, tokenizer, device, config, learning_rate=1e-4, batch_size=16):
+    def __init__(self, model, tokenizer, device, config, learning_rate=1e-4, batch_size=16, wandb_run=None):
         """
         Initialize the Trainer.
         
@@ -25,12 +26,14 @@ class Trainer:
             config (CausalLMConfig): The model's configuration object.
             learning_rate (float): The learning rate for the optimizer.
             batch_size (int): The batch size for training.
+            wandb_run: An active Weights & Biases run object.
         """
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
         self.config = config
         self.batch_size = batch_size
+        self.wandb_run = wandb_run
         
         # Calculate data statistics for initialization
         print("Pre-calculating data statistics for initialization...")
@@ -44,18 +47,23 @@ class Trainer:
         
         if all_target_values:
             all_target_values = torch.cat(all_target_values)
-            self.num_target_mean = all_target_values.mean().item()
-            self.num_target_std = all_target_values.std().item()
-            print(f"  - Calculated Mean: {self.num_target_mean:.2f}")
-            print(f"  - Calculated Std Dev: {self.num_target_std:.2f}")
+            # 对于柯西分布，使用中位数估计位置参数，使用 IQR/2 估计尺度参数
+            self.num_target_median = torch.median(all_target_values).item()
+            # 计算四分位数
+            q1 = torch.quantile(all_target_values, 0.25).item()
+            q3 = torch.quantile(all_target_values, 0.75).item()
+            # 柯西分布的尺度参数估计：IQR / 2 (因为柯西分布的IQR ≈ 2 * scale)
+            self.num_target_scale = (q3 - q1) / 2.0
+            print(f"  - Calculated Median (location): {self.num_target_median:.2f}")
+            print(f"  - Calculated IQR/2 (scale): {self.num_target_scale:.2f}")
         else:
-            self.num_target_mean = 0.0
-            self.num_target_std = 1.0
-            print("  - No numerical targets found. Using default stats (Mean=0, Std=1).")
+            self.num_target_median = 0.0
+            self.num_target_scale = 1.0
+            print("  - No numerical targets found. Using default stats (Median=0, Scale=1).")
         
         # Initialize model weights using the new strategy
         if hasattr(self.model, 'init_weights'):
-            self.model.init_weights(self.num_target_mean, self.num_target_std)
+            self.model.init_weights(self.num_target_median, self.num_target_scale)
         
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         self.loss_fn = CausalLMLoss(
@@ -102,14 +110,16 @@ class Trainer:
             num_samples (int): Number of synthetic samples to generate for training.
         """
         self.model.train()
-        # Data is now created once for stats, so we reuse it or recreate it for training
         print("Creating final training data loader...")
         dataloader = self._create_training_data(num_samples, shuffle=True)
         
         print(f"Starting training for {num_epochs} epochs...")
+        global_step = 0
         for epoch in range(num_epochs):
             total_loss = 0
             total_correct = 0
+            total_num_correct = 0
+            total_num_samples = 0
             total_samples = 0
             
             pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
@@ -120,43 +130,6 @@ class Trainer:
                 
                 # Forward pass
                 outputs = self.model(batch_input_ids, batch_numerical_values, batch_attention_mask)
-                
-                # --- BEGIN DIAGNOSTIC LOGGING ---
-                if epoch == 0 and i < 5:
-                    print(f"\n--- Batch {i+1} Diagnostics ---")
-                    
-                    # 1. Analyze target values
-                    is_num_mask = (batch_targets == self.tokenizer.num_token_id)
-                    if is_num_mask.any():
-                        reg_targets = batch_target_values[is_num_mask]
-                        print(f"  Target Values (for regression):")
-                        print(f"    - Count: {len(reg_targets)}")
-                        print(f"    - Mean: {reg_targets.mean().item():.2f}")
-                        print(f"    - Std: {reg_targets.std().item():.2f}")
-                        print(f"    - Range: [{reg_targets.min().item():.2f}, {reg_targets.max().item():.2f}]")
-                    else:
-                        print("  Target Values: No regression targets in this batch.")
-
-                    # 2. Analyze model's regression predictions
-                    if torch.any(is_num_mask):
-                        pred_locs = outputs['reg_loc'][is_num_mask]
-                        pred_scales = torch.exp(outputs['reg_scale'][is_num_mask])
-                        print("  Model Predictions (for regression):")
-                        print(f"    - Predicted Loc (μ): Mean={pred_locs.mean().item():.4f}, Std={pred_locs.std().item():.4f}, Range=[{pred_locs.min().item():.4f}, {pred_locs.max().item():.4f}]")
-                        print(f"    - Predicted Scale (γ): Mean={pred_scales.mean().item():.4f}, Std={pred_scales.std().item():.4f}, Range=[{pred_scales.min().item():.4f}, {pred_scales.max().item():.4f}]")
-
-                    # 3. OvR Probability Sum Diagnostics
-                    cls_loc = outputs['cls_loc']
-                    cls_scale = torch.exp(outputs['cls_scale'])
-                    threshold = self.loss_fn.cls_loss_fn.threshold
-                    ovr_probs = 0.5 + (1 / torch.pi) * torch.atan((cls_loc - threshold) / cls_scale)
-                    sum_ovr_probs = ovr_probs.sum(dim=1)
-                    
-                    print("  OvR Probability Sum (Σ Pk) Diagnostics:")
-                    print(f"    - Mean: {sum_ovr_probs.mean().item():.4f}")
-                    print(f"    - Std: {sum_ovr_probs.std().item():.4f}")
-                    print(f"    - Range: [{sum_ovr_probs.min().item():.4f}, {sum_ovr_probs.max().item():.4f}]")
-                # --- END DIAGNOSTIC LOGGING ---
 
                 # Compute loss
                 loss_dict = self.loss_fn(
@@ -166,41 +139,69 @@ class Trainer:
                 )
                 loss = loss_dict["loss"]
                 
-                # --- BEGIN DIAGNOSTIC LOGGING (Loss) ---
-                if epoch == 0 and i < 5:
-                    if "unweighted_reg_loss" in loss_dict and "gated_reg_loss" in loss_dict:
-                        unweighted_loss = loss_dict['unweighted_reg_loss'].mean().item()
-                        gated_loss = loss_dict['gated_reg_loss'].mean().item()
-                        cls_loss = loss_dict['cls_loss'].mean().item()
-                        num_prob = loss_dict.get('num_prob', torch.tensor(0.0)).mean().item()
-                        
-                        print(f"  Loss Components:")
-                        print(f"    - Classification Loss: {cls_loss:.4f}")
-                        print(f"    - Unweighted Regression NLL Loss: {unweighted_loss:.4f}")
-                        print(f"    - <NUM> Probability (Gate): {num_prob:.4f}")
-                        print(f"    - Gated Regression Loss (final component): {gated_loss:.4f}")
-                        print(f"  ---------------------------\n")
-                # --- END DIAGNOSTIC LOGGING (Loss) ---
-
                 # Backward pass and optimization
                 self.optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
                 
-                # Calculate accuracy using the pre-computed probabilities from the loss function
-                cls_probs = loss_dict["cls_probs"]
-                pred_tokens = torch.argmax(cls_probs, dim=-1)
-                total_correct += (pred_tokens == batch_targets).sum().item()
-                
-                total_samples += batch_targets.size(0)
+                # --- METRICS LOGGING ---
                 total_loss += loss.item()
                 
+                # Classification metrics
+                cls_probs = loss_dict["cls_probs"]
+                pred_tokens = torch.argmax(cls_probs, dim=-1)
+                
+                # Overall accuracy
+                total_correct += (pred_tokens == batch_targets).sum().item()
+                total_samples += batch_targets.size(0)
+                
+                # <NUM> token accuracy
+                num_mask = (batch_targets == self.tokenizer.num_token_id)
+                num_acc = None
+                if num_mask.any():
+                    total_num_correct += (pred_tokens[num_mask] == batch_targets[num_mask]).sum().item()
+                    total_num_samples += num_mask.sum().item()
+                    num_acc = (pred_tokens[num_mask] == batch_targets[num_mask]).sum().item() / num_mask.sum().item()
+
                 pbar.set_postfix({
                     'loss': f'{loss.item():.4f}',
-                    'acc': f'{total_correct / total_samples:.4f}'
+                    'acc': f'{total_correct / total_samples:.4f}',
+                    'num_acc': f'{total_num_correct / total_num_samples if total_num_samples > 0 else 0:.4f}'
                 })
+                
+                # Log to Weights & Biases if enabled
+                if self.wandb_run:
+                    # Calculate regression MAE for logging
+                    reg_mae = None
+                    if num_mask.any():
+                        reg_mae = torch.abs(outputs['reg_loc'][num_mask] - batch_target_values[num_mask]).mean().item()
+
+                    log_data = {
+                        "total_loss": loss.item(),
+                        "cls_loss": loss_dict["cls_loss"].item(),
+                        "reg_mae": reg_mae,
+                        "units_mean_loc": outputs['causal_loc'].mean().item(),
+                        "units_mean_scale": torch.exp(outputs['causal_scale']).mean().item(),
+                        "ovr_prob_sum": cls_probs.sum(dim=1).mean().item(),
+                        "num_accuracy": num_acc,
+                        "accuracy": (pred_tokens == batch_targets).sum().item() / batch_targets.size(0)
+                    }
+                    self.wandb_run.log({k: v for k, v in log_data.items() if v is not None}, step=global_step)
+                
+                global_step += 1
         
             avg_loss = total_loss / len(dataloader)
             accuracy = total_correct / total_samples
-            print(f"Epoch {epoch+1} Complete: Avg Loss={avg_loss:.4f}, Accuracy={accuracy:.4f}") 
+            num_accuracy = total_num_correct / total_num_samples if total_num_samples > 0 else 0
+            print(f"Epoch {epoch+1} Complete: Avg Loss={avg_loss:.4f}, Accuracy={accuracy:.4f}, <NUM> Accuracy={num_accuracy:.4f}")
+
+            # Log epoch-level summary to wandb
+            if self.wandb_run:
+                self.wandb_run.log({
+                    "epoch_avg_loss": avg_loss,
+                    "epoch_accuracy": accuracy,
+                    "epoch_num_accuracy": num_accuracy
+                }, step=global_step)
+
+        return dataloader 

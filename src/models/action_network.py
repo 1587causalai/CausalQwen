@@ -20,14 +20,14 @@ class ClassificationHead(nn.Module):
     where each class has an independent decision score.
     """
     
-    def __init__(self, causal_dim, num_classes, threshold=0.0):
+    def __init__(self, causal_dim, num_classes, threshold=10.0):
         """
         Initialize the classification head.
         
         Args:
             causal_dim (int): Dimensionality of the latent causal state
             num_classes (int): Number of classes (vocabulary size)
-            threshold (float, optional): Decision threshold. Defaults to 0.0.
+            threshold (float, optional): Decision threshold. Defaults to 10.0.
         """
         super().__init__()
         self.causal_dim = causal_dim
@@ -163,40 +163,41 @@ class RegressionHead(nn.Module):
 
 class ActionNetwork(nn.Module):
     """
-    Action Network that combines classification and regression heads.
+    Action Network for the Causal Language Model.
     
-    This network transforms the latent causal state into both classification
-    and regression outputs.
+    This network takes the parameters of the individual causal representation distribution
+    and transforms them into the parameters for the output distributions
+    (classification scores and regression values).
     """
     
-    def __init__(self, causal_dim, num_classes, num_token_id):
+    def __init__(self, causal_dim, vocab_size, num_token_id):
         """
-        Initialize the action network.
+        Initialize the Action Network.
         
         Args:
-            causal_dim (int): Dimensionality of the latent causal state
-            num_classes (int): Number of classes (vocabulary size)
-            num_token_id (int): Token ID for the <NUM> token
+            causal_dim (int): Dimensionality of the individual causal representation
+            vocab_size (int): Size of the vocabulary
+            num_token_id (int): The token ID for the <NUM> token.
         """
         super().__init__()
         self.causal_dim = causal_dim
-        self.num_classes = num_classes
+        self.vocab_size = vocab_size
         self.num_token_id = num_token_id
         
         # Classification head for token prediction
-        self.classification_head = ClassificationHead(causal_dim, num_classes)
+        self.classification_head = ClassificationHead(causal_dim, vocab_size)
         
         # Regression head for numerical prediction
         self.regression_head = RegressionHead(causal_dim)
-        
-    def init_weights(self, qwen_lm_head, num_target_mean, num_target_std, num_token_id):
+
+    def init_weights(self, qwen_lm_head, num_target_median, num_target_scale, num_token_id):
         """
         Initialize weights based on pretrained Qwen model and data statistics.
         
         Args:
             qwen_lm_head (nn.Linear): The pretrained language model head from Qwen.
-            num_target_mean (float): The mean of the numerical target values.
-            num_target_std (float): The standard deviation of the numerical target values.
+            num_target_median (float): The median of the numerical target values (Cauchy location parameter).
+            num_target_scale (float): The scale parameter for numerical targets (Cauchy scale parameter).
             num_token_id (int): The token ID for the <NUM> token.
         """
         # 1. Initialize Classification Head
@@ -204,7 +205,7 @@ class ActionNetwork(nn.Module):
         
         # Handle vocabulary size mismatch between our tokenizer and Qwen model
         qwen_vocab_size = qwen_lm_head.weight.shape[0]
-        our_vocab_size = self.num_classes  # This includes our added <NUM> token
+        our_vocab_size = self.vocab_size  # This includes our added <NUM> token
         
         # The overlapping vocabulary size (excluding our <NUM> token)
         overlapping_vocab_size = min(qwen_vocab_size, our_vocab_size - 1)
@@ -239,74 +240,66 @@ class ActionNetwork(nn.Module):
         # 2. Initialize Regression Head
         reg_head = self.regression_head.causal_linear
         
-        # Initialize loc to predict the mean of the data
+        # Initialize loc to predict the median of the data (Cauchy location parameter)
         reg_head.loc_layer.weight.data.fill_(0)
-        reg_head.loc_layer.bias.data.fill_(num_target_mean)
+        reg_head.loc_layer.bias.data.fill_(num_target_median)
 
-        # Initialize scale to reflect the standard deviation of the data
+        # Initialize scale to reflect the scale parameter of the data (Cauchy scale parameter)
         reg_head.scale_layer.weight.data.fill_(0)
-        # Use log of std dev, ensure std > 0
-        reg_head.scale_layer.bias.data.fill_(torch.log(torch.tensor(num_target_std) + 1e-6))
+        # Use log of scale parameter, ensure scale > 0
+        reg_head.scale_layer.bias.data.fill_(torch.log(torch.tensor(num_target_scale) + 1e-6))
 
     def forward(self, causal_loc, causal_scale):
         """
-        Transform causal state distribution to classification and regression outputs.
+        Transform the individual causal representation distribution to output distributions.
         
         Args:
-            causal_loc (torch.Tensor): Location parameter of causal state
-                                      Shape: [batch_size, causal_dim]
-            causal_scale (torch.Tensor): Scale parameter of causal state
-                                        Shape: [batch_size, causal_dim]
+            causal_loc (torch.Tensor): Location parameters of the individual causal representation
+            causal_scale (torch.Tensor): Scale parameters of the individual causal representation
         
         Returns:
-            dict: Dictionary containing all output distribution parameters
+            dict: A dictionary containing the parameters for classification and regression.
         """
-        # Get classification outputs
+        # 1. Classification
         cls_loc, cls_scale = self.classification_head(causal_loc, causal_scale)
         
-        # Get regression outputs
+        # 2. Regression
         reg_loc, reg_scale = self.regression_head(causal_loc, causal_scale)
-        
-        # Compute class probabilities
-        cls_probs = self.classification_head.compute_probabilities(cls_loc, cls_scale)
         
         return {
             'cls_loc': cls_loc,
             'cls_scale': cls_scale,
             'reg_loc': reg_loc,
-            'reg_scale': reg_scale,
-            'cls_probs': cls_probs
+            'reg_scale': reg_scale
         }
     
-    def predict(self, causal_loc, causal_scale):
+    def predict(self, causal_loc, causal_scale=None):
         """
-        Make predictions based on causal state.
+        Make a deterministic prediction using the median of the individual causal representation.
         
         Args:
-            causal_loc (torch.Tensor): Location parameter of causal state
-                                      Shape: [batch_size, causal_dim]
-            causal_scale (torch.Tensor): Scale parameter of causal state
-                                        Shape: [batch_size, causal_dim]
+            causal_loc (torch.Tensor): Location parameters of the individual causal representation
+            causal_scale (torch.Tensor, optional): Scale parameters (not used for median prediction).
         
         Returns:
-            dict: Dictionary containing predictions
+            dict: A dictionary containing the predicted token and regression value.
         """
-        # Get output distributions
-        outputs = self.forward(causal_loc, causal_scale)
+        # For prediction, we use the location parameters (median) as point estimates
+        # 1. Classification: Use the classification head's loc layer directly for deterministic scores  
+        cls_scores = self.classification_head.causal_linear.loc_layer(causal_loc)
         
-        # Make classification prediction
-        cls_pred = self.classification_head.predict(outputs['cls_loc'], outputs['cls_scale'])
+        # 2. Regression: Use the regression head's loc layer directly for deterministic value
+        reg_value = self.regression_head.causal_linear.loc_layer(causal_loc).squeeze(-1)
         
-        # Make regression prediction
-        reg_pred = self.regression_head.predict(outputs['reg_loc'], outputs['reg_scale'])
-        
-        # Get probability of <NUM> token
-        num_prob = outputs['cls_probs'][:, self.num_token_id]
+        # Get probability of <NUM> token (computed using the deterministic scores)
+        # Apply Cauchy CDF formula: P(S > threshold) = 0.5 + (1/π) * arctan((loc - threshold)/scale)
+        # For prediction, we can use a default scale of 1.0 or compute it if needed
+        threshold = self.classification_head.thresholds[self.num_token_id]
+        num_prob = 0.5 + (1 / torch.pi) * torch.atan((cls_scores[:, self.num_token_id] - threshold) / 1.0)
         
         return {
-            'cls_pred': cls_pred,
-            'reg_pred': reg_pred,
-            'num_prob': num_prob,
-            **outputs
+            'cls_pred': torch.argmax(cls_scores, dim=-1),
+            'reg_pred': reg_value,
+            'num_prob': num_prob
         }
 
