@@ -46,13 +46,13 @@ class ClassificationHead(nn.Module):
         
         Args:
             causal_loc (torch.Tensor): Location parameter of causal state
-                                      Shape: [batch_size, causal_dim]
+                                      Shape: [batch_size, causal_dim] or [batch_size, seq_len, causal_dim]
             causal_scale (torch.Tensor): Scale parameter of causal state
-                                        Shape: [batch_size, causal_dim]
+                                        Shape: [batch_size, causal_dim] or [batch_size, seq_len, causal_dim]
         
         Returns:
             tuple: (score_loc, score_scale) - Parameters of the decision score distributions
-                  Each has shape: [batch_size, num_classes]
+                  Shape: [batch_size, num_classes] or [batch_size, seq_len, num_classes]
         """
         # Transform causal state distribution to decision score distributions
         score_loc, score_scale = self.causal_linear(causal_loc, causal_scale)
@@ -126,18 +126,20 @@ class RegressionHead(nn.Module):
         
         Args:
             causal_loc (torch.Tensor): Location parameter of causal state
-                                      Shape: [batch_size, causal_dim]
+                                      Shape: [batch_size, causal_dim] or [batch_size, seq_len, causal_dim]
             causal_scale (torch.Tensor): Scale parameter of causal state
-                                        Shape: [batch_size, causal_dim]
+                                        Shape: [batch_size, causal_dim] or [batch_size, seq_len, causal_dim]
         
         Returns:
             tuple: (value_loc, value_scale) - Parameters of the regression value distribution
-                  Each has shape: [batch_size, 1]
+                  Shape: [batch_size] or [batch_size, seq_len]
         """
         # Transform causal state distribution to regression value distribution
         value_loc, value_scale = self.causal_linear(causal_loc, causal_scale)
         
-        # Squeeze the last dimension to get [batch_size] tensors
+        # Squeeze the last dimension
+        # For sequence inputs: [batch_size, seq_len, 1] -> [batch_size, seq_len]
+        # For single inputs: [batch_size, 1] -> [batch_size]
         return value_loc.squeeze(-1), value_scale.squeeze(-1)
     
     def predict(self, value_loc, value_scale):

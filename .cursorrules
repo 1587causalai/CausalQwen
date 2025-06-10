@@ -20,4 +20,4 @@ design-docs/PROJECT_BLUEPRINT.md 是项目目录结构的文档.
 
 所有 python 画图都要使用英文图标避免字体问题和方便分享
 
-Qwen 的词汇表大小为K， CausalQwen 的词汇表大小为K+1, 其中新增的 <NUM> 词元用于表示数值预测。
+Qwen 的词汇表大小为K， CausalQwen 的词汇表大小为K+1, 其中新增的 <NUM> 词元用于表示数值预测。如果文档中不小心使用 V 表示它，尽量帮助改过来。

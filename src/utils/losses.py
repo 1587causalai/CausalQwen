@@ -136,10 +136,11 @@ class CausalLMLoss(nn.Module):
     """
     Combined loss function for the causal language model.
     
-    This combines the OvR classification loss and the gated regression loss.
+    This combines the OvR classification loss and the gated regression loss,
+    and it's designed to handle sequence-to-sequence targets.
     """
     
-    def __init__(self, num_classes, num_token_id, regression_weight=1.0, ovr_threshold=0.0):
+    def __init__(self, num_classes, num_token_id, regression_weight=1.0, ovr_threshold=0.0, ignore_index=-100):
         """
         Initialize the combined loss function.
         
@@ -148,74 +149,90 @@ class CausalLMLoss(nn.Module):
             num_token_id (int): Token ID for the <NUM> token
             regression_weight (float, optional): Weight for the regression loss. Defaults to 1.0.
             ovr_threshold (float, optional): Decision threshold for OvR loss. Defaults to 0.0.
+            ignore_index (int, optional): Specifies a target value that is ignored
+                                          and does not contribute to the input gradient.
         """
         super().__init__()
         self.num_classes = num_classes
         self.num_token_id = num_token_id
-        self.cls_loss_fn = OvRClassificationLoss(num_classes, threshold=ovr_threshold)
         self.regression_weight = regression_weight
+        self.ovr_threshold = ovr_threshold
+        self.ignore_index = ignore_index
         
-    def forward(self, cls_loc, cls_scale, reg_loc, reg_scale, targets, target_values):
+    def forward(self, cls_loc, cls_scale, reg_loc, reg_scale, labels, target_values):
         """
-        Compute the combined loss.
+        Compute the combined, sequence-to-sequence loss.
         
         Args:
-            cls_loc (torch.Tensor): Location parameters for classification
-            cls_scale (torch.Tensor): Scale parameters for classification
-            reg_loc (torch.Tensor): Location parameter for regression
-            reg_scale (torch.Tensor): Scale parameter for regression
-            targets (torch.Tensor): Target token IDs
-            target_values (torch.Tensor): Target numerical values
+            cls_loc (torch.Tensor): Location params for classification. Shape: [B, S, C]
+            cls_scale (torch.Tensor): Scale params for classification. Shape: [B, S, C]
+            reg_loc (torch.Tensor): Location param for regression. Shape: [B, S]
+            reg_scale (torch.Tensor): Scale param for regression. Shape: [B, S]
+            labels (torch.Tensor): Target token IDs. Shape: [B, S]
+            target_values (torch.Tensor): Target numerical values. Shape: [B, S]
             
         Returns:
             dict: Dictionary containing total loss and individual loss components
         """
-        # 1. Compute classification loss
-        classification_loss = self.cls_loss_fn(cls_loc, cls_scale, targets)
+        batch_size, seq_len, _ = cls_loc.shape
         
-        # 2. Compute components for gated regression loss
-        # Create mask for samples where target is <NUM>
-        is_num_mask = (targets == self.num_token_id).float()
+        # --- 1. Classification Loss (Sequence-wise) ---
+        # Create a mask for valid (non-ignored) tokens
+        active_loss_mask = labels.view(-1) != self.ignore_index
+        
+        # Flatten predictions and labels to [B*S, C] and [B*S]
+        active_cls_loc = cls_loc.view(-1, self.num_classes)[active_loss_mask]
+        active_cls_scale = cls_scale.view(-1, self.num_classes)[active_loss_mask]
+        active_labels = labels.view(-1)[active_loss_mask]
+        
+        # Compute OvR probabilities for active tokens
+        cls_probs = compute_ovr_probabilities(active_cls_loc, active_cls_scale, self.ovr_threshold)
+        
+        # Create one-hot targets for active tokens
+        target_one_hot = F.one_hot(active_labels, self.num_classes).float()
+        
+        # BCE loss for each class, on active tokens only
+        bce_loss = -(target_one_hot * torch.log(cls_probs + 1e-9) + 
+                     (1 - target_one_hot) * torch.log(1 - cls_probs + 1e-9))
+        
+        # Sum over classes, and then take the mean over all active tokens
+        classification_loss = bce_loss.sum(dim=1).mean()
+
+        # --- 2. Gated Regression Loss (Sequence-wise) ---
+        # Mask for positions where the label is <NUM> AND is active
+        is_num_mask = (labels == self.num_token_id) & (labels != self.ignore_index)
         num_count = is_num_mask.sum()
 
         if num_count == 0:
-            # If no <NUM> tokens, regression loss is zero
-            unweighted_regression_loss_mean = torch.tensor(0.0, device=reg_loc.device)
             gated_regression_loss = torch.tensor(0.0, device=reg_loc.device)
-            num_prob_mean = torch.tensor(0.0, device=reg_loc.device)
         else:
-            # Compute the base Cauchy NLL loss for each sample ('none' reduction)
+            # Select only the active <NUM> predictions and targets
+            active_reg_loc = reg_loc[is_num_mask]
+            active_reg_scale = reg_scale[is_num_mask]
+            active_target_values = target_values[is_num_mask]
+
+            # Compute the base Cauchy NLL loss for the active <NUM> positions
             unweighted_regression_loss_per_sample = cauchy_nll_loss(
-                reg_loc, reg_scale, target_values, reduction='none'
+                active_reg_loc, active_reg_scale, active_target_values, reduction='none'
             )
-            unweighted_regression_loss_mean = unweighted_regression_loss_per_sample.mean() # For logging
             
-            # Get the probability of the <NUM> token, which acts as the gate
-            all_probs = compute_ovr_probabilities(cls_loc, cls_scale, self.cls_loss_fn.threshold)
-            num_prob = all_probs[:, self.num_token_id]
-            num_prob_mean = num_prob.mean() # For logging
+            # Get the gate probability P(<NUM>) at the active <NUM> positions
+            # Note: cls_probs is already filtered for active tokens, so we need a new mask
+            active_num_mask_flat = (active_labels == self.num_token_id)
+            num_prob = cls_probs[active_num_mask_flat, self.num_token_id]
             
-            # Apply the soft gate at a per-sample level: P(<NUM>) * L_cauchy
+            # Apply the soft gate: P(<NUM>) * L_cauchy
             gated_loss_per_sample = num_prob * unweighted_regression_loss_per_sample
             
-            # Only consider the loss for samples that are actually <NUM>
-            final_gated_loss_component = gated_loss_per_sample * is_num_mask
-            
-            # Average over the number of <NUM> samples to get the final batch loss
-            gated_regression_loss = final_gated_loss_component.sum() / num_count
+            # The final loss is the mean over all active <NUM> samples
+            gated_regression_loss = gated_loss_per_sample.mean()
 
-        # 3. Combine losses
+        # --- 3. Combine losses ---
         total_loss = classification_loss + self.regression_weight * gated_regression_loss
-        
-        # 4. Prepare dictionary for logging and accuracy calculation
-        cls_probs = compute_ovr_probabilities(cls_loc, cls_scale, self.cls_loss_fn.threshold)
         
         return {
             'loss': total_loss,
             'cls_loss': classification_loss,
             'gated_reg_loss': gated_regression_loss,
-            'unweighted_reg_loss': unweighted_regression_loss_mean, # For logging
-            'num_prob': num_prob_mean, # For logging
-            'cls_probs': cls_probs,
         }
 

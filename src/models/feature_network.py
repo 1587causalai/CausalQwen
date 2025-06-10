@@ -201,12 +201,16 @@ class QwenFeatureNetwork(FeatureNetworkBase):
                                                    Shape: [batch_size, seq_len]
         
         Returns:
-            torch.Tensor: Feature representation
-                         Shape: [batch_size, hidden_size]
+            torch.Tensor: Feature representation for each position
+                         Shape: [batch_size, seq_len, hidden_size]
         """
         if not self.use_real_model:
-            # Use mock implementation
-            return self.mock_network(input_ids, attention_mask)
+            # For mock implementation, we need to update it to return sequence features
+            # For now, just expand the single feature to all positions
+            single_features = self.mock_network(input_ids, attention_mask)
+            batch_size = input_ids.shape[0]
+            seq_len = input_ids.shape[1]
+            return single_features.unsqueeze(1).expand(batch_size, seq_len, -1)
         
         try:
             with torch.no_grad():
@@ -225,27 +229,29 @@ class QwenFeatureNetwork(FeatureNetworkBase):
                 else:
                     raise AttributeError("Cannot find hidden states in model output")
                 
-                # Pool over the sequence dimension (use mean pooling)
-                if attention_mask is not None:
-                    # Mask out padding tokens before pooling
-                    mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-                    sum_embeddings = torch.sum(last_hidden_state * mask_expanded, 1)
-                    sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9)
-                    features = sum_embeddings / sum_mask
-                else:
-                    # Simple mean pooling
-                    features = last_hidden_state.mean(dim=1)
+                # NO MORE POOLING! Return the full sequence
+                # Shape: [batch_size, seq_len, model_hidden_size]
                 
                 # Apply projection if needed
                 if self.projection is not None:
-                    features = self.projection(features)
+                    # Reshape for linear layer: [batch_size * seq_len, model_hidden_size]
+                    batch_size, seq_len, _ = last_hidden_state.shape
+                    features_flat = last_hidden_state.view(-1, self.model_hidden_size)
+                    features_proj = self.projection(features_flat)
+                    # Reshape back: [batch_size, seq_len, hidden_size]
+                    features = features_proj.view(batch_size, seq_len, self.hidden_size)
+                else:
+                    features = last_hidden_state
                 
                 return features
                 
         except Exception as e:
             print(f"Error during Qwen model forward pass: {e}")
             # Fallback to mock implementation
-            return self.mock_network(input_ids, attention_mask)
+            single_features = self.mock_network(input_ids, attention_mask)
+            batch_size = input_ids.shape[0]
+            seq_len = input_ids.shape[1]
+            return single_features.unsqueeze(1).expand(batch_size, seq_len, -1)
 
 
 class NumAwareFeatureNetwork(nn.Module):
@@ -286,10 +292,10 @@ class NumAwareFeatureNetwork(nn.Module):
                                                    Shape: [batch_size, seq_len]
         
         Returns:
-            torch.Tensor: Feature representation
-                         Shape: [batch_size, hidden_size]
+            torch.Tensor: Feature representation for each position
+                         Shape: [batch_size, seq_len, hidden_size]
         """
-        # Get base features
+        # Get base features - now returns [batch_size, seq_len, hidden_size]
         features = self.base_network(input_ids, attention_mask)
         
         # If no numerical values provided, return base features
@@ -303,33 +309,26 @@ class NumAwareFeatureNetwork(nn.Module):
         if not num_mask.any():
             return features
         
-        # Get the numerical values for <NUM> tokens
-        # We assume numerical_values has the same shape as input_ids
-        # and contains the actual values for <NUM> tokens
-        batch_size, seq_len = input_ids.shape
+        # Process numerical values at each position
+        batch_size, seq_len, hidden_size = features.shape
         
-        # Process each sequence in the batch
-        for i in range(batch_size):
-            # Find positions of <NUM> tokens in this sequence
-            num_positions = num_mask[i].nonzero(as_tuple=True)[0]
-            
-            # If no <NUM> tokens in this sequence, continue
-            if len(num_positions) == 0:
-                continue
-            
-            # Process each <NUM> token
-            for pos in num_positions:
-                # Get the numerical value
-                value = numerical_values[i, pos].unsqueeze(0).unsqueeze(0)  # [1, 1]
-                
-                # Project the numerical value to the hidden space
-                value_embedding = self.num_projection(value)  # [1, hidden_size]
-                
-                # Modulate the feature with the numerical value
-                # We use a simple multiplication here, but more complex fusion
-                # mechanisms could be used
-                if pos == seq_len - 1:  # If <NUM> is the last token
-                    features[i] = features[i] * torch.sigmoid(value_embedding.squeeze(0))
+        # Reshape numerical values for projection: [batch_size * seq_len, 1]
+        numerical_values_flat = numerical_values.view(-1, 1)
+        
+        # Project all numerical values: [batch_size * seq_len, hidden_size]
+        value_embeddings = self.num_projection(numerical_values_flat)
+        
+        # Reshape back: [batch_size, seq_len, hidden_size]
+        value_embeddings = value_embeddings.view(batch_size, seq_len, hidden_size)
+        
+        # Apply sigmoid gating
+        value_gates = torch.sigmoid(value_embeddings)
+        
+        # Create expanded mask for broadcasting
+        num_mask_expanded = num_mask.unsqueeze(-1).expand_as(features)
+        
+        # Modulate features only at <NUM> positions
+        features = torch.where(num_mask_expanded, features * value_gates, features)
         
         return features
 

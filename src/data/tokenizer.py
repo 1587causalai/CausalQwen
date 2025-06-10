@@ -302,8 +302,14 @@ class QwenTokenizerWrapper:
                 if self.num_token not in self.tokenizer.get_vocab():
                     self.tokenizer.add_special_tokens({'additional_special_tokens': [self.num_token]})
                 
-                self.num_token_id = self.tokenizer.convert_tokens_to_ids(self.num_token)
+                # Add the <NUM> token to the vocabulary
+                self.tokenizer.add_tokens([self.num_token])
+                # The new vocab size after adding token
                 self.vocab_size = len(self.tokenizer)
+                # Get the ID for the new token
+                self.num_token_id = self.tokenizer.convert_tokens_to_ids(self.num_token)
+                # Expose pad_token_id for convenience
+                self.pad_token_id = self.tokenizer.pad_token_id
                 
                 print(f"Successfully loaded Qwen tokenizer with vocab size {self.vocab_size}")
                 print(f"<NUM> token ID: {self.num_token_id}")
@@ -508,8 +514,17 @@ class QwenTokenizerWrapper:
         Returns:
             str: Decoded text
         """
-        if not self.use_real_tokenizer:
-            return self.mock_tokenizer.decode(token_ids, skip_special_tokens)
+        # We need to filter out the <NUM> token manually before decoding
+        # as the base tokenizer doesn't know about it.
+        filtered_ids = [tid for tid in token_ids if tid != self.num_token_id]
         
-        return self.tokenizer.decode(token_ids, skip_special_tokens=skip_special_tokens)
+        # Use the real tokenizer to decode
+        return self.tokenizer.decode(filtered_ids, skip_special_tokens=skip_special_tokens)
+
+    def convert_ids_to_tokens(self, ids: List[int]) -> List[str]:
+        """
+        Converts a sequence of ids in a list of tokens.
+        This is a convenience method to expose the underlying tokenizer's functionality.
+        """
+        return self.tokenizer.convert_ids_to_tokens(ids)
 

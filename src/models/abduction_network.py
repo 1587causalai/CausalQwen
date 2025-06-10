@@ -77,18 +77,36 @@ class AbductionNetwork(nn.Module):
 
     def forward(self, features):
         """
-        Infer the distribution parameters of the individual causal representation.
+        Infer the distribution parameters of the individual causal representation
+        for each position in the sequence.
         
         Args:
             features (torch.Tensor): Input feature representation
-                                     Shape: [batch_size, hidden_size]
+                                   Shape: [batch_size, seq_len, hidden_size]
         
         Returns:
             tuple: (loc, scale) - Parameters of the Cauchy distribution
-                   Each has shape: [batch_size, causal_dim]
+                   Each has shape: [batch_size, seq_len, causal_dim]
         """
-        # The output has shape [batch_size, causal_dim * 2]
-        output = self.fc(features)
+        # Handle both sequence and non-sequence inputs for backward compatibility
+        if features.dim() == 2:
+            # Legacy single-position mode: [batch_size, hidden_size]
+            output = self.fc(features)
+            loc, log_scale = torch.chunk(output, 2, dim=-1)
+            scale = torch.exp(log_scale)
+            return loc, scale
+        
+        # Sequence mode: [batch_size, seq_len, hidden_size]
+        batch_size, seq_len, hidden_size = features.shape
+        
+        # Reshape to apply linear layer: [batch_size * seq_len, hidden_size]
+        features_flat = features.view(-1, hidden_size)
+        
+        # Apply linear transformation: [batch_size * seq_len, causal_dim * 2]
+        output_flat = self.fc(features_flat)
+        
+        # Reshape back: [batch_size, seq_len, causal_dim * 2]
+        output = output_flat.view(batch_size, seq_len, -1)
         
         # Split the output into loc and log_scale
         loc, log_scale = torch.chunk(output, 2, dim=-1)
