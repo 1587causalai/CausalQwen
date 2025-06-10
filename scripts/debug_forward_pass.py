@@ -161,6 +161,7 @@ def main():
     # 直接使用模型的原生序列输出
     loss_dict = loss_fn(
         outputs["cls_loc"], outputs["cls_scale"],
+        outputs["reg_loc"], outputs["reg_scale"],
         labels, target_values
     )
     
