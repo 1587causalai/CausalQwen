@@ -32,10 +32,13 @@ class AbductionNetwork(nn.Module):
         # It outputs two values for each dimension: one for loc, one for log_scale
         self.fc = nn.Linear(hidden_size, causal_dim * 2)
 
-    def init_weights(self):
+    def init_weights(self, initial_scale_bias=2.3):
         """
         Initialize weights for identity mapping.
         This is a specific strategy for the case where hidden_size == causal_dim.
+        
+        Args:
+            initial_scale_bias (float): Initial bias for scale parameter (log scale). Default: 2.3 (exp(2.3) ≈ 10)
         """
         # Initialize the linear layer for an identity-like mapping
         # where loc is the feature and scale is small.
@@ -60,7 +63,7 @@ class AbductionNetwork(nn.Module):
                 self.fc.bias.data[:causal_dim].fill_(0.0)
                 # Initialize log_scale bias to a value that results in a large, uniform scale
                 # W=0, B=large_num ensures all dimensions have the same initial uncertainty
-                self.fc.bias.data[causal_dim:].fill_(2.3) # exp(2.3) ≈ 10
+                self.fc.bias.data[causal_dim:].fill_(initial_scale_bias) # Configurable initial uncertainty
         else:
             # For other cases, use a conservative initialization
             with torch.no_grad():
@@ -71,7 +74,7 @@ class AbductionNetwork(nn.Module):
                 self.fc.bias.data[:causal_dim].fill_(0.0)
                 # Initialize log_scale bias to a value that results in a large scale,
                 # reflecting high initial uncertainty about the causal representation.
-                self.fc.bias.data[causal_dim:].fill_(2.3) # exp(2.3) ≈ 10
+                self.fc.bias.data[causal_dim:].fill_(initial_scale_bias) # Configurable initial uncertainty
                 
                 print(f"  - AbductionNetwork initialized with Xavier (hidden_size={hidden_size} != causal_dim={causal_dim})")
 

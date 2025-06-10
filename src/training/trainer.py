@@ -136,6 +136,8 @@ class Trainer:
         global_step = 0
         for epoch in range(num_epochs):
             total_loss = 0
+            total_cls_loss = 0
+            total_reg_loss = 0
             total_correct = 0
             total_num_correct = 0
             total_num_samples = 0
@@ -166,6 +168,8 @@ class Trainer:
                 
                 # --- METRICS LOGGING ---
                 total_loss += loss.item()
+                total_cls_loss += loss_dict["cls_loss"].item()
+                total_reg_loss += loss_dict["gated_reg_loss"].item()
                 
                 # Classification metrics - compute predictions from model outputs
                 cls_loc = outputs["cls_loc"]  # [B, S, C]
@@ -228,6 +232,8 @@ class Trainer:
                 global_step += 1
         
             avg_loss = total_loss / len(dataloader)
+            avg_cls_loss = total_cls_loss / len(dataloader)
+            avg_reg_loss = total_reg_loss / len(dataloader)
             accuracy = total_correct / total_samples
             num_accuracy = total_num_correct / total_num_samples if total_num_samples > 0 else 0
             print(f"Epoch {epoch+1} Complete: Avg Loss={avg_loss:.4f}, Accuracy={accuracy:.4f}, <NUM> Accuracy={num_accuracy:.4f}")
@@ -240,4 +246,12 @@ class Trainer:
                     "epoch_num_accuracy": num_accuracy
                 }, step=global_step)
 
-        return dataloader 
+        # Return training metrics instead of dataloader
+        return {
+            "final_loss": avg_loss,
+            "final_cls_loss": avg_cls_loss,
+            "final_reg_loss": avg_reg_loss,
+            "final_accuracy": accuracy,
+            "final_num_accuracy": num_accuracy,
+            "total_epochs": num_epochs
+        } 

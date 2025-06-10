@@ -37,6 +37,7 @@ class CausalLMConfig:
     use_cauchy_distribution: bool = True
     reg_loss_weight: float = 1.0
     ovr_threshold: float = 0.0
+    initial_scale_bias: float = 2.3  # Initial bias for AbductionNetwork scale parameter (log scale)
     
     def __post_init__(self):
         if self.num_token_id is None:
@@ -82,6 +83,7 @@ class CausalLanguageModel(nn.Module):
         
         # If config is provided, use it; otherwise use direct parameters
         if config is not None:
+            self.config = config  # Save config reference for later use
             self.vocab_size = config.vocab_size
             self.num_token_id = config.num_token_id
             self.hidden_size = config.hidden_size
@@ -91,6 +93,7 @@ class CausalLanguageModel(nn.Module):
             use_real_qwen = config.use_real_qwen
             qwen_model_path = config.qwen_model_path
         else:
+            self.config = None  # No config provided
             self.vocab_size = vocab_size or 1000
             self.num_token_id = num_token_id or self.vocab_size
             self.hidden_size = hidden_size
@@ -144,8 +147,15 @@ class CausalLanguageModel(nn.Module):
         # 1. Initialize Abduction Network
         # This assumes hidden_size and causal_dim are the same
         if self.hidden_size == self.causal_dim:
-            self.abduction_network.init_weights()
-            print("  - Abduction network initialized for identity mapping.")
+            # Get initial_scale_bias from config if available
+            initial_scale_bias = getattr(self, 'config', None)
+            if initial_scale_bias is not None and hasattr(initial_scale_bias, 'initial_scale_bias'):
+                initial_scale_bias = initial_scale_bias.initial_scale_bias
+            else:
+                initial_scale_bias = 2.3  # Default value
+            
+            self.abduction_network.init_weights(initial_scale_bias=initial_scale_bias)
+            print(f"  - Abduction network initialized for identity mapping (scale_bias={initial_scale_bias}).")
         else:
             print("  - WARNING: Abduction network not initialized (hidden_size != causal_dim).")
 
