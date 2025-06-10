@@ -10,16 +10,31 @@ def _create_dataset_from_generator(generator, tokenizer, num_samples):
     """Helper function to create a TensorDataset from a text generator."""
     texts, true_values = generator.generate_text(num_samples=num_samples)
     
-    inputs = tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
+    # Use batch_encode_plus for consistent processing
+    inputs = tokenizer.batch_encode_plus(texts, padding=True, truncation=True, return_tensors='pt')
     
     input_ids = inputs['input_ids']
     attention_mask = inputs['attention_mask']
     numerical_values = inputs['numerical_values']
     
-    targets = torch.full((num_samples,), tokenizer.num_token_id, dtype=torch.long)
-    target_values = torch.tensor(true_values, dtype=torch.float32)
+    # --- Create sequence-to-sequence labels and targets ---
+    # Labels: each position predicts the next token
+    labels = input_ids.clone()
+    labels[labels == tokenizer.pad_token_id] = -100  # Ignore padding positions
+    labels[:, :-1] = labels[:, 1:].clone()  # Shift left: predict next token
+    labels[:, -1] = -100  # Last position has no next token to predict
     
-    return TensorDataset(input_ids, attention_mask, numerical_values, targets, target_values)
+    # Target values: numerical values for positions where label is <NUM>
+    target_values = torch.full_like(numerical_values, float('nan'))
+    shifted_numerical_values = numerical_values.clone()
+    shifted_numerical_values[:, :-1] = numerical_values[:, 1:].clone()  # Shift left 
+    shifted_numerical_values[:, -1] = 0.0  # Last position default
+    
+    # Only set target values where the label is <NUM> 
+    num_mask = (labels == tokenizer.num_token_id)
+    target_values[num_mask] = shifted_numerical_values[num_mask]
+    
+    return TensorDataset(input_ids, attention_mask, numerical_values, labels, target_values)
 
 def get_all_evaluation_datasets(tokenizer, num_samples_per_set=200):
     """

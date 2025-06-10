@@ -64,37 +64,46 @@ class Evaluator:
                 # Get full model output, including distribution parameters
                 outputs = self.model(input_ids, numerical_values, attention_mask)
                 
-                # --- Predictions ---
-                all_true_tokens.extend(targets.cpu().numpy())
+                # --- Handle sequence-to-sequence predictions ---
+                cls_loc = outputs['cls_loc']  # [B, S, C]
+                cls_scale = outputs['cls_scale']  # [B, S, C]
+                reg_loc = outputs['reg_loc']  # [B, S]
+                reg_scale = outputs['reg_scale']  # [B, S]
+                
+                # Flatten to handle as individual predictions
+                batch_size, seq_len, vocab_size = cls_loc.shape
+                
+                # Create mask for valid (non-ignored) positions
+                valid_mask = (targets != -100)  # [B, S]
+                
+                # Flatten and filter valid positions
+                valid_cls_loc = cls_loc[valid_mask]  # [N_valid, C]
+                valid_cls_scale = cls_scale[valid_mask]  # [N_valid, C]
+                valid_targets = targets[valid_mask]  # [N_valid]
+                valid_reg_loc = reg_loc[valid_mask]  # [N_valid]
+                valid_reg_scale = reg_scale[valid_mask]  # [N_valid]
+                valid_target_values = target_values[valid_mask]  # [N_valid]
                 
                 # --- CONFIDENCE CALCULATION FOR ECE ---
-                # The previous OvR-based normalization led to an unexpectedly high ECE.
-                # We are switching to a more standard and robust method: applying softmax 
-                # to the model's logits (cls_loc) to get confidences.
-                # This aligns with best practices for multi-class calibration.
+                # Apply softmax to convert logits to a valid probability distribution
+                softmax_probs = torch.softmax(valid_cls_loc, dim=1)  # [N_valid, C]
                 
-                # Step 1: Get the raw logits (location parameter from the model output).
-                cls_loc = outputs['cls_loc']
-                
-                # Step 2: Apply softmax to convert logits to a valid probability distribution.
-                softmax_probs = torch.softmax(cls_loc, dim=1)
-
-                # Step 3: The confidence for ECE is the maximum probability from the distribution.
-                # The predicted class is the one with the highest probability.
-                max_probs, pred_classes = torch.max(softmax_probs, dim=1)
+                # The confidence for ECE is the maximum probability from the distribution
+                max_probs, pred_classes = torch.max(softmax_probs, dim=1)  # [N_valid]
                 pred_confidences_batch = max_probs
                 all_pred_confidences.extend(pred_confidences_batch.cpu().numpy())
                 
-                # Update predicted tokens to use softmax prediction
+                # Update predicted tokens
                 pred_tokens = pred_classes
                 all_pred_tokens.extend(pred_tokens.cpu().numpy())
+                all_true_tokens.extend(valid_targets.cpu().numpy())
 
-                # Collect data for regression and calibration metrics, now collecting for all samples
-                is_num_mask = (targets == self.tokenizer.num_token_id)
+                # Collect data for regression metrics
+                is_num_mask = (valid_targets == self.tokenizer.num_token_id)
                 all_is_num_mask.extend(is_num_mask.cpu().numpy())
-                all_true_values.extend(target_values.cpu().numpy())
-                all_reg_locs.extend(outputs['reg_loc'].cpu().numpy())
-                all_reg_scales.extend(outputs['reg_scale'].cpu().numpy())
+                all_true_values.extend(valid_target_values.cpu().numpy())
+                all_reg_locs.extend(valid_reg_loc.cpu().numpy())
+                all_reg_scales.extend(valid_reg_scale.cpu().numpy())
         
         # Convert all lists to numpy arrays for consistent processing
         all_pred_tokens = np.array(all_pred_tokens)
@@ -109,6 +118,12 @@ class Evaluator:
         true_reg_values = all_true_values[all_is_num_mask]
         pred_reg_locs = all_reg_locs[all_is_num_mask]
         pred_reg_scales = all_reg_scales[all_is_num_mask]
+        
+        # Further filter out NaN values in regression targets
+        valid_reg_mask = ~np.isnan(true_reg_values)
+        true_reg_values = true_reg_values[valid_reg_mask]
+        pred_reg_locs = pred_reg_locs[valid_reg_mask]
+        pred_reg_scales = pred_reg_scales[valid_reg_mask]
         
         # Compute all metrics from the collected data
         metrics = self._compute_metrics(

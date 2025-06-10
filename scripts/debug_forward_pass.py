@@ -161,7 +161,6 @@ def main():
     # 直接使用模型的原生序列输出
     loss_dict = loss_fn(
         outputs["cls_loc"], outputs["cls_scale"],
-        outputs["reg_loc"], outputs["reg_scale"],
         labels, target_values
     )
     
@@ -169,6 +168,52 @@ def main():
     print_tensor_stats(loss_dict['loss'], "总损失 (Total Loss)")
     print_tensor_stats(loss_dict['cls_loss'], "分类损失 (Classification Loss)")
     print_tensor_stats(loss_dict['gated_reg_loss'], "门控回归损失 (Gated Regression Loss)")
+
+    # --- 详细的概率分析 ---
+    print("\n[步骤 4.5. 详细分析OvR概率分布...]")
+    
+    # 计算第一个样本第一个有效位置的OvR概率
+    sample_idx, pos_idx = 0, 3  # 选择位置3 (应该预测<NUM>)
+    cls_loc_sample = outputs["cls_loc"][sample_idx, pos_idx]  # [V]
+    cls_scale_sample = outputs["cls_scale"][sample_idx, pos_idx]  # [V]
+    
+    # 计算OvR概率
+    ovr_probs = compute_ovr_probabilities(cls_loc_sample, cls_scale_sample, config.ovr_threshold)
+    
+    print(f"\n--- 样本{sample_idx+1}位置{pos_idx}的概率分析 (应该预测: {tokenizer.convert_ids_to_tokens([labels[sample_idx, pos_idx].item()])[0]}) ---")
+    print(f"OvR阈值: {config.ovr_threshold}")
+    print(f"概率和: {ovr_probs.sum().item():.6f}")
+    print(f"最大概率: {ovr_probs.max().item():.6f}")
+    print(f"最小概率: {ovr_probs.min().item():.6f}")
+    print(f"概率均值: {ovr_probs.mean().item():.6f}")
+    
+    # 找出概率最高的前5个token
+    top_probs, top_indices = torch.topk(ovr_probs, 5)
+    print(f"\n概率最高的前5个token：")
+    for i, (prob, idx) in enumerate(zip(top_probs, top_indices)):
+        token = tokenizer.convert_ids_to_tokens([idx.item()])[0]
+        print(f"  {i+1}. {token}: {prob.item():.6f}")
+    
+    # 检查<NUM> token的概率
+    num_token_prob = ovr_probs[tokenizer.num_token_id].item()
+    print(f"\n<NUM> token (ID: {tokenizer.num_token_id}) 的概率: {num_token_prob:.6f}")
+    
+    # 检查真实目标token的概率
+    true_target = labels[sample_idx, pos_idx].item()
+    if true_target != -100:
+        true_target_prob = ovr_probs[true_target].item()
+        true_target_token = tokenizer.convert_ids_to_tokens([true_target])[0]
+        print(f"真实目标 '{true_target_token}' (ID: {true_target}) 的概率: {true_target_prob:.6f}")
+    
+    # 分析概率分布的统计特性
+    prob_above_001 = (ovr_probs > 0.01).sum().item()
+    prob_above_01 = (ovr_probs > 0.1).sum().item()
+    prob_above_05 = (ovr_probs > 0.5).sum().item()
+    
+    print(f"\n概率分布统计：")
+    print(f"  概率 > 0.01 的token数量: {prob_above_001} / {len(ovr_probs)}")
+    print(f"  概率 > 0.1 的token数量: {prob_above_01} / {len(ovr_probs)}")  
+    print(f"  概率 > 0.5 的token数量: {prob_above_05} / {len(ovr_probs)}")
 
     # --- 5. 推断-行动范式验证 ---
     print("\n[步骤 5. 验证推断-行动范式的实现...]")

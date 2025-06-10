@@ -133,7 +133,7 @@ def main(args):
         causal_dim=args.hidden_size,
         use_real_qwen=True,
         qwen_model_path=args.qwen_model_path,
-        ovr_threshold=100.0  # Set a high threshold to initialize probabilities near zero
+        ovr_threshold=0.0  # Use neutral threshold for balanced learning
     )
     
     # --- 2. Get configurations and datasets ---

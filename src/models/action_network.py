@@ -172,7 +172,7 @@ class ActionNetwork(nn.Module):
     (classification scores and regression values).
     """
     
-    def __init__(self, causal_dim, vocab_size, num_token_id):
+    def __init__(self, causal_dim, vocab_size, num_token_id, ovr_threshold=10.0):
         """
         Initialize the Action Network.
         
@@ -180,14 +180,16 @@ class ActionNetwork(nn.Module):
             causal_dim (int): Dimensionality of the individual causal representation
             vocab_size (int): Size of the vocabulary
             num_token_id (int): The token ID for the <NUM> token.
+            ovr_threshold (float): Decision threshold for OvR classification
         """
         super().__init__()
         self.causal_dim = causal_dim
         self.vocab_size = vocab_size
         self.num_token_id = num_token_id
+        self.ovr_threshold = ovr_threshold
         
         # Classification head for token prediction
-        self.classification_head = ClassificationHead(causal_dim, vocab_size)
+        self.classification_head = ClassificationHead(causal_dim, vocab_size, threshold=ovr_threshold)
         
         # Regression head for numerical prediction
         self.regression_head = RegressionHead(causal_dim)
@@ -231,8 +233,10 @@ class ActionNetwork(nn.Module):
         
         # Initialize the new <NUM> token row for loc to zero
         cls_head.loc_layer.weight.data[num_token_id, :].fill_(0)
-        # Penalize the bias for <NUM> token to suppress initial predictions
-        cls_head.loc_layer.bias.data[num_token_id].fill_(-10.0)
+        # Initialize the bias for <NUM> token to be close to the threshold
+        # This ensures initial probability is around 0.5, allowing gradient flow
+        # The actual threshold will be set in ClassificationHead constructor
+        cls_head.loc_layer.bias.data[num_token_id].fill_(90.0)  # Close to threshold of 100
 
         # Initialize all scale parameters to a high uncertainty state
         # Weight = zero, Bias = large positive value

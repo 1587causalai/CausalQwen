@@ -123,7 +123,12 @@ class CausalLanguageModel(nn.Module):
         self.abduction_network = AbductionNetwork(self.hidden_size, self.causal_dim)
         
         # Initialize action network
-        self.action_network = ActionNetwork(self.causal_dim, self.vocab_size, self.num_token_id)
+        self.action_network = ActionNetwork(
+            self.causal_dim, 
+            self.vocab_size, 
+            self.num_token_id,
+            ovr_threshold=config.ovr_threshold if config is not None else 10.0
+        )
         
     def init_weights(self, num_target_median, num_target_scale):
         """
