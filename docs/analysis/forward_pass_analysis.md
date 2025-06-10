@@ -87,16 +87,17 @@ graph TB
 
 新架构的数学描述为：
 
-$$\forall i \in \{1, 2, \ldots, S\}: \quad U_i | z_i \sim \text{Cauchy}(\text{loc}_i(z_{\leq i}), \text{scale}_i(z_{\leq i}))$$
+1.  **推断 (Abduction)**: 对于序列中的每个位置 $i$，推断个体因果表征 $U_i$ 的分布：
+    $$\forall i \in \{1, 2, \ldots, S\}: \quad U_i | z_{\le i} \sim \text{Cauchy}(\text{loc}_i(z_{\le i}), \text{scale}_i(z_{\le i}))$$
+    其中 $z_{\le i}$ 是到位置 $i$ 为止的累积上下文信息。
 
-其中：
-- $z_{\leq i}$ 表示到位置 $i$ 为止的累积上下文信息
-- $\text{loc}_i(\cdot)$ 和 $\text{scale}_i(\cdot)$ 是位置特定的推断函数
-- 每个 $U_i$ 都是独立的个体因果表征
-
-然后，对于每个位置的行动：
-$$S_{k,i} | U_i \sim \text{Cauchy}(\vec{A}_{k} \cdot \text{loc}_i + B_k, |\vec{A}_{k}| \cdot \text{scale}_i)$$
-$$Y_i | U_i \sim \text{Cauchy}(\vec{W} \cdot \text{loc}_i + b, |\vec{W}| \cdot \text{scale}_i)$$
+2.  **行动 (Action)**: 基于推断出的因果表征 $U_i$ 进行决策。行动网络对随机变量 $U_i$ 本身进行线性变换，根据柯西分布的线性稳定性，我们可以直接计算出输出分布的参数：
+    
+    - **分类分数 $S_{k,i}$ 的分布**:
+      $$ S_{k,i} = \vec{A}_{k} \cdot U_i + B_k \sim \text{Cauchy}(\vec{A}_{k} \cdot \text{loc}_i + B_k, \sum_{j} |A_{k,j}| \cdot \text{scale}_{i,j})$$
+    
+    - **回归值 $Y_i$ 的分布**:
+      $$ Y_i = \vec{W} \cdot U_i + b \sim \text{Cauchy}(\vec{W} \cdot \text{loc}_i + b, \sum_{j} |W_j| \cdot \text{scale}_{i,j})$$
 
 ---
 
@@ -155,11 +156,15 @@ def forward(self, features):
 
 ### 4.1 柯西分布的线性稳定性
 
-新架构充分利用了柯西分布的核心数学性质：
+新架构充分利用了柯西分布的一个核心数学性质：**一个独立柯西分布随机变量的加权和，其结果仍然是柯西分布。**
 
-$$\text{如果 } U_i \sim \text{Cauchy}(\mu_i, \sigma_i), \text{ 那么 } \vec{A} \cdot U_i + B \sim \text{Cauchy}(\vec{A} \cdot \mu_i + B, |\vec{A}| \cdot \sigma_i)$$
+具体来说，如果 $U_{i,j} \sim \text{Cauchy}(\mu_{i,j}, \sigma_{i,j})$ 是独立的因果表征分量，那么它们的线性组合 $X = \sum_j W_j U_{i,j} + b$ 的分布是：
 
-这意味着从 $U_i$ 到 $S_{k,i}$ 和 $Y_i$ 的整个变换过程都可以在**分布参数层面**进行解析计算，无需采样。
+$$ X \sim \text{Cauchy}\left(\sum_j W_j \mu_{i,j} + b, \sum_j |W_j| \sigma_{i,j}\right) $$
+
+这里的关键是 `scale` (尺度参数) 的变换规则：**新尺度是原尺度的加权和，权重是变换系数的绝对值**。这正是您指出的"每个元素都要取绝对值"的精确含义。
+
+这个性质是模型的基石，它意味着从因果表征 $U_i$ 到最终输出 $S_{k,i}$ 和 $Y_i$ 的整个变换过程都可以在**分布参数层面**进行解析计算，完全无需进行耗时的蒙特卡洛采样。这正是我们模型高效性的关键。
 
 ### 4.2 位置间的独立性与相关性
 
