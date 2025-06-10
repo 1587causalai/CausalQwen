@@ -95,9 +95,12 @@ def cauchy_nll_loss(pred_loc, pred_scale, target, reduction='mean'):
     """
     Compute the negative log-likelihood loss for Cauchy distribution.
     
+    从 mathematical_foundations.md 的正确公式：
+    L_cauchy_nll = log(π * scale_Y) + log(1 + ((y_true - loc_Y)/scale_Y)^2)
+    
     Args:
         pred_loc (torch.Tensor): Predicted location parameter
-        pred_scale (torch.Tensor): Predicted scale parameter
+        pred_scale (torch.Tensor): Predicted scale parameter  
         target (torch.Tensor): Target values
         reduction (str, optional): Specifies the reduction to apply to the output:
                                    'none' | 'mean' | 'sum'. Defaults to 'mean'.
@@ -105,16 +108,18 @@ def cauchy_nll_loss(pred_loc, pred_scale, target, reduction='mean'):
     Returns:
         torch.Tensor: Negative log-likelihood loss, shape depends on reduction.
     """
-    # Calculate the log probability for each sample
-    log_prob = - (math.log(math.pi) + torch.log(pred_scale) + torch.log(1 + ((target - pred_loc) / pred_scale)**2))
+    # 严格按照数学文档中的公式实现：
+    # L_cauchy_nll = log(π * scale) + log(1 + ((target - loc)/scale)^2)
+    nll_loss = (torch.log(torch.tensor(math.pi, device=pred_scale.device) * pred_scale) + 
+                torch.log(1 + ((target - pred_loc) / pred_scale)**2))
     
     # Apply reduction
     if reduction == 'mean':
-        return -log_prob.mean()
+        return nll_loss.mean()
     elif reduction == 'sum':
-        return -log_prob.sum()
+        return nll_loss.sum()
     elif reduction == 'none':
-        return -log_prob
+        return nll_loss
     else:
         raise ValueError(f"Invalid reduction type: {reduction}")
 
@@ -123,8 +128,9 @@ class CauchyLinear(nn.Module):
     """
     Linear layer that preserves Cauchy distribution properties.
     
-    When a Cauchy random variable is transformed by a linear function,
-    the result is still a Cauchy random variable with transformed parameters.
+    正确的柯西分布线性变换：
+    如果 X ~ Cauchy(μ, σ)，那么 Y = AX + B ~ Cauchy(Aμ + B, |A|σ)
+    关键：loc 和 scale 必须使用**相同的权重矩阵 A**！
     """
     
     def __init__(self, in_features, out_features, bias=True):
@@ -138,13 +144,26 @@ class CauchyLinear(nn.Module):
                                   Defaults to True.
         """
         super().__init__()
-        # Separate linear layers for location and scale parameters
-        self.loc_layer = nn.Linear(in_features, out_features, bias=bias)
-        self.scale_layer = nn.Linear(in_features, out_features, bias=bias)
+        # 共享权重矩阵 A 用于 loc 和 scale 的变换
+        self.weight = nn.Parameter(torch.randn(out_features, in_features))
+        if bias:
+            self.bias = nn.Parameter(torch.randn(out_features))
+        else:
+            self.register_parameter('bias', None)
+            
+        # 使用标准的线性层初始化
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(self.bias, -bound, bound)
         
     def forward(self, loc, scale):
         """
         Forward pass that transforms Cauchy distribution parameters.
+        
+        正确的柯西分布线性变换：
+        If X ~ Cauchy(μ, σ), then Y = AX + B ~ Cauchy(Aμ + B, |A|σ)
         
         Args:
             loc (torch.Tensor): Location parameter of input Cauchy distribution
@@ -153,13 +172,16 @@ class CauchyLinear(nn.Module):
         Returns:
             tuple: (transformed_loc, transformed_scale)
         """
-        # Transform location parameter using the loc linear layer
-        transformed_loc = self.loc_layer(loc)
+        # Transform location parameter: loc_out = A * loc + B
+        transformed_loc = F.linear(loc, self.weight, self.bias)
         
-        # For scale parameter, we need to use the absolute values of weights
-        # Scale transforms as: scale_out = sum(|w_i| * scale_in_i)
-        abs_weight = torch.abs(self.scale_layer.weight)
-        transformed_scale = F.linear(scale, abs_weight, self.scale_layer.bias)
+        # Transform scale parameter: scale_out = |A| * scale (NO BIAS!)
+        # 使用权重的绝对值，确保 scale 保持正值
+        abs_weight = torch.abs(self.weight)
+        transformed_scale = F.linear(scale, abs_weight, bias=None)
+        
+        # 只确保 scale > 0，不设置上限以保持数学正确性
+        transformed_scale = torch.clamp(transformed_scale, min=1e-6)
         
         return transformed_loc, transformed_scale
 

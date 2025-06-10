@@ -46,20 +46,20 @@ class AbductionNetwork(nn.Module):
         if hidden_size == causal_dim:
             # Create an identity matrix for the location part
             identity_matrix = torch.eye(hidden_size, causal_dim)
-            # Create a small random matrix for the scale part to allow learning
-            # Using Xavier initialization with small gain
-            scale_matrix = torch.randn(hidden_size, causal_dim) * 0.01
+            # Create a zero matrix for the scale part (uniform initialization strategy)
+            # All scale values will be determined solely by the bias term
+            zero_matrix = torch.zeros(hidden_size, causal_dim)
             
             # Concatenate to form the final weight matrix [causal_dim * 2, hidden_size]
             # The first half of weights for loc, second half for scale.
-            final_weight = torch.cat((identity_matrix, scale_matrix), dim=1).t()
+            final_weight = torch.cat((identity_matrix, zero_matrix), dim=1).t()
             
             with torch.no_grad():
                 self.fc.weight.copy_(final_weight)
                 # Initialize loc bias to zero
                 self.fc.bias.data[:causal_dim].fill_(0.0)
-                # Initialize log_scale bias to a value that results in a large scale,
-                # reflecting high initial uncertainty about the causal representation.
+                # Initialize log_scale bias to a value that results in a large, uniform scale
+                # W=0, B=large_num ensures all dimensions have the same initial uncertainty
                 self.fc.bias.data[causal_dim:].fill_(2.3) # exp(2.3) ≈ 10
         else:
             # For other cases, use a conservative initialization

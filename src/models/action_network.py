@@ -218,42 +218,46 @@ class ActionNetwork(nn.Module):
         print(f"  - Copying weights for {overlapping_vocab_size} overlapping tokens")
 
         # Copy weights and biases for overlapping tokens
-        cls_head.loc_layer.weight.data[:overlapping_vocab_size, :].copy_(
+        cls_head.weight.data[:overlapping_vocab_size, :].copy_(
             qwen_lm_head.weight.data[:overlapping_vocab_size, :]
         )
-        if qwen_lm_head.bias is not None:
-            cls_head.loc_layer.bias.data[:overlapping_vocab_size].copy_(
+        if qwen_lm_head.bias is not None and cls_head.bias is not None:
+            cls_head.bias.data[:overlapping_vocab_size].copy_(
                 qwen_lm_head.bias.data[:overlapping_vocab_size]
             )
         
         # Initialize any remaining tokens (between overlapping_vocab_size and our_vocab_size-1) to zero
         if overlapping_vocab_size < our_vocab_size - 1:
-            cls_head.loc_layer.weight.data[overlapping_vocab_size:our_vocab_size-1, :].fill_(0)
-            cls_head.loc_layer.bias.data[overlapping_vocab_size:our_vocab_size-1].fill_(0)
+            cls_head.weight.data[overlapping_vocab_size:our_vocab_size-1, :].fill_(0)
+            if cls_head.bias is not None:
+                cls_head.bias.data[overlapping_vocab_size:our_vocab_size-1].fill_(0)
         
-        # Initialize the new <NUM> token row for loc to zero
-        cls_head.loc_layer.weight.data[num_token_id, :].fill_(0)
-        # Initialize the bias for <NUM> token to be close to the threshold
-        # This ensures initial probability is around 0.5, allowing gradient flow
-        # The actual threshold will be set in ClassificationHead constructor
-        cls_head.loc_layer.bias.data[num_token_id].fill_(90.0)  # Close to threshold of 100
+        # Special initialization for <NUM> token
+        # Initialize the weight row to zero (no feature dependence initially)
+        cls_head.weight.data[num_token_id, :].fill_(0)
+        # Initialize the bias to be slightly below threshold
+        # This ensures P(<NUM>) ≈ 0.4 initially, allowing healthy gradient flow
+        threshold = self.classification_head.thresholds[num_token_id].item()
+        initial_bias = threshold - 2.0  # bias = threshold - 2 gives P(<NUM>) ≈ 0.4
+        if cls_head.bias is not None:
+            cls_head.bias.data[num_token_id].fill_(initial_bias)
+        print(f"  - Initialized <NUM> token (ID: {num_token_id}) with bias {initial_bias:.1f} (threshold: {threshold:.1f})")
 
-        # Initialize all scale parameters to a high uncertainty state
-        # Weight = zero, Bias = large positive value
-        cls_head.scale_layer.weight.data.fill_(0)
-        cls_head.scale_layer.bias.data.fill_(2.3) # exp(2.3) approx 10
-
-        # 2. Initialize Regression Head
+        # 2. Initialize Regression Head - FIXED INITIALIZATION
         reg_head = self.regression_head.causal_linear
         
-        # Initialize loc to predict the median of the data (Cauchy location parameter)
-        reg_head.loc_layer.weight.data.fill_(0)
-        reg_head.loc_layer.bias.data.fill_(num_target_median)
+        # Use small random initialization for weights (like classification head)
+        # This allows the regression head to respond to the causal representation
+        with torch.no_grad():
+            # Use Xavier initialization with small gain for stable gradients
+            nn.init.xavier_uniform_(reg_head.weight, gain=0.1)
+            
+            # Initialize bias to predict the median of the data
+            if reg_head.bias is not None:
+                reg_head.bias.data.fill_(num_target_median)
 
-        # Initialize scale to reflect the scale parameter of the data (Cauchy scale parameter)
-        reg_head.scale_layer.weight.data.fill_(0)
-        # Use log of scale parameter, ensure scale > 0
-        reg_head.scale_layer.bias.data.fill_(torch.log(torch.tensor(num_target_scale) + 1e-6))
+        print(f"  - Regression head initialized: weight Xavier(gain=0.1), bias = {num_target_median}")
+        print(f"  - This allows regression head to respond to causal representation (unlike previous zero-weight initialization)")
 
     def forward(self, causal_loc, causal_scale):
         """
@@ -291,11 +295,13 @@ class ActionNetwork(nn.Module):
             dict: A dictionary containing the predicted token and regression value.
         """
         # For prediction, we use the location parameters (median) as point estimates
-        # 1. Classification: Use the classification head's loc layer directly for deterministic scores  
-        cls_scores = self.classification_head.causal_linear.loc_layer(causal_loc)
+        # 1. Classification: Use the classification head's weight and bias directly for deterministic scores  
+        cls_scores = F.linear(causal_loc, self.classification_head.causal_linear.weight, 
+                             self.classification_head.causal_linear.bias)
         
-        # 2. Regression: Use the regression head's loc layer directly for deterministic value
-        reg_value = self.regression_head.causal_linear.loc_layer(causal_loc).squeeze(-1)
+        # 2. Regression: Use the regression head's weight and bias directly for deterministic value
+        reg_value = F.linear(causal_loc, self.regression_head.causal_linear.weight, 
+                            self.regression_head.causal_linear.bias).squeeze(-1)
         
         # Get probability of <NUM> token (computed using the deterministic scores)
         # Apply Cauchy CDF formula: P(S > threshold) = 0.5 + (1/π) * arctan((loc - threshold)/scale)

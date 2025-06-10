@@ -195,8 +195,9 @@ class CausalLMLoss(nn.Module):
         bce_loss = -(target_one_hot * torch.log(cls_probs + 1e-9) + 
                      (1 - target_one_hot) * torch.log(1 - cls_probs + 1e-9))
         
-        # Sum over classes, and then take the mean over all active tokens
-        classification_loss = bce_loss.sum(dim=1).mean()
+        # Average over classes and tokens (not sum over classes!)
+        # This prevents the loss from scaling with vocabulary size
+        classification_loss = bce_loss.mean()
 
         # --- 2. Gated Regression Loss (Sequence-wise) ---
         # Mask for positions where the label is <NUM> AND is active

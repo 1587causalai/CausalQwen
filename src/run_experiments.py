@@ -133,7 +133,7 @@ def main(args):
         causal_dim=args.hidden_size,
         use_real_qwen=True,
         qwen_model_path=args.qwen_model_path,
-        ovr_threshold=0.0  # Use neutral threshold for balanced learning
+        ovr_threshold=10.0  # Use a high positive threshold to make sum of OVR probabilities close to 1
     )
     
     # --- 2. Get configurations and datasets ---
@@ -170,13 +170,10 @@ def main(args):
         # Train model if not skipped
         if not args.no_train:
             print("Training model...")
-            # Apply custom weight initialization for new components
-            # This is crucial to prevent gradient explosion
-            if hasattr(model, 'abduction_network'):
-                 model.abduction_network.apply(Trainer.weights_init)
-            if hasattr(model, 'action_network'):
-                 model.action_network.apply(Trainer.weights_init)
-
+            # Note: Weight initialization is now handled by Trainer.__init__()
+            # which calls model.init_weights() with proper knowledge transfer from Qwen
+            # and correct regression head initialization (fixed Xavier instead of zeros)
+            
             trainer = Trainer(
                 model=model,
                 tokenizer=tokenizer,

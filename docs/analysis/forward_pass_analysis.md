@@ -61,16 +61,12 @@ graph LR
 
 ```mermaid
 graph TB
-    A["序列输入 [B,S]"] --> B["特征网络(保留序列)"]
-    B --> C["序列特征 [B,S,H]"]
-    C --> D["推断网络(位置独立)"]
-    D --> E["位置独立因果表征 [B,S,C]"]
-    E --> F["行动网络(位置独立)"]
-    F --> G["序列输出 [B,S,V]"]
+    A["序列输入 [B,S]"] -- "QwenFeatureNetwork" --> C["序列特征 [B,S,H]"]
+    C -- "AbductionNetwork" --> E["个体因果表征参数 [B,S,C*2]"]
+    E -- "ActionNetwork" --> G["序列输出 <br> cls[B,S, K+1], reg[B,S]"]
     
     subgraph "每个位置 i"
-        H["z_i"] --> I["U_i ~ Cauchy(loc_i, scale_i)"]
-        I --> J["S_k,i & Y_i"]
+        H["z_i"] --> I["U_i ~ Cauchy(loc_i, scale_i)"] --> J["S_{k,i}, Y_i"]
     end
     
     style C fill:#e8f5e8,stroke:#4caf50
@@ -137,6 +133,23 @@ def forward(self, features):
     scale = torch.exp(log_scale)
     return loc, scale  # [B,S,C], [B,S,C]
 ```
+
+**实现说明：** 上述代码中 `features.view(-1, hidden_size)` 的用法是一种高效的 PyTorch 标准实践，而非引入了额外的复杂性。它将 `[B, S, H]` 的张量变形为 `[B*S, H]`，使得 `nn.Linear` 层 (`self.fc`) 能够并行地、独立地作用于序列中的每一个时间步的特征向量。随后的 `.view(batch_size, seq_len, -1)` 操作再将结果恢复到序列形状。
+
+这种实现方式与下面的循环在逻辑上是等价的（但效率要高得多）：
+
+```python
+# 概念上等价但效率低下的实现
+outputs = []
+for i in range(seq_len):
+    # 对每个位置的特征独立进行线性变换
+    output_i = self.fc(features[:, i, :])
+    outputs.append(output_i)
+# 将结果重新堆叠为序列
+output = torch.stack(outputs, dim=1)
+```
+
+因此，该实现**完全符合**您所强调的"直接位置对应位置"的数学原则，即对序列中的每个位置 $i$ 独立地执行 $z_i \rightarrow (\text{loc}_i, \text{scale}_i)$ 的映射，没有在不同位置之间混合信息。
 
 ### 3.3 行动网络扩展
 

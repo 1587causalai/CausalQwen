@@ -203,6 +203,11 @@ $$U|x \sim \text{Cauchy}(\text{loc}_U, \text{scale}_U)$$
 
 这个后验分布 $P(U|x)$ 是我们在观测到证据 $x$ 之后，对一个个体所具备的内在因果特性的全部认知。它不仅给出了最可能的特性（由 $\text{loc}_U$ 体现），还量化了这种认知的确定程度（由 $\text{scale}_U$ 体现）。
 
+**对序列模型的扩展：**
+在当前的序列到序列架构中，上述推断过程在序列的**每一个位置**上独立进行。对于位置 $i$，其对应的上下文特征 $z_i$ 会被用来推断该位置的因果表征 $U_i$ 的分布：
+$$U_i | z_i \sim \text{Cauchy}(\text{loc}(z_i), \text{scale}(z_i))$$
+为保持理论阐述的简洁性，本文档中的后续公式将主要使用不带下标的符号（如 $U, z$），但应理解为这些操作在实际模型中是逐位置应用的。
+
 ### 2.3 行动阶段的数学表达
 
 行动阶段的目标是基于我们对个体因果表征的后验认知（即分布 $P(U|x)$），来预测在不同干预（Action）下的结果。
@@ -612,35 +617,40 @@ $$\frac{\partial \mathcal{L}_{\text{total}}}{\partial \theta_r} = \lambda \cdot 
 graph TD
     input_x["输入序列 x"] --"分词器"--> feature_z
     
-    subgraph FN [" FeatureNetwork"]
-        feature_z["观测信息表征<br/>x_embed → z <br/>Qwen-0.5B Mocker得到z=h(x_embed)"]
+    subgraph FN ["FeatureNetwork"]
+        feature_z["序列特征<br/>z_i = h(x_i, context_{<i})<br/>Shape: [B, S, H]"]
     end
     
-    feature_z -- "线性AbductionNetwork<br/>z → (loc(z), scale(z))" --> causal_U
+    feature_z -- "线性AbductionNetwork (逐位置)<br/>z_i → (loc_i, scale_i)" --> causal_U
     
-    subgraph ABN ["个体因果表征"]
-        causal_U["U ~ Cauchy(loc(z), scale(z))"]
+    subgraph ABN ["个体因果表征 (逐位置)"]
+        causal_U["U_i ~ Cauchy(loc_i, scale_i)<br/>Shape: [B, S, C]"]
     end
     
-    subgraph ACN ["因果生成 ActionNetwork"]
-        causal_U -- "线性 ActionNetwork" --> classification_action["每个词元类别得分<br/>S_k = A_k·U + B_k~ Cauchy"]
-        causal_U -- "线性 ActionNetwork" --> regression_action["回归值<br/>Y = W·U + b~ Cauchy"]
-        classification_action --> ovr_prediction["(OvR)Classifier P(S_k > C_k)"]
-        regression_action --> regression_prediction["(MLE)Regressor y~Y"]       
+    subgraph ACN ["因果生成 ActionNetwork (逐位置)"]
+        causal_U -- "线性 Action" --> classification_action["分类分数<br/>S_{k,i} ~ Cauchy"]
+        causal_U -- "线性 Action" --> regression_action["回归值<br/>Y_i ~ Cauchy"]
+    end
+    
+    subgraph "损失计算 (逐位置)"
+        classification_action --> ovr_prediction["(OvR) P(S_{k,i} > C_k)"]
+        regression_action --> regression_prediction["(MLE) y_i ~ Y_i"]
+        ovr_prediction --> Loss_cls["分类损失 (BCE)"]
+        regression_prediction --> Loss_reg_gated["门控回归损失"]
+    end
+    
+    Loss_cls --> Loss_total["总损失<br/>(所有位置损失之和)"]
+    Loss_reg_gated --> Loss_total
 
+    subgraph "推理/生成 (逐位置)"
+        direction LR
+        classification_action --"采样 u_i"--> probability_output["输出词元<br/>argmax_k P(S_{k,i} > C_k)"]
+        regression_action --"采样 u_i"--> numerical_output["输出数值<br/>y_i"]
     end
-    
-    classification_action --> 采样u--> probability_output["输出第k个token是否出现 <br/> 因果决策 I(s_k > C_k)"]
-    regression_action --> 采样u --> numerical_output["输出数值结果 <br/> 因果决策 y"]
-    ovr_prediction --> Loss_cls --> Loss_total
-    regression_prediction --> Loss_reg_gated--> Loss_total
-
     
     style FN fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
     style ABN fill:#e6e6fa,stroke:#6a5acd,stroke-width:2px
     style ACN fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    style classification_action fill:#4caf50,color:#fff,stroke:#388e3c,stroke-width:1.5px
-    style regression_action fill:#2196f3,color:#fff,stroke:#1976d2,stroke-width:1.5px
 ```
 
 
