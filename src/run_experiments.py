@@ -356,7 +356,7 @@ if __name__ == '__main__':
     
     # Model architecture args
     parser.add_argument('--hidden_size', type=int, default=896, help='Hidden size of the model (for Qwen-0.5B).')
-    parser.add_argument('--ovr_threshold', type=float, default=10.0, help='OvR decision threshold.')
+    parser.add_argument('--ovr_threshold', type=float, default=100.0, help='OvR decision threshold.')
     parser.add_argument('--reg_loss_weight', type=float, default=1.0, help='Weight for regression loss in total loss.')
     parser.add_argument('--initial_scale_bias', type=float, default=2.3, help='Initial bias for scale parameter (log scale).')
     

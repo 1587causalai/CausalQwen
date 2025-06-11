@@ -25,7 +25,7 @@
 
 脚本的设计完全遵循了用户提出的关键需求：
 
-> **用户原始需求:** "觉得有些关键信息还没有打印出来，要打印我们的模型初始化后的结果，首先要把 Qwen 模型中相关的结果打印出来，这样才方便对比验证初始化是否符合预期"
+> 要打印我们的模型初始化后的结果，首先要把 Qwen 模型中相关的结果打印出来，这样才方便对比验证初始化是否符合预期
 
 **实现对照:**
 ```python
@@ -97,15 +97,6 @@ inputs = tokenizer.batch_encode_plus(texts, padding=True, truncation=True, retur
 ### 2.2 特征表征对比的数学严格性
 
 **核心验证逻辑:**
-```python
-causal_features = causal_outputs['features']  # [B, S, H]
-qwen_last_hidden = qwen_outputs.hidden_states[-1]  # [B, S, H]
-
-features_identical = torch.allclose(causal_features, qwen_last_hidden, atol=1e-6)
-```
-
-**数学正确性分析:**
-- **✅ 阈值设置合理**: `atol=1e-6` 考虑了浮点精度误差
 - **✅ 比较对象正确**: 都是最后一层的隐藏状态
 - **✅ 预期结果明确**: 应该完全一致，因为使用相同的 Qwen backbone
 
@@ -115,22 +106,17 @@ features_identical = torch.allclose(causal_features, qwen_last_hidden, atol=1e-6
 
 **实现策略:**
 ```python
-# 转换为概率分布进行对比
-causal_probs = F.softmax(causal_logits_like, dim=-1)
-qwen_probs = F.softmax(qwen_logits, dim=-1)
-
-print_tensor_comparison(causal_probs, qwen_probs, ...)
+# 使用 scores 而不是概率分布对比， 这才是知识传输的核心指标。
+CausalQwen_Scores = ....
+Qwen_Scores = ...
+print_tensor_comparison(CausalQwen_Scores, Qwen_Scores, ...)
 ```
 
 **统计学评估:**
-- **✅ 归一化正确**: 使用 `softmax` 确保概率分布的数学性质
-- **✅ 对比维度完整**: 包括均值、标准差、余弦相似度等
-- **❓ 需要验证**: `causal_logits_like` 使用 `cls_loc` 是否合适？
+- **✅ 归一化正确**: 初始化以后，使用 `softmax` 确保概率分布的相似度很大（CausalQwen 比 Qwen 多一个 <NUM> 词汇）
 
-**重要澄清:** 关于概率计算方式的根本差异
 
-**⚠️ 评论回应:** 用户的担忧完全正确！这里需要明确澄清两个模型的概率计算方式存在根本差异：
-
+值得注意的是：
 **Qwen 的概率计算 (标准 Softmax):**
 $$P_{\text{Qwen}}(k|x) = \frac{\exp(S_k^{\text{Qwen}})}{\sum_{j=1}^{K} \exp(S_j^{\text{Qwen}})}$$
 
@@ -143,7 +129,7 @@ $$P_{\text{CausalQwen}}(k|x) = P(S_k > \text{threshold}) = \frac{1}{2} + \frac{1
 
 **验证策略修正:** 应该重点比较 `cls_loc` 参数本身，而不是转换后的概率分布，因为概率计算机制完全不同。
 
-**数学验证重点:** 验证在相同特征输入下，`cls_loc` 参数是否接近 Qwen 的 logits，这才是知识传输的核心指标。
+**数学验证重点:** 验证在相同特征输入下，`cls_loc` 参数是否接近 Qwen 的 logits，
 
 ---
 
@@ -170,8 +156,8 @@ qwen_lm_weight = qwen_model.lm_head.weight.data
 - **CausalQwen**: $W_{\text{CausalQwen}} \in \mathbb{R}^{(K+1) \times H}$ (K+1 = 151666, 新增 `<NUM>` token)
 
 **知识传输的数学过程:**
-$$W_{\text{CausalQwen}}[:-1, :] = W_{\text{Qwen}} \quad \text{(前K行完全继承)}$$
-$$W_{\text{CausalQwen}}[-1, :] = \text{special\_init}(<\text{NUM}>) \quad \text{(最后一行特殊初始化)}$$
+$$W_{\text{CausalQwen}}[:-1, :] = W_{\text{Qwen}}, b_{\text{CausalQwen}}[:-1] = b_{\text{Qwen}} \quad \text{(前K行完全继承)}$$
+$$W_{\text{CausalQwen}}[-1, :] = \text{special\_init}(<\text{NUM}>)\quad \text{(最后一行特殊初始化)}$$
 
 **修正后的完整知识传输策略:**
 
@@ -448,185 +434,3 @@ graph TD
     F -->|否| G[检查ActionNetwork实现]
     F -->|是| H[验证通过 ✅]
 ```
-
-### 9.3 脚本扩展建议
-
-**可能的功能扩展:**
-1. **批量测试**: 支持更多样本的批量对比
-2. **可视化输出**: 生成对比图表和热力图
-3. **自动化判断**: 基于阈值的自动化验证结果判断
-4. **性能基准**: 添加前向传播时间对比
-
----
-
-## 10. 总结与验证检查清单
-
-### 10.1 设计目标达成度评估
-
-**用户原始需求达成情况:**
-- ✅ **打印关键信息**: 全面覆盖模型对比信息
-- ✅ **便于对比验证**: 直观的对比格式和量化指标
-- ✅ **验证初始化效果**: 重点关注知识传输验证
-
-**技术实现质量:**
-- ✅ **代码可读性**: 清晰的模块化设计
-- ✅ **功能完整性**: 涵盖所有关键对比维度
-- ✅ **输出友好性**: 层次化、易理解的输出格式
-
-### 10.2 验证检查清单
-
-**脚本质量验证清单:**
-
-**📋 功能性验证:**
-- [x] 脚本能够成功运行不报错
-- [x] 输出信息完整且格式正确
-- [x] 特征高度相似验证通过 (余弦相似度0.988)
-- [x] 权重继承分析有效 (3/3检查通过)
-- [x] 概率分布对比合理 (数值感知生效)
-
-**📋 设计合理性:**
-- [x] 对比优先级符合用户需求 (前向传播为主)
-- [x] 统计指标选择恰当 (余弦相似度、MSE等)
-- [x] 边界情况处理充分 (权重路径检测、偏置处理)
-- [x] 输出信息对调试有帮助 (详细的数值对比)
-
-**📋 技术正确性:**
-- [x] 数学计算准确无误 (统计指标计算正确)
-- [x] 张量操作高效合理 (矢量化操作)
-- [x] 数据类型处理正确 (浮点精度考虑)
-- [x] 内存使用控制得当 (no_grad, CPU运行)
-
-**📋 可维护性:**
-- [x] 代码结构清晰 (模块化函数设计)
-- [x] 函数职责单一 (每个函数专注特定对比)
-- [x] 注释充分明确 (设计意图说明)
-- [x] 易于扩展和修改 (灵活的权重访问逻辑)
-
----
-
-## 11. 🚨 重大设计修正：从FIRST PRINCIPLES到完整知识传输
-
-### 11.1 设计问题的发现
-
-**用户洞察:**
-1. **恒等映射精确性**: 如果 $W_{\text{loc}} = I$ 且 $b_{\text{loc}} = 0$，应该是精确等于而非约等于
-2. **知识传输完整性**: Qwen的偏置也是学到的知识，应该一起继承
-
-**根本问题**: FIRST PRINCIPLES设计（所有偏置为0）与完整知识传输存在冲突
-
-### 11.2 修正后的实现方案
-
-**需要修改的代码部分:**
-
-1. **ActionNetwork初始化** (`src/models/causal_lm.py`):
-```python
-# 修改前：只继承权重
-def init_weights(self, ...):
-    self.classification_head.causal_linear.weight.data[:-1, :] = qwen_lm_weight
-    self.classification_head.causal_linear.bias.data.fill_(0)  # ❌ 错误
-
-# 修改后：完整继承
-def init_weights(self, ...):
-    self.classification_head.causal_linear.weight.data[:-1, :] = qwen_lm_weight
-    if qwen_lm_bias is not None:
-        self.classification_head.causal_linear.bias.data[:-1] = qwen_lm_bias  # ✅ 正确
-    # 只有<NUM> token需要特殊初始化
-```
-
-2. **脚本验证逻辑** (`scripts/compare_causal_vs_qwen.py`):
-```python
-# 修改验证标准：期望完全一致而非高相似度
-features_identical = torch.allclose(causal_features, qwen_last_hidden, atol=1e-6)
-assert features_identical, "特征应该完全一致"
-
-# 验证分类得分的完全一致性（前K个token）
-cls_scores_identical = torch.allclose(
-    causal_outputs['cls_loc'][:-1], qwen_outputs.logits[:-1], atol=1e-6
-)
-```
-
-### 11.3 设计影响分析
-
-**数学一致性提升:**
-- **之前**: $S_k^{\text{CausalQwen}} \approx S_k^{\text{Qwen}} - b_{\text{Qwen}}[k]$ (有偏差)
-- **现在**: $S_k^{\text{CausalQwen}} = S_k^{\text{Qwen}}$ (完全一致)
-
-**知识保持程度:**
-- **之前**: 只保持权重信息，丢失偏置知识
-- **现在**: 完整保持Qwen的学到知识
-
-**训练稳定性:**
-- **之前**: 可能因为初始偏差影响训练稳定性
-- **现在**: 从Qwen的最优点开始，训练更稳定
-
----
-
-## 12. 实际运行结果验证 (2025年6月11日)
-
-### 11.1 运行结果总结
-
-**✅ 完全成功的验证项:**
-- **权重共享**: 291/291 键完全匹配，3/3关键权重检查通过
-- **架构扩展**: 147M参数增量，序列到序列输出形状正确
-- **因果表征**: causal_scale均值9.974182 ≈ exp(2.3)，初始化完美
-
-**✅ 符合设计预期的结果:**
-- **特征相似度**: 0.987898 (高度相似，差异来自NumAwareFeatureNetwork)
-- **数值感知**: <NUM>位置概率显著差异 (0.003909 vs 0.027292)
-- **FIRST PRINCIPLES**: 所有偏置为0，移除魔法数字初始化
-
-### 11.2 关键发现分析
-
-**1. 数值感知机制验证 ✅**
-```
-位置4 (<NUM>, 99.99): CausalQwen概率=0.003909, Qwen概率=0.027292
-差异=0.023383，证明NumAwareFeatureNetwork正确处理数值信息
-```
-
-**2. 特征继承验证 ✅**
-```
-余弦相似度: 0.987898 (接近完美)
-最大差异: 98.23 (主要在数值处理位置)
-均值差异: 0.0105 (微小且合理)
-```
-
-**3. 因果表征初始化验证 ✅**
-```
-causal_scale统计: 均值=9.974, 标准差=0.000 (所有位置一致)
-理论预期: exp(2.3) ≈ 10.0
-实际结果: 完美匹配设计目标
-```
-
-### 11.3 验证结论
-
-**🎯 核心结论: 知识传输初始化完全符合预期！**
-
-1. **无损知识继承**: CausalQwen成功保持Qwen的语言建模能力
-2. **功能扩展成功**: 数值感知和因果推理功能正确集成
-3. **数学一致性**: 柯西分布框架和FIRST PRINCIPLES初始化理论正确
-4. **架构重构成功**: 序列到序列推断-行动范式完美实现
-
-**📊 量化证据:**
-- 特征相似度: 98.8% (证明语言理解能力保持)
-- 权重共享: 100% (证明知识传输机制正确)  
-- 数值处理: 显著差异 (证明扩展功能生效)
-- 初始化精度: 99.7% (证明数学框架严格)
-
----
-
-## 结论
-
-`scripts/compare_causal_vs_qwen.py` 脚本的设计完全符合用户需求，技术实现正确，代码质量良好。该脚本能够有效验证 CausalQwen 模型的知识传输初始化效果，为用户提供了一个可靠的对比分析工具。
-
-**核心优势:**
-1. **对比维度全面**: 从特征到权重，从架构到性能
-2. **验证逻辑严密**: 基于数学原理的定量对比
-3. **输出信息丰富**: 既有宏观统计又有微观细节
-4. **用户体验友好**: 清晰的格式化输出和结论总结
-
-**建议改进:**
-1. 考虑添加更多的统计显著性检验
-2. 可扩展支持可视化输出
-3. 增加更全面的异常处理机制
-
-该脚本为 CausalQwen 项目的质量保证提供了重要支撑，是验证架构重构成功的关键工具。 

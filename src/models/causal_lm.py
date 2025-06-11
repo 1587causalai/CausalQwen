@@ -41,8 +41,13 @@ class CausalLMConfig:
     
     def __post_init__(self):
         if self.num_token_id is None:
-            # Set default NUM token ID to vocab_size (assuming it's added to vocab)
-            self.num_token_id = self.vocab_size
+            # Don't assume NUM token ID equals vocab_size!
+            # This should be set explicitly when creating the config
+            # For backwards compatibility, we can use vocab_size - 1 as default
+            # but ideally this should be passed explicitly from tokenizer
+            print("Warning: num_token_id not specified in CausalLMConfig")
+            print("This should be set from tokenizer.num_token_id for correct behavior")
+            self.num_token_id = self.vocab_size - 1  # Assume <NUM> is the last token
 
 
 class CausalLanguageModel(nn.Module):
@@ -133,14 +138,14 @@ class CausalLanguageModel(nn.Module):
             ovr_threshold=config.ovr_threshold if config is not None else 10.0
         )
         
-    def init_weights(self, num_target_median, num_target_scale):
+    def init_weights(self, num_target_median=None, num_target_scale=None):
         """
         Initialize the weights of abduction and action networks using the
         knowledge transfer strategy.
         
         Args:
-            num_target_median (float): The median of the numerical target values (Cauchy location parameter).
-            num_target_scale (float): The scale parameter for numerical targets (Cauchy scale parameter).
+            num_target_median (float, optional): Legacy parameter, no longer used.
+            num_target_scale (float, optional): Legacy parameter, no longer used.
         """
         print("Applying knowledge transfer initialization...")
         
@@ -171,11 +176,11 @@ class CausalLanguageModel(nn.Module):
         if qwen_lm_head is not None:
             self.action_network.init_weights(
                 qwen_lm_head=qwen_lm_head,
-                num_target_median=num_target_median,
-                num_target_scale=num_target_scale,
+                num_target_median=0.0,  # No longer used, passing dummy value
+                num_target_scale=1.0,   # No longer used, passing dummy value
                 num_token_id=self.num_token_id
             )
-            print("  - Action network initialized from Qwen's lm_head and data stats.")
+            print("  - Action network initialized from Qwen's lm_head (no data dependency).")
         else:
             print("  - WARNING: Action network not initialized (Qwen lm_head not available).")
 

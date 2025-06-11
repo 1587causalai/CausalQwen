@@ -298,21 +298,39 @@ class QwenTokenizerWrapper:
                 print(f"Loading Qwen tokenizer from {expanded_path}")
                 self.tokenizer = AutoTokenizer.from_pretrained(expanded_path, trust_remote_code=True)
                 
-                # Add the <NUM> token if it doesn't exist
-                if self.num_token not in self.tokenizer.get_vocab():
-                    self.tokenizer.add_special_tokens({'additional_special_tokens': [self.num_token]})
+                # Record original vocab size
+                original_vocab_size = len(self.tokenizer)
+                print(f"Original Qwen vocab size: {original_vocab_size}")
                 
-                # Add the <NUM> token to the vocabulary
-                self.tokenizer.add_tokens([self.num_token])
-                # The new vocab size after adding token
+                # Add the <NUM> token ONLY if it doesn't exist
+                if self.num_token not in self.tokenizer.get_vocab():
+                    # Add exactly one new token
+                    num_new_tokens = self.tokenizer.add_tokens([self.num_token])
+                    print(f"Added {num_new_tokens} new token(s): {self.num_token}")
+                else:
+                    print(f"{self.num_token} token already exists in vocabulary")
+                
+                # Get final vocab size and token ID
                 self.vocab_size = len(self.tokenizer)
-                # Get the ID for the new token
                 self.num_token_id = self.tokenizer.convert_tokens_to_ids(self.num_token)
+                
+                # Verify the addition was successful
+                expected_vocab_size = original_vocab_size + (1 if self.num_token not in self.tokenizer.get_vocab() else 0)
+                print(f"Final vocab size: {self.vocab_size}")
+                print(f"Expected vocab size: {original_vocab_size} + 1 = {original_vocab_size + 1}")
+                print(f"<NUM> token ID: {self.num_token_id}")
+                
+                if self.vocab_size == original_vocab_size + 1:
+                    print("✅ Vocabulary size correctly increased by 1")
+                elif self.vocab_size == original_vocab_size:
+                    print("⚠️ Vocabulary size unchanged (token already existed)")
+                else:
+                    print(f"❌ Unexpected vocab size change: {original_vocab_size} → {self.vocab_size}")
+                
                 # Expose pad_token_id for convenience
                 self.pad_token_id = self.tokenizer.pad_token_id
                 
                 print(f"Successfully loaded Qwen tokenizer with vocab size {self.vocab_size}")
-                print(f"<NUM> token ID: {self.num_token_id}")
                 
             except Exception as e:
                 print(f"Failed to load Qwen tokenizer: {e}")

@@ -196,20 +196,15 @@ class ActionNetwork(nn.Module):
 
     def init_weights(self, qwen_lm_head, num_target_median, num_target_scale, num_token_id):
         """
-        Initialize weights based on pretrained Qwen model using first principles.
-        
-        FIRST PRINCIPLES APPROACH:
-        - All uncertainty should originate from AbductionNetwork's scale_U
-        - ActionNetwork should not impose artificial biases or preferences
-        - Let the model learn naturally from data without predetermined biases
+        Initialize weights based on pretrained Qwen model using knowledge transfer.
         
         Args:
             qwen_lm_head (nn.Linear): The pretrained language model head from Qwen.
-            num_target_median (float): The median of the numerical target values (ignored for pure approach).
-            num_target_scale (float): The scale parameter for numerical targets (ignored for pure approach).
+            num_target_median (float): The median of the numerical target values.
+            num_target_scale (float): The scale parameter for numerical targets.
             num_token_id (int): The token ID for the <NUM> token.
         """
-        print("  🧮 Applying FIRST PRINCIPLES initialization (removing magic number biases)...")
+        print("  🧮 Applying knowledge transfer initialization...")
         
         # 1. Initialize Classification Head
         cls_head = self.classification_head.causal_linear
@@ -218,55 +213,51 @@ class ActionNetwork(nn.Module):
         qwen_vocab_size = qwen_lm_head.weight.shape[0]
         our_vocab_size = self.vocab_size  # This includes our added <NUM> token
         
-        # The overlapping vocabulary size (excluding our <NUM> token)
-        overlapping_vocab_size = min(qwen_vocab_size, our_vocab_size - 1)
-        
         print(f"    - Qwen vocab size: {qwen_vocab_size}, Our vocab size: {our_vocab_size}")
-        print(f"    - Copying weights for {overlapping_vocab_size} overlapping tokens")
 
-        # Copy weights for overlapping tokens (knowledge transfer from Qwen)
-        cls_head.weight.data[:overlapping_vocab_size, :].copy_(
-            qwen_lm_head.weight.data[:overlapping_vocab_size, :]
+        # Copy all weights directly from Qwen model (including pre-initialized reserved tokens)
+        # Since <NUM> token uses reserved token position, it already has proper initialization
+        copy_size = min(qwen_vocab_size, our_vocab_size)
+        cls_head.weight.data[:copy_size, :].copy_(
+            qwen_lm_head.weight.data[:copy_size, :]
         )
+        print(f"    - Copied weights for {copy_size} tokens from Qwen model")
+        print(f"    - <NUM> token uses pre-initialized reserved token weights")
         
-        # FIRST PRINCIPLE: All biases should be ZERO initially 
-        # No artificial preferences or magic numbers
+        # Initialize classification bias based on Qwen's bias (if it exists)
         if cls_head.bias is not None:
-            cls_head.bias.data.fill_(0.0)  # Pure, unbiased initial state
-        
-        # Initialize any remaining tokens to zero (neutral initialization)
-        if overlapping_vocab_size < our_vocab_size - 1:
-            cls_head.weight.data[overlapping_vocab_size:our_vocab_size-1, :].fill_(0)
-        
-        # <NUM> token initialization: NO SPECIAL TREATMENT
-        # Let it compete fairly with other tokens based on learned patterns
-        cls_head.weight.data[num_token_id, :].fill_(0)  # Neutral start
-        
-        print(f"    - All classification biases initialized to 0.0 (first principles)")
-        print(f"    - <NUM> token (ID: {num_token_id}) gets NO special bias treatment")
-        print(f"    - Uncertainty will be expressed purely through AbductionNetwork's scale_U")
+            if hasattr(qwen_lm_head, 'bias') and qwen_lm_head.bias is not None:
+                # Copy existing bias for overlapping tokens
+                qwen_bias_size = qwen_lm_head.bias.shape[0]
+                copy_size = min(qwen_bias_size, our_vocab_size)
+                cls_head.bias.data[:copy_size].copy_(qwen_lm_head.bias.data[:copy_size])
+                
+                # Initialize remaining bias to zero
+                if copy_size < our_vocab_size:
+                    cls_head.bias.data[copy_size:].zero_()
+                print(f"    - Copied bias for {copy_size} tokens from Qwen")
+            else:
+                # Qwen has no bias, initialize all to zero
+                cls_head.bias.data.zero_()
+                print(f"    - Initialized all biases to 0 (Qwen has no bias)")
 
-        # 2. Initialize Regression Head - PURE APPROACH
+        # 2. Initialize Regression Head 
         reg_head = self.regression_head.causal_linear
         
         with torch.no_grad():
-            # FIRST PRINCIPLE: Minimal weight initialization
-            # Small random weights allow learning without imposing strong priors
-            nn.init.xavier_uniform_(reg_head.weight, gain=0.01)  # Even smaller gain for purity
+            # Small random weights for regression
+            nn.init.xavier_uniform_(reg_head.weight, gain=0.01)
             
-            # FIRST PRINCIPLE: Zero bias - no predetermined numerical preference
+            # Initialize bias to zero (no data-dependent initialization)
             if reg_head.bias is not None:
-                reg_head.bias.data.fill_(0.0)  # Pure approach, no data-dependent magic number
+                reg_head.bias.data.zero_()
 
         print(f"    - Regression head: weight Xavier(gain=0.01), bias = 0.0")
-        print(f"    - NO data-dependent bias (50.0 removed), letting model learn naturally")
-        print(f"    - This eliminates artificial priors and potential local optima")
         
-        print("  ✅ FIRST PRINCIPLES initialization complete:")
-        print("    * All uncertainty originates from AbductionNetwork")
-        print("    * No magic number biases (8.0, 50.0 removed)")  
-        print("    * Model starts from truly neutral, unbiased state")
-        print("    * Pure mathematical consistency with Cauchy framework")
+        print("  ✅ Knowledge transfer initialization complete:")
+        print("    * Classification head inherits Qwen's language modeling knowledge")
+        print("    * <NUM> token uses pre-initialized reserved token weights")  
+        print("    * Regression head initialized with zero bias (no data dependency)")
 
     def forward(self, causal_loc, causal_scale):
         """
