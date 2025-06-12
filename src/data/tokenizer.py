@@ -451,6 +451,98 @@ class QwenTokenizerWrapper:
         
         return output
     
+    def _extract_and_replace_numbers(self, text):
+        """
+        Extract numerical values from text and replace them with <NUM> tokens.
+        
+        这个方法需要修复，确保能正确提取数值。
+        """
+        import re
+        
+        # 更全面的数字正则表达式
+        # 匹配整数、小数、负数、百分数等
+        number_pattern = r'-?\d+\.?\d*%?'
+        
+        numerical_values = []
+        modified_text = text
+        
+        # 查找所有数字
+        matches = list(re.finditer(number_pattern, text))
+        
+        # 从后往前替换，避免位置偏移
+        for match in reversed(matches):
+            number_str = match.group()
+            start, end = match.span()
+            
+            # 解析数值
+            try:
+                # 处理百分号
+                if number_str.endswith('%'):
+                    value = float(number_str[:-1]) / 100.0
+                else:
+                    value = float(number_str)
+                
+                # 替换为 <NUM>
+                modified_text = modified_text[:start] + '<NUM>' + modified_text[end:]
+                # 记录数值（注意要倒序插入）
+                numerical_values.insert(0, value)
+            except ValueError:
+                # 如果解析失败，跳过
+                continue
+        
+        return modified_text, numerical_values
+    
+    def encode_plus(self, text, return_tensors=None, padding=False, truncation=False, 
+                   max_length=None, return_attention_mask=True, **kwargs):
+        """
+        增强的编码方法，确保正确处理数值。
+        """
+        # 提取和替换数字
+        modified_text, numerical_values = self._extract_and_replace_numbers(text)
+        
+        # 调试输出
+        if numerical_values:
+            print(f"[DEBUG] 原文: '{text}'")
+            print(f"[DEBUG] 修改后: '{modified_text}'")
+            print(f"[DEBUG] 提取的数值: {numerical_values}")
+        
+        # 使用修改后的文本进行分词
+        encoding = self.tokenizer.encode_plus(
+            modified_text,
+            return_tensors=return_tensors,
+            padding=padding,
+            truncation=truncation,
+            max_length=max_length,
+            return_attention_mask=return_attention_mask,
+            **kwargs
+        )
+        
+        # 创建数值向量
+        if return_tensors == 'pt':
+            seq_len = encoding['input_ids'].shape[-1]
+            numerical_values_tensor = torch.zeros(seq_len, dtype=torch.float)
+            
+            # 找到 <NUM> token 的位置并填充数值
+            input_ids = encoding['input_ids'].squeeze(0)  # 假设 batch_size=1
+            num_idx = 0
+            for i, token_id in enumerate(input_ids):
+                if token_id == self.num_token_id and num_idx < len(numerical_values):
+                    numerical_values_tensor[i] = numerical_values[num_idx]
+                    num_idx += 1
+            
+            encoding['numerical_values'] = numerical_values_tensor.unsqueeze(0)  # 添加 batch 维度
+        else:
+            # 非张量返回
+            encoding['numerical_values'] = [0.0] * len(encoding['input_ids'])
+            # 填充数值
+            num_idx = 0
+            for i, token_id in enumerate(encoding['input_ids']):
+                if token_id == self.num_token_id and num_idx < len(numerical_values):
+                    encoding['numerical_values'][i] = numerical_values[num_idx]
+                    num_idx += 1
+        
+        return encoding
+    
     def batch_encode_plus(
         self, 
         texts: List[str], 

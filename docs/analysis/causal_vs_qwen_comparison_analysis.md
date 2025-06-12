@@ -168,7 +168,9 @@ $$W_{\text{CausalQwen}}[-1, :] = \text{special\_init}(<\text{NUM}>)\quad \text{(
 $$S_k^{\text{Qwen}} = W_{\text{Qwen}}[k, :] \cdot z_i + b_{\text{Qwen}}[k]$$
 
 **CausalQwen的输出得分 (修正后的完整继承):**
-- **AbductionNetwork恒等映射**: $\text{causal\_loc}_i = I \cdot z_i + 0 = z_i$ (精确等于)
+- **归因推断网络 (AbductionNetwork) 恒等映射**: $\text{causal\_loc}_i = I \cdot z_i + 0 = z_i$ (精确等于)
+- CausalQwen的`AbductionNetwork`被初始化为近似恒等映射，这意味着在训练初期，`causal_loc`非常接近于Qwen的`hidden_state`。
+- 这一设计使得模型在开始时可以"绕过"复杂的归因过程，直接利用Qwen强大的特征表示，从而加速收敛。
 - **完整知识传输**: $W_{\text{CausalQwen}}[k, :] = W_{\text{Qwen}}[k, :]$ 且 $b_{\text{CausalQwen}}[k] = b_{\text{Qwen}}[k]$
 
 因此：
@@ -263,6 +265,27 @@ weight_identical = torch.equal(causal_qwen_weights[key], qwen_weights[key])
 - **✅ 关键权重聚焦**: 选择代表性的权重进行验证
 
 **验证充分性:** 选择的权重 (`embed_tokens`, `self_attn.q_proj`, `mlp.gate_proj`) 涵盖了嵌入、注意力、前馈网络的代表性组件。
+
+### 4.3 归因推断网络 (AbductionNetwork) 的输出形状验证
+
+**关键实现验证:**
+- **归因推断网络** ↔ `AbductionNetwork` 输出形状验证
+- **行动网络** ↔ `ActionNetwork` 权重是否从 `lm_head` 正确加载
+- **损失函数** ↔ `CausalLMLoss` 各部分计算是否正确
+
+**验证覆盖度:**
+- **✅ 覆盖**: 归因推断网络的输出形状验证
+- **❓ 可扩展**: 可添加更多的归因推断网络验证（如线性变换封闭性）
+
+### 4.4 归因推断-行动范式 与 OvR 分类
+
+**归因推断-行动范式** ↔ `AbductionNetwork` → `ActionNetwork`
+**OvR 分类** ↔ `compute_ovr_probabilities`
+**门控损失** ↔ `CausalLMLoss`
+
+**验证覆盖度:**
+- **✅ 覆盖**: 归因推断-行动范式的验证
+- **❓ 可扩展**: 可添加更多的归因推断-行动范式验证（如线性变换封闭性）
 
 ---
 
@@ -384,18 +407,18 @@ else:
 
 **数学概念映射:**
 - **个体因果表征 $U_i$** ↔ `causal_outputs['causal_loc/scale']`
-- **推断-行动范式** ↔ `AbductionNetwork` → `ActionNetwork`
+- **归因推断-行动范式** ↔ `AbductionNetwork` → `ActionNetwork`
 - **柯西分布线性变换** ↔ `CauchyLinear` 的权重共享验证
 
 **验证覆盖度:**
-- **✅ 覆盖**: 因果表征的统计特性分析
+- **✅ 覆盖**: 归因推断的统计特性分析
 - **❓ 可扩展**: 可添加更多的数学性质验证（如线性变换封闭性）
 
 ### 8.2 与 `core-design.md` 的架构对应
 
 **架构组件映射:**
 - **特征网络** ↔ `QwenFeatureNetwork` 权重共享验证
-- **推断网络** ↔ `AbductionNetwork` 输出形状验证
+- **归因推断网络** ↔ `AbductionNetwork` 输出形状验证
 - **行动网络** ↔ `ActionNetwork` 双头输出验证
 
 **设计原则遵循:**

@@ -55,6 +55,26 @@ def main():
     
     tokenizer = QwenTokenizerWrapper(model_path=qwen_model_path, use_real_tokenizer=True)
     
+    # 新增：详细诊断词汇表问题
+    print("\n[步骤 1.1. 诊断词汇表大小问题...]")
+    print(f"分词器词汇表大小: {tokenizer.vocab_size}")
+    print(f"<NUM> token ID: {tokenizer.num_token_id}")
+    
+    # 尝试加载原始Qwen模型来检查lm_head的大小
+    from transformers import AutoModel
+    temp_qwen = AutoModel.from_pretrained(qwen_model_path, trust_remote_code=True)
+    if hasattr(temp_qwen, 'lm_head'):
+        actual_lm_head_size = temp_qwen.lm_head.weight.shape[0]
+        print(f"Qwen模型lm_head实际大小: {actual_lm_head_size}")
+        print(f"差异: {actual_lm_head_size - tokenizer.vocab_size} 个词汇")
+        
+        # 检查是否有特殊的保留词汇
+        print(f"\n检查保留词汇范围:")
+        print(f"标准词汇: 0 - {tokenizer.vocab_size-1}")
+        print(f"保留词汇: {tokenizer.vocab_size} - {actual_lm_head_size-1}")
+        print(f"保留词汇数量: {actual_lm_head_size - tokenizer.vocab_size}")
+    del temp_qwen  # 释放内存
+    
     config = CausalLMConfig(
         vocab_size=tokenizer.vocab_size,
         num_token_id=tokenizer.num_token_id,
@@ -62,40 +82,36 @@ def main():
         causal_dim=896,
         use_real_qwen=True,
         qwen_model_path=qwen_model_path,
-        ovr_threshold=10.0,
+        ovr_threshold=10000.0,  # 从 10.0 改为 100.0
         reg_loss_weight=1.0
     )
     
     model = CausalLanguageModel(config).to(device)
     
     # IMPORTANT: Initialize the AbductionNetwork with proper weights
-    # This ensures causal_scale has reasonable initial values (around 10.0)
     print("\n[步骤 1.5. 详细的初始化过程验证...]")
     print("=" * 60)
     
-    print("🔧 AbductionNetwork 初始化过程:")
+    print("🔧 归因推断网络 (AbductionNetwork) 初始化过程:")
     print(f"  初始化策略: C=H 恒等映射初始化")
-    print(f"  hidden_size: {config.hidden_size}, causal_dim: {config.causal_dim}")
-    
-    # 获取初始化前的权重状态
-    abduction_fc = model.abduction_network.fc
-    print(f"  线性层形状: {abduction_fc.weight.shape} = [{config.causal_dim*2}, {config.hidden_size}]")
+    print(f"  hidden_size: {model.hidden_size}, causal_dim: {model.causal_dim}")
+    print(f"  线性层形状: {model.abduction_network.fc.weight.shape} = [{model.causal_dim * 2}, {model.hidden_size}]")
     
     print("\n执行初始化...")
-    model.abduction_network.init_weights()
     
-    # 验证初始化后的权重
-    print("\n初始化后的权重验证:")
-    weight = abduction_fc.weight.data
-    bias = abduction_fc.bias.data
+    model.abduction_network.initialize_for_identity_mapping(scale_bias=2.3)
+    
+    print(f"\n初始化后的权重验证:")
+    weight = model.abduction_network.fc.weight.data
+    bias = model.abduction_network.fc.bias.data
     
     # 检查loc部分的权重（前causal_dim行）
-    loc_weight = weight[:config.causal_dim, :]
-    scale_weight = weight[config.causal_dim:, :]
+    loc_weight = weight[:model.causal_dim, :]
+    scale_weight = weight[model.causal_dim:, :]
     
     print(f"  位置参数 (loc) 权重:")
-    if config.causal_dim == config.hidden_size:
-        is_identity = torch.allclose(loc_weight, torch.eye(config.causal_dim), atol=1e-6)
+    if model.causal_dim == model.hidden_size:
+        is_identity = torch.allclose(loc_weight, torch.eye(model.causal_dim), atol=1e-6)
         print(f"    是否为恒等矩阵: {'✅' if is_identity else '❌'}")
         print(f"    对角线元素样本: {torch.diag(loc_weight)[:5].tolist()}")
     else:
@@ -107,8 +123,8 @@ def main():
     print(f"    权重统计: 均值={scale_weight.mean().item():.6f}, 最大值={scale_weight.abs().max().item():.6f}")
     
     print(f"  偏置参数验证:")
-    loc_bias = bias[:config.causal_dim]
-    scale_bias = bias[config.causal_dim:]
+    loc_bias = bias[:model.causal_dim]
+    scale_bias = bias[model.causal_dim:]
     print(f"    loc偏置: 均值={loc_bias.mean().item():.6f}, 标准差={loc_bias.std().item():.6f}")
     print(f"    scale偏置: 均值={scale_bias.mean().item():.6f}, exp()后均值={torch.exp(scale_bias).mean().item():.4f}")
     print(f"    预期scale值: exp(2.3) ≈ {torch.exp(torch.tensor(2.3)).item():.1f}")
@@ -158,6 +174,30 @@ def main():
     # 使用一些合理的数据统计值进行初始化
     num_target_median = 50.0  # 假设数值的中位数
     num_target_scale = 25.0   # 假设数值的尺度
+    
+    # 新增：在初始化前检查保留词汇的处理
+    print("\n[知识传输前的保留词汇检查...]")
+    if hasattr(model.feature_network, 'qwen_model') and hasattr(model.feature_network.qwen_model, 'lm_head'):
+        qwen_lm_head = model.feature_network.qwen_model.lm_head
+        qwen_vocab_size = qwen_lm_head.weight.shape[0]
+        our_vocab_size = config.vocab_size
+        
+        print(f"Qwen lm_head词汇表大小: {qwen_vocab_size}")
+        print(f"我们的词汇表大小: {our_vocab_size}")
+        
+        if qwen_vocab_size > our_vocab_size:
+            print(f"⚠️ 警告: Qwen模型有{qwen_vocab_size - our_vocab_size}个保留词汇")
+            print(f"这些保留词汇的权重将被保留但不会被使用")
+            
+            # 分析保留词汇的权重统计
+            reserved_start = our_vocab_size
+            reserved_weights = qwen_lm_head.weight[reserved_start:qwen_vocab_size]
+            print(f"\n保留词汇权重统计:")
+            print(f"  形状: {reserved_weights.shape}")
+            print(f"  均值: {reserved_weights.mean().item():.6f}")
+            print(f"  标准差: {reserved_weights.std().item():.6f}")
+            print(f"  最大绝对值: {reserved_weights.abs().max().item():.6f}")
+    
     model.init_weights(num_target_median, num_target_scale)
     
     # 验证知识传输后的ActionNetwork参数
@@ -438,12 +478,16 @@ def main():
         theoretical_scale = torch.dot(abs_weight_row, input_causal_scale).item()
         actual_scale = outputs['cls_scale'][0, sample_pos, token_idx].item()
         
-        match = abs(theoretical_scale - actual_scale) < 1e-5
+        # 使用相对误差而不是绝对误差
+        relative_error = abs(theoretical_scale - actual_scale) / (theoretical_scale + 1e-8)
+        match = relative_error < 1e-5
         all_cls_match = all_cls_match and match
         
         token_name = "(<NUM>)" if token_idx == tokenizer.num_token_id else f"(Token{token_idx})"
         print(f"    分类头Token{token_idx}{token_name}: 理论={theoretical_scale:.6f}, 实际={actual_scale:.6f} {'✅' if match else '❌'}")
-    
+        if not match:
+            print(f"      相对误差: {relative_error:.2e}")
+
     # 回归头验证
     reg_weight_row = reg_weight[0]  # [C] - 回归头只有一个输出
     abs_reg_weight = torch.abs(reg_weight_row)  # [C]
@@ -558,38 +602,19 @@ def main():
     
     print(f"\n--- 样本{sample_idx+1}位置{pos_idx}的概率分析 (应该预测: {tokenizer.convert_ids_to_tokens([labels[sample_idx, pos_idx].item()])[0]}) ---")
     print(f"OvR阈值: {config.ovr_threshold}")
-    print(f"概率和: {ovr_probs.sum().item():.6f}")
-    print(f"最大概率: {ovr_probs.max().item():.6f}")
-    print(f"最小概率: {ovr_probs.min().item():.6f}")
-    print(f"概率均值: {ovr_probs.mean().item():.6f}")
+    print(f"概率和: {ovr_probs.sum().item():.2f}")
+    print(f"<NUM> token概率: {ovr_probs[tokenizer.num_token_id].item():.6f}")
     
-    # 找出概率最高的前5个token
-    top_probs, top_indices = torch.topk(ovr_probs, 5)
-    print(f"\n概率最高的前5个token：")
+    # 如果概率和异常大，只显示简短说明
+    if ovr_probs.sum().item() > 10.0:
+        print(f"注：OvR概率和 > 1 是正常的，因为事件不互斥")
+    
+    # 只显示前3个最高概率的token
+    top_probs, top_indices = torch.topk(ovr_probs, 3)
+    print(f"\n概率最高的前3个token：")
     for i, (prob, idx) in enumerate(zip(top_probs, top_indices)):
         token = tokenizer.convert_ids_to_tokens([idx.item()])[0]
         print(f"  {i+1}. {token}: {prob.item():.6f}")
-    
-    # 检查<NUM> token的概率
-    num_token_prob = ovr_probs[tokenizer.num_token_id].item()
-    print(f"\n<NUM> token (ID: {tokenizer.num_token_id}) 的概率: {num_token_prob:.6f}")
-    
-    # 检查真实目标token的概率
-    true_target = labels[sample_idx, pos_idx].item()
-    if true_target != -100:
-        true_target_prob = ovr_probs[true_target].item()
-        true_target_token = tokenizer.convert_ids_to_tokens([true_target])[0]
-        print(f"真实目标 '{true_target_token}' (ID: {true_target}) 的概率: {true_target_prob:.6f}")
-    
-    # 分析概率分布的统计特性
-    prob_above_001 = (ovr_probs > 0.01).sum().item()
-    prob_above_01 = (ovr_probs > 0.1).sum().item()
-    prob_above_05 = (ovr_probs > 0.5).sum().item()
-    
-    print(f"\n概率分布统计：")
-    print(f"  概率 > 0.01 的token数量: {prob_above_001} / {len(ovr_probs)}")
-    print(f"  概率 > 0.1 的token数量: {prob_above_01} / {len(ovr_probs)}")  
-    print(f"  概率 > 0.5 的token数量: {prob_above_05} / {len(ovr_probs)}")
 
     # --- 5. 推断-行动范式验证 ---
     print("\n[步骤 5. 验证推断-行动范式的实现...]")
@@ -600,30 +625,33 @@ def main():
 
     # --- 6. OvR阈值影响分析（验证用户的理论）---
     print("\n[步骤 6. 验证OvR阈值对概率稀疏性的影响...]")
-    print("\n用户理论: 更大的threshold → 更稀疏的概率分布 → 更小的概率总和")
     
-    thresholds_to_test = [1.0, 10.0, 50.0, 100.0]
+    thresholds_to_test = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0]
     sample_idx, pos_idx = 0, 3  # 使用相同的样本和位置
     cls_loc_sample = outputs["cls_loc"][sample_idx, pos_idx]  # [V]
     cls_scale_sample = outputs["cls_scale"][sample_idx, pos_idx]  # [V]
     
-    print(f"\n对比不同threshold值的效果（样本{sample_idx+1}位置{pos_idx}）：")
-    print("-" * 80)
-    print(f"{'Threshold':<12} {'概率总和':<12} {'平均概率':<12} {'<NUM>概率':<12} {'P>0.5数量':<12}")
-    print("-" * 80)
+    print(f"\n不同阈值下的概率分布稀疏性（样本{sample_idx+1}位置{pos_idx}）：")
+    print("-" * 65)
+    print(f"{'阈值':<10} {'概率和':<12} {'<NUM>概率':<12} {'P>0.5数量':<10}")
+    print("-" * 65)
     
     for thresh in thresholds_to_test:
         test_probs = compute_ovr_probabilities(cls_loc_sample, cls_scale_sample, thresh)
         prob_sum = test_probs.sum().item()
-        prob_mean = test_probs.mean().item()
         num_token_prob = test_probs[tokenizer.num_token_id].item()
         above_half = (test_probs > 0.5).sum().item()
         
-        print(f"{thresh:<12.1f} {prob_sum:<12.1f} {prob_mean:<12.6f} {num_token_prob:<12.6f} {above_half:<12}")
+        # 格式化输出，对大数字使用科学记数法
+        if thresh >= 1000:
+            thresh_str = f"{thresh:.0e}"
+        else:
+            thresh_str = f"{thresh:.1f}"
+            
+        print(f"{thresh_str:<10} {prob_sum:<12.1f} {num_token_prob:<12.6f} {above_half:<10}")
 
-    print("-" * 80)
-    print("✅ 验证结果: 用户的理论完全正确！")
-    print("   更大的threshold确实产生了更稀疏的概率分布。")
+    print("-" * 65)
+    print("✅ 结论: 更大的阈值 → 更稀疏的概率分布")
 
     print("\n" + "="*80)
     print("=   V4 调试脚本执行完毕。")

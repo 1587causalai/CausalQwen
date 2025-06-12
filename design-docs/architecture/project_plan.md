@@ -6,15 +6,13 @@
 
 ### 核心模块结构
 
-1. **FeatureNetwork（特征网络）**
-   - 职责：将输入序列转换为高维特征表示
-   - 实现：初始阶段使用模拟器（mocker）生成随机特征，后续可替换为真实的Qwen-0.5B主干
-   - 接口：`forward(input_ids) -> feature_representation`
+1. **FeatureNetwork（特征提取网络）**
+   - **功能**: 从原始输入（如文本、表格数据）中提取高维特征表示 `z`。
+   - **实现**: 直接复用预训练的 `Qwen-0.5B` 模型的主干部分。
 
-2. **AbductionNetwork（推断网络）**
-   - 职责：从特征表示推断潜在个体因果表征的概率分布参数
-   - 实现：线性层将特征映射到柯西分布的位置和尺度参数
-   - 接口：`forward(features) -> (loc, scale)`
+2. **归因推断网络（AbductionNetwork）**
+   - **功能**: 将特征 `z` 映射为因果表征 `U` 的分布参数（`loc` 和 `scale`）。
+   - **实现**: 一个简单的线性层，将 `hidden_size` 映射到 `causal_dim * 2`。
 
 3. **ActionNetwork（行动网络）**
    - 职责：从个体因果表征生成分类和回归预测
@@ -38,13 +36,21 @@
 
 ### 数据流设计
 
+```mermaid
+graph TD
+    A[输入序列] --> B{分词器};
+    B --> C[FeatureNetwork<br>(Qwen-0.5B)];
+    C --"特征z"--> D[AbductionNetwork<br>(归因推断)];
+    D --"U的分布参数"--> E((采样U));
+    E --"因果表征u"--> F[ActionNetwork];
+    F --> G{输出};
+    G --> H1[分类结果<br>OvR概率];
+    G --> H2[回归结果<br>数值];
 ```
-输入序列 → 分词器 → FeatureNetwork → AbductionNetwork → 
-                                      ↓
-                              个体因果表征分布
-                                      ↓
-                                 ActionNetwork → 分类预测 + 回归预测
-```
+
+**简化流程**:
+输入序列 → 分词器 → FeatureNetwork → 归因推断网络 (AbductionNetwork) →
+采样 → ActionNetwork → OvR分类/回归 → 损失计算
 
 ### 训练与推理流程
 
@@ -61,73 +67,7 @@
 
 ### 1. 模型组件 (`src/models/`)
 
-- **feature_network.py**
-  - `MockFeatureNetwork`: 模拟特征提取网络，生成随机特征
-  - `QwenFeatureNetwork`: 封装Qwen-0.5B作为特征提取器（后续实现）
-
-- **abduction_network.py**
-  - `AbductionNetwork`: 推断个体因果表征分布参数的线性网络
-
-- **action_network.py**
-  - `ActionNetwork`: 包含分类头和回归头的行动网络
-  - `ClassificationHead`: 实现OvR分类
-  - `RegressionHead`: 实现数值回归
-
-- **causal_lm.py**
-  - `CausalLanguageModel`: 整合所有组件的完整模型
-
-### 2. 工具函数 (`src/utils/`)
-
-- **distributions.py**
-  - 实现柯西分布相关函数
-  - 实现重参数化采样
-
-- **losses.py**
-  - 实现OvR分类损失
-  - 实现柯西回归损失
-  - 实现门控机制
-
-- **metrics.py**
-  - 实现评估指标
-
-### 3. 数据处理 (`src/data/`)
-
-- **tokenizer.py**
-  - 处理`<NUM>`词元
-  - 数值编码与解码
-
-- **dataset.py**
-  - 实现数据集类
-  - 数据预处理和批处理
-
-- **synthetic.py**
-  - 生成合成数据用于验证
-
-### 4. 实验 (`experiments/`)
-
-- **synthetic/**
-  - 在合成数据上验证模型
-  - 测试收敛性和性能
-
-- **visualization/**
-  - 可视化个体因果表征分布
-  - 可视化决策边界
-
-## 开发路线图
-
-1. **阶段1：核心架构实现**
-   - 实现所有模块的基础版本
-   - 使用模拟器替代复杂组件
-
-2. **阶段2：验证与测试**
-   - 在合成数据上验证模型
-   - 调整超参数和架构
-
-3. **阶段3：集成真实模型**
-   - 替换模拟器为真实的Qwen-0.5B
-   - 实现完整的训练和推理流程
-
-4. **阶段4：文档和示例**
-   - 完善文档
-   - 提供使用示例和教程
-
+- **feature.py**: `FeatureNetwork` 的封装。
+- **abduction.py**: `归因推断网络 (AbductionNetwork)` 的实现。
+- **action.py**: `ActionNetwork` 的实现。
+- **causal_lm.py**: `

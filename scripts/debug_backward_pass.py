@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.models.causal_lm import CausalLMConfig, CausalLanguageModel
 from src.data.tokenizer import QwenTokenizerWrapper
 from src.utils.losses import CausalLMLoss
+from src.utils.initialization import KnowledgeTransferInitialization
 
 def print_grad_stats(model, network_name):
     """辅助函数，打印指定网络模块的梯度统计信息。"""
@@ -71,9 +72,16 @@ def main():
     model.train()
     
     # 正确初始化
-    print("Initializing AbductionNetwork with proper scale...")
-    model.abduction_network.init_weights()
-    print("AbductionNetwork initialization completed.")
+    print("Initializing model with knowledge transfer...")
+    init_strategy = KnowledgeTransferInitialization(
+        qwen_lm_head=model.get_input_embeddings(), 
+        initial_scale_bias=2.3
+    )
+    init_strategy.initialize(model)
+    print("Initializing AbductionNetwork (归因推断网络) with proper scale...")
+    model.abduction_network.initialize_for_identity_mapping(scale_bias=2.3)
+    print("归因推断网络 (AbductionNetwork) initialization completed.")
+    print("Model initialization completed.")
     print("设置完成。")
 
     # --- 2. 准备单批次数据 ---

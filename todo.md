@@ -79,7 +79,7 @@
 - [ ] **任务 2.5：撰写整体数据流与模型架构详解**
 
   - **行动**: 在 `docs/implementation/`下创建 `architecture_overview.md`。
-  - **内容**: 绘制一幅 Mermaid 流程图或时序图，清晰地展示一个数据样本从输入到最终损失计算的完整前向传播路径。图中应标注出关键模块，如 `FeatureNetwork`, `AbductionNetwork`, `ActionNetwork` 等。
+  - **内容**: 绘制一幅 Mermaid 流程图或时序图，清晰地展示一个数据样本从输入到最终损失计算的完整前向传播路径。图中应标注出关键模块，如 `FeatureNetwork`, `归因推断网络 (AbductionNetwork)`, `ActionNetwork` 等。
 
 ---
 

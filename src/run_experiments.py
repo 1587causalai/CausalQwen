@@ -92,11 +92,11 @@ def get_model_configs(base_config, experiment_type='ablation'):
         
         # Comparison: Different OvR thresholds
         config_low_threshold = deepcopy(base_config)
-        config_low_threshold.ovr_threshold = 1.0
+        config_low_threshold.ovr_threshold = 100.0  # 从 1.0 改为 100.0
         configs['low_threshold'] = config_low_threshold
         
         config_high_threshold = deepcopy(base_config)
-        config_high_threshold.ovr_threshold = 50.0
+        config_high_threshold.ovr_threshold = 100000.0  # 从 50.0 改为 100000.0
         configs['high_threshold'] = config_high_threshold
         
         # Comparison: Different causal dimensions (only if not using identity mapping)
@@ -152,19 +152,19 @@ def main(args):
     results_dir = os.path.join(args.results_base_dir, f"{args.experiment}_{timestamp}")
     os.makedirs(results_dir, exist_ok=True)
     
-    print(f"=== Running Experiment: {args.experiment} ===")
-    print(f"Results will be saved to: {results_dir}")
-    print(f"🧮 Using FIRST PRINCIPLES initialization strategy")
-    print(f"   - All ActionNetwork biases set to 0.0 (no magic numbers)")
-    print(f"   - Uncertainty expressed purely through AbductionNetwork scale_U")
-    print(f"   - Mathematical consistency with Cauchy framework maintained")
+    print(f"=== 运行实验: {args.experiment} ===")
+    print(f"结果将保存到: {results_dir}")
+    print(f"🧮 使用更新的初始化策略")
+    print(f"   - 分类头：完全复用 Qwen 的 lm_head（包括权重和偏置）")
+    print(f"   - 回归头：零初始化")
+    print(f"   - 保留词汇：自动处理，无需特殊配置")
     
     # --- 1. Setup ---
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    print(f"使用设备: {device}")
     
     tokenizer = QwenTokenizerWrapper(model_path=args.qwen_model_path, use_real_tokenizer=True)
-    print(f"Loaded tokenizer: vocab_size={tokenizer.vocab_size}, <NUM>_id={tokenizer.num_token_id}")
+    print(f"加载分词器: vocab_size={tokenizer.vocab_size}, <NUM>_id={tokenizer.num_token_id}")
     
     base_config = CausalLMConfig(
         vocab_size=tokenizer.vocab_size,
@@ -181,8 +181,8 @@ def main(args):
         initial_scale_bias=getattr(args, 'initial_scale_bias', 2.3)  # Default: exp(2.3) ≈ 10
     )
     
-    print(f"Base config: hidden_size={base_config.hidden_size}, causal_dim={base_config.causal_dim}")
-    print(f"             ovr_threshold={base_config.ovr_threshold}, reg_loss_weight={base_config.reg_loss_weight}")
+    print(f"基础配置: hidden_size={base_config.hidden_size}, causal_dim={base_config.causal_dim}")
+    print(f"         ovr_threshold={base_config.ovr_threshold}, reg_loss_weight={base_config.reg_loss_weight}")
     
     # --- 2. Get configurations and datasets ---
     model_configs = get_model_configs(base_config, args.experiment)
@@ -191,20 +191,20 @@ def main(args):
     if args.experiment == 'basic':
         # Basic experiment only runs on the basic dataset
         evaluation_datasets = {'basic': evaluation_datasets['basic']}
-        print("Running basic experiment on basic dataset only")
+        print("运行基础实验，仅在 basic 数据集上测试")
     else:
-        print(f"Running {args.experiment} experiment on {len(evaluation_datasets)} datasets")
+        print(f"运行 {args.experiment} 实验，共 {len(evaluation_datasets)} 个数据集")
 
     # --- 3. Run Experiment Loop ---
     all_results = {}
     for config_name, config in model_configs.items():
         print(f"\n{'='*60}")
-        print(f"🚀 Running configuration: {config_name}")
+        print(f"🚀 运行配置: {config_name}")
         print(f"{'='*60}")
         
         # Print config differences from base
         if config_name != 'base' and config_name != 'full_model':
-            print("Configuration differences from base:")
+            print("配置与基础配置的差异:")
             for attr in dir(config):
                 if not attr.startswith('_') and hasattr(base_config, attr):
                     base_val = getattr(base_config, attr)
@@ -217,24 +217,29 @@ def main(args):
         if args.use_wandb:
             try:
                 wandb_run = wandb.init(
-                    project="CausalQwen2-FirstPrinciples",  # Updated project name
+                    project="CausalQwen2",  # 移除 FirstPrinciples 后缀
                     name=f"{args.experiment}_{config_name}_{timestamp}",
                     config=asdict(config),
-                    tags=[args.experiment, "first_principles_init"],  # Add tags
-                    reinit=True # Allows multiple runs in one script
+                    tags=[args.experiment, "updated_init"],  # 更新标签
+                    reinit=True
                 )
-                print("✅ Weights & Biases initialized successfully.")
+                print("✅ Weights & Biases 初始化成功")
             except Exception as e:
-                print(f"⚠️  Could not initialize Weights & Biases. Error: {e}")
+                print(f"⚠️  无法初始化 Weights & Biases。错误: {e}")
                 wandb_run = None
 
         # Instantiate model
         model = CausalLanguageModel(config).to(device)
-        print(f"📊 Model created with {sum(p.numel() for p in model.parameters()):,} parameters")
+        print(f"📊 模型创建完成，共 {sum(p.numel() for p in model.parameters()):,} 个参数")
+        
+        # Initialize model weights with knowledge transfer
+        print("🔧 初始化模型权重（知识传输）...")
+        model.init_weights()  # 不再需要传递数值统计参数
+        print("✅ 模型初始化完成")
         
         # Train model if not skipped
         if not args.no_train:
-            print("🎯 Training model with first-principles initialization...")
+            print("🎯 开始训练模型...")
             
             trainer = Trainer(
                 model=model,
@@ -252,22 +257,22 @@ def main(args):
             # Save the trained model
             model_path = os.path.join(results_dir, f"model_{config_name}.pth")
             torch.save(model.state_dict(), model_path)
-            print(f"💾 Saved trained model to {model_path}")
+            print(f"💾 已保存训练后的模型到 {model_path}")
             
             # Log training summary
             if training_metrics:
-                print(f"📈 Training completed:")
-                print(f"   Final loss: {training_metrics.get('final_loss', 'N/A'):.4f}")
-                print(f"   Final cls_loss: {training_metrics.get('final_cls_loss', 'N/A'):.4f}")
-                print(f"   Final reg_loss: {training_metrics.get('final_reg_loss', 'N/A'):.4f}")
+                print(f"📈 训练完成:")
+                print(f"   最终损失 (Final loss): {training_metrics.get('final_loss', 'N/A'):.4f}")
+                print(f"   最终分类损失 (Final cls_loss): {training_metrics.get('final_cls_loss', 'N/A'):.4f}")
+                print(f"   最终回归损失 (Final reg_loss): {training_metrics.get('final_reg_loss', 'N/A'):.4f}")
         
         # Evaluate model
-        print("📊 Evaluating model...")
+        print("📊 评估模型...")
         evaluator = Evaluator(model, tokenizer, device, config)
         
         config_results = {}
         for name, dataset in evaluation_datasets.items():
-            print(f"  📋 Evaluating on dataset: {name}")
+            print(f"  📋 在数据集 {name} 上评估")
             # Define path for saving raw evaluation outputs
             eval_output_path = os.path.join(results_dir, f"evaluation_outputs_{config_name}_{name}.pt")
             results = evaluator.evaluate(dataset, batch_size=args.batch_size, save_path=eval_output_path)
@@ -277,7 +282,7 @@ def main(args):
             cls_f1 = results.get('cls_f1', 0)
             reg_mae = results.get('reg_mae', 0)
             reg_picp = results.get('reg_picp', 0)
-            print(f"    📊 Results: Cls F1: {cls_f1:.4f}, Reg MAE: {reg_mae:.4f}, Reg PICP: {reg_picp:.4f}")
+            print(f"    📊 结果: 分类 F1: {cls_f1:.4f}, 回归 MAE: {reg_mae:.4f}, 回归 PICP: {reg_picp:.4f}")
             
             # Log to wandb if available
             if wandb_run:
@@ -292,7 +297,7 @@ def main(args):
         # --- Finish WandB Run ---
         if wandb_run:
             wandb_run.finish()
-            print("✅ Weights & Biases run finished.")
+            print("✅ Weights & Biases 运行结束")
 
     # --- 4. Save all results and generate summary ---
     # Convert numpy types to standard Python types for JSON serialization
@@ -305,36 +310,36 @@ def main(args):
     # Generate experiment summary
     summary_path = os.path.join(results_dir, "experiment_summary.md")
     with open(summary_path, 'w') as f:
-        f.write(f"# Experiment Summary: {args.experiment}\n\n")
-        f.write(f"**Timestamp:** {timestamp}\n")
-        f.write(f"**Initialization Strategy:** First Principles (no magic number biases)\n")
-        f.write(f"**Device:** {device}\n")
-        f.write(f"**Base Config:** hidden_size={base_config.hidden_size}, causal_dim={base_config.causal_dim}\n\n")
+        f.write(f"# 实验总结: {args.experiment}\n\n")
+        f.write(f"**时间戳:** {timestamp}\n")
+        f.write(f"**初始化策略:** 完全复用 Qwen lm_head + 零初始化回归头\n")
+        f.write(f"**设备:** {device}\n")
+        f.write(f"**基础配置:** hidden_size={base_config.hidden_size}, causal_dim={base_config.causal_dim}\n\n")
         
-        f.write("## Results Summary\n\n")
+        f.write("## 结果总结\n\n")
         for config_name, config_results in all_results_serializable.items():
-            f.write(f"### Configuration: {config_name}\n\n")
+            f.write(f"### 配置: {config_name}\n\n")
             for dataset_name, metrics in config_results.items():
                 f.write(f"**{dataset_name}:**\n")
-                f.write(f"- Classification F1: {metrics.get('cls_f1', 0):.4f}\n")
-                f.write(f"- Regression MAE: {metrics.get('reg_mae', 0):.4f}\n")
-                f.write(f"- Regression PICP: {metrics.get('reg_picp', 0):.4f}\n\n")
+                f.write(f"- 分类 F1 分数: {metrics.get('cls_f1', 0):.4f}\n")
+                f.write(f"- 回归 MAE: {metrics.get('reg_mae', 0):.4f}\n")
+                f.write(f"- 回归 PICP: {metrics.get('reg_picp', 0):.4f}\n\n")
     
-    print(f"\n🎉 Experiment complete!")
-    print(f"📁 All results saved to: {results_path}")
-    print(f"📄 Summary saved to: {summary_path}")
+    print(f"\n🎉 实验完成！")
+    print(f"📁 所有结果已保存到: {results_path}")
+    print(f"📄 实验总结已保存到: {summary_path}")
     
     # Print best performing configuration
     if len(all_results) > 1:
-        print(f"\n🏆 Performance Summary:")
+        print(f"\n🏆 性能总结:")
         for dataset_name in evaluation_datasets.keys():
             best_f1_config = max(all_results.keys(), 
                                key=lambda k: all_results[k].get(dataset_name, {}).get('cls_f1', 0))
             best_f1_score = all_results[best_f1_config][dataset_name]['cls_f1']
-            print(f"   {dataset_name} - Best Cls F1: {best_f1_config} ({best_f1_score:.4f})")
+            print(f"   {dataset_name} - 最佳分类 F1: {best_f1_config} ({best_f1_score:.4f})")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Unified Experiment Runner for Causal Language Model with First-Principles Initialization.")
+    parser = argparse.ArgumentParser(description="Unified Experiment Runner for Causal Language Model.")
     parser.add_argument(
         'experiment', 
         type=str, 
@@ -356,7 +361,7 @@ if __name__ == '__main__':
     
     # Model architecture args
     parser.add_argument('--hidden_size', type=int, default=896, help='Hidden size of the model (for Qwen-0.5B).')
-    parser.add_argument('--ovr_threshold', type=float, default=100.0, help='OvR decision threshold.')
+    parser.add_argument('--ovr_threshold', type=float, default=10000.0, help='OvR decision threshold.')  # 从 100.0 改为 10000.0
     parser.add_argument('--reg_loss_weight', type=float, default=1.0, help='Weight for regression loss in total loss.')
     parser.add_argument('--initial_scale_bias', type=float, default=2.3, help='Initial bias for scale parameter (log scale).')
     

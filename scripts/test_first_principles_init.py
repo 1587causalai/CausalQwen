@@ -162,7 +162,7 @@ def test_first_principles_initialization():
     if all_checks_passed:
         print(f"\n🎉 第一性原理初始化策略验证通过!")
         print(f"   模型现在从纯净、无偏见的状态开始学习")
-        print(f"   所有不确定性通过AbductionNetwork的scale_U表达")
+        print(f"   所有不确定性通过归因推断网络 (AbductionNetwork) 的scale_U表达")
         print(f"   移除了所有启发式魔法数字")
     else:
         print(f"\n⚠️  发现问题，需要进一步修复初始化策略")

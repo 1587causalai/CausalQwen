@@ -22,8 +22,8 @@
 初始化过程按以下顺序执行：
 
 1. **数据统计预计算**: 在正式训练前，分析合成训练数据的数值分布特性。
-2. **推理网络初始化**: 配置 `AbductionNetwork` 以实现恒等映射和均匀尺度。
-3. **行动网络初始化**: 利用 Qwen 的 `lm_head` 权重和高阈值策略初始化 `ActionNetwork`。
+2. **归因推断网络初始化**: 配置 `AbductionNetwork` 以实现恒等映射和均匀尺度。
+3. **行动网络初始化**: 确保 `ActionNetwork` 的分类头继承Qwen的`lm_head`知识，而回归头则采用保守初始化。
 4. **损失函数校正**: 确保 OvR 损失计算的数学正确性。
 
 ---
@@ -78,7 +78,7 @@ if all_target_values:
 
 ---
 
-## 3. 推理网络初始化 (AbductionNetwork Initialization)
+## 3. 归因推断网络初始化 (AbductionNetwork Initialization)
 
 ### 3.1. 关键洞察：均匀尺度策略
 
@@ -124,6 +124,10 @@ def init_weights(self):
 修正前: causal_scale = [111.66, 1529.85, 131.90, 1914.34, 0.33]  # 巨大差异
 修正后: causal_scale = [9.97, 9.97, 9.97, 9.97, 9.97]           # 完美统一
 ```
+
+✅ **归因推断网络 (AbductionNetwork)**:
+- `causal_scale` 值是否统一？
+- 是否调用了 `init_weights()` 方法？
 
 ---
 
@@ -244,9 +248,7 @@ reg_head.scale_layer.bias.data.fill_(torch.log(torch.tensor(num_target_scale)))
 3. **损失合理性**: 总损失应在 1-10 范围内，而非数万
 4. **梯度健康性**: 无梯度爆炸或消失现象
 
-### 7.2. 调试检查清单
-
-✅ **AbductionNetwork**: 
+✅ **归因推断网络 (AbductionNetwork)**:
 - `causal_scale` 值是否统一？
 - 是否调用了 `init_weights()` 方法？
 

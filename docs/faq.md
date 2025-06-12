@@ -207,21 +207,27 @@ class CausalLMConfig:
         self.use_new_distribution = use_new_distribution
 ```
 
-3. 在`AbductionNetwork`和`ActionNetwork`中添加对应的处理逻辑：
+3. 在`归因推断网络 (AbductionNetwork)` 和`ActionNetwork`中添加对应的处理逻辑：
 
 ```python
+# AbductionNetwork
 class AbductionNetwork:
+    def __init__(self, ..., distribution_type='cauchy'):
+        self.distribution_type = distribution_type
+        ...
+
     def forward(self, features):
-        # ...
-        if self.config.use_new_distribution:
-            # 使用新分布
-            # ...
-        elif self.config.use_cauchy_distribution:
-            # 使用柯西分布
-            # ...
-        else:
-            # 使用高斯分布
-            # ...
+        ...
+        if self.distribution_type == 'new_dist':
+            # new distribution logic
+            ...
+        else: # 'cauchy'
+            # cauchy logic
+            ...
+
+# ActionNetwork
+class ActionNetwork:
+    ...
 ```
 
 ### Q: 如何使用自定义的特征网络？

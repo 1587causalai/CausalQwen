@@ -40,37 +40,39 @@
 
 ```mermaid
 graph TD
-    input_x["输入序列 x"] --"分词器"--> feature_z
-    
-    subgraph FN [" FeatureNetwork"]
-        feature_z["观测信息表征<br/>x_embed → z <br/>Qwen-0.5B Mocker得到z=h(x_embed)"]
+    subgraph "输入层"
+        A["输入序列 x<br>[B, S]"]
     end
-    
-    feature_z -- "线性AbductionNetwork<br/>z → (loc(z), scale(z))" --> causal_U
-    
-    subgraph ABN ["个体因果表征"]
-        causal_U["U ~ Cauchy(loc(z), scale(z))"]
-    end
-    
-    subgraph ACN ["因果生成 ActionNetwork"]
-        causal_U -- "线性 ActionNetwork" --> classification_action["每个词元类别得分<br/>S_k = A_k·U + B_k~ Cauchy"]
-        causal_U -- "线性 ActionNetwork" --> regression_action["回归值<br/>Y = W·U + b~ Cauchy"]
-        classification_action --> ovr_prediction["(OvR)Classifier P(S_k > C_k)"]
-        regression_action --> regression_prediction["(MLE)Regressor y~Y"]       
 
+    subgraph "特征提取 FeatureNetwork"
+        B["Qwen-0.5B Backbone"]
     end
-    
-    classification_action --> 采样u--> probability_output["输出第k个token是否出现 <br/> 因果决策 I(s_k > C_k)"]
-    regression_action --> 采样u --> numerical_output["输出数值结果 <br/> 因果决策 y"]
-    ovr_prediction --> Loss_cls --> Loss_total
-    regression_prediction --> Loss_reg_gated--> Loss_total
 
-    
-    style FN fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style ABN fill:#e6e6fa,stroke:#6a5acd,stroke-width:2px
-    style ACN fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    style classification_action fill:#4caf50,color:#fff,stroke:#388e3c,stroke-width:1.5px
-    style regression_action fill:#2196f3,color:#fff,stroke:#1976d2,stroke-width:1.5px
+    subgraph "因果推断 AbductionNetwork"
+        D["对每个位置i, 独立归因推断<br>U[i] ~ Cauchy(loc(z[i]), scale(z[i]))"]
+    end
+
+    subgraph "因果决策 ActionNetwork"
+        F["对每个位置i, 独立决策<br>计算 S[k,i] 和 Y[i] 的分布"]
+    end
+
+    subgraph "输出与损失"
+        G["序列分类概率<br>P[k,i]"]
+        H["序列回归值<br>loc(Y[i])"]
+        I["门控损失函数<br>L_total = sum(L_cls_i + P_num_i * L_reg_i)"]
+    end
+
+    A -- "Tokenizer" --> B
+    B -- "序列特征 z<br>[B, S, H]" --> D
+    D -- "因果表征分布<br>[B, S, C], [B, S, C]" --> F
+    F --> G
+    F --> H
+    G -- "计算分类损失" --> I
+    H -- "计算回归损失" --> I
+
+    style B fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style D fill:#e6e6fa,stroke:#6a5acd,stroke-width:2px
+    style F fill:#fff3e0,stroke:#f57c00,stroke-width:2px
 ```
 
 ### 3.2 输入处理与`<NUM>`词元
@@ -127,19 +129,19 @@ graph TD
 
 *详细分析请参考：`docs/background/qwen_reserved_tokens_analysis.md`*
 
-### 3.4 推断模块: 生成个体因果表征分布`P(U|x)`
+### 3.4 归因推断模块: 生成个体因果表征分布`P(U|x)`
 
 这个模块连接了观测世界（文本）与潜在的因果世界。
 
-- **输入:** LLM主干的最终隐藏状态`h(x)` (例如，Qwen-0.5B中维度为`[1, 1024]`的张量)。
-- **功能:** 一个简单的线性层将`h(x)`映射到高维柯西分布`U`的参数。
+- **输入:** LLM主干在每个位置的隐藏状态序列 `z = (z_1, ..., z_S)` (张量形状为 `[batch_size, seq_len, hidden_size]`)。
+- **功能:** 一个简单的全连接层（`nn.Linear`）被独立地应用到序列的每一个时间步上，将每个`z_i`映射到对应位置的高维柯西分布`U_i`的参数。
     ```python
-    # h(x) 的形状为 [batch, hidden_size]
+    # z 的形状为 [batch, seq_len, hidden_size]
     # causal_dim 是一个超参数, e.g., 64
     causal_inference_layer = nn.Linear(hidden_size, causal_dim * 2)
     
-    # 输出形状为 [batch, causal_dim * 2]
-    params = causal_inference_layer(h_x)
+    # 输出形状为 [batch, seq_len, causal_dim * 2]
+    params = causal_inference_layer(z)
     
     # 分割为位置参数μ和尺度参数γ
     mu, log_gamma = torch.split(params, causal_dim, dim=-1)
@@ -148,23 +150,23 @@ graph TD
 
 ### 3.5 行动模块 (ActionNetwork)
 
-因果表征的**随机变量`U`**是所有行动的统一驱动源。
+在每个位置 `i`，因果表征的**随机变量`U_i`**是所有行动的统一驱动源。
 
-- **主输出头 (分类):** 一个线性层将随机变量`U`映射为一个`K+1`维的**决策向量`S`**，其中`K`是原始词汇表大小。
+- **主输出头 (分类):** 一个线性层将随机变量`U_i`映射为一个`K+1`维的**决策向量`S_i`**，其中`K`是原始词汇表大小。
     \[
-    S_k = \vec{A}_k \cdot U + B_k, \quad \text{for } k \in \{0, 1, \dots, K\}
+    S_{k,i} = \vec{A}_k \cdot U_i + B_k, \quad \text{for } k \in \{0, 1, \dots, K\}
     \]
-    其中`A`和`B`是可学习的权重和偏置。重要的是，这里的`U`是随机变量，因此`S_k`也是一个独立的柯西随机变量，代表了对类别`k`的决策得分。
+    其中`A`和`B`是可学习的权重和偏置。重要的是，这里的`U_i`是随机变量，因此`S_{k,i}`也是一个独立的柯西随机变量，代表了对类别`k`在位置`i`的决策得分。
 
-- **辅助回归头:** 另一个线性层将 **同一个随机变量`U`** 映射到一个标量随机变量`Y`。
+- **辅助回归头:** 另一个线性层将 **同一个随机变量`U_i`** 映射到一个标量随机变量`Y_i`。
     \[
-    Y = \vec{W} \cdot U + b
+    Y_i = \vec{W} \cdot U_i + b
     \]
-    `Y`同样是一个柯西随机变量。
+    `Y_i`同样是一个柯西随机变量。
 
 **重要说明：训练与推理的区别**
--   **训练 (计算损失时)**：我们**不需要**对因果表征`U`进行采样。由于柯西分布的线性封闭性，我们可以直接从`U`的分布参数`(loc_u, scale_u)`解析地计算出决策分数`S_k`和回归值`Y`的分布参数，进而计算出精确的损失，整个过程是确定且可微的。
--   **推理 (生成预测时)**：当我们想得到一个具体的预测结果（例如，最可能的词元或一个具体的数值）时，更好的做法是直接使用我们解析计算出的概率和参数。对于分类，选择概率`P_k`最大的词元；对于回归，直接使用预测分布的中位数`loc_y`作为输出，这样更稳定且高效。仅在需要模拟真实世界随机性或进行探索性生成时，才考虑从`P(U|x)`中采样一个具体的实例`u`。
+-   **训练 (计算损失时)**：我们**不需要**对因果表征`U_i`进行采样。由于柯西分布的线性封闭性，我们可以直接从`U_i`的分布参数`(loc(z_i), scale(z_i))`解析地计算出决策分数`S_{k,i}`和回归值`Y_i`的分布参数，进而计算出精确的损失，整个过程是确定且可微的。
+-   **推理 (生成预测时)**：当我们想得到一个具体的预测结果（例如，最可能的词元或一个具体的数值）时，更好的做法是直接使用我们解析计算出的概率和参数。对于分类，选择概率`P_{k,i}`最大的词元；对于回归，直接使用预测分布的中位数`loc_{Y_i}`作为输出，这样更稳定且高效。仅在需要模拟真实世界随机性或进行探索性生成时，才考虑从`P(U_i|z_i)`中采样一个具体的实例`u_i`。
 
 ---
 
@@ -172,43 +174,43 @@ graph TD
 
 ### 4.1 One-vs-Rest (OvR) 决策与概率
 
-我们不使用Softmax，而是将多分类问题解构为`K+1`个独立的"一对剩余"二元决策问题。
+我们不使用Softmax，而是将多分类问题解构为`K+1`个独立的"一对剩余"二元决策问题。这一决策过程在序列的**每个位置 i** 上独立发生。
 
-- **决策原理:** 对每个类别`k`，我们计算其决策得分随机变量`S_k`大于一个可学习阈值`C_k`的概率（为简化，可设`C_k=0`）。
+- **决策原理:** 对每个类别`k`和每个位置`i`，我们计算其决策得分随机变量`S_{k,i}`大于一个可学习阈值`C_k`的概率（为简化，可设`C_k=0`）。
 - **概率公式:** 利用柯西分布的累积分布函数(CDF)，我们可以得到一个解析的概率表达式。这一步无需采样，仅依赖分布参数：
     \[
-    P_k = E[I(S_k > C_k)] = 1 - P(S_k \leq C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_k} - C_k}{\text{scale}_{S_k}}\right)
+    P_{k,i} = E[I(S_{k,i} > C_k)] = 1 - P(S_{k,i} \leq C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)
     \]
-    其中`loc_Sk`和`scale_Sk`是决策分数`S_k`这个柯西变量的参数，可以由`U`的参数`(loc_u, scale_u)`和行动网络的权重解析地计算得出：
+    其中`loc_S_k,i`和`scale_S_k,i`是决策分数`S_{k,i}`这个柯西变量的参数，可以由`U_i`的参数`(loc(z_i), scale(z_i))`和行动网络的权重解析地计算得出：
     \[
-    \text{loc}_{S_k} = \vec{A}_k \cdot \text{loc}_u + B_k
+    \text{loc}_{S_{k,i}} = \vec{A}_k \cdot \text{loc}(z_i) + B_k
     \]
     \[
-    \text{scale}_{S_k} = |\vec{A}_k| \cdot \text{scale}_u
+    \text{scale}_{S_{k,i}} = |\vec{A}_k| \cdot \text{scale}(z_i)
     \]
 
 ### 4.2 统一损失函数
 
-总损失是分类损失和门控回归损失的加权和：
+总损失是所有位置上，分类损失和门控回归损失的加权和：
 \[
-\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + \lambda \cdot \mathcal{L}_{\text{reg\_gated}}
+\mathcal{L}_{\text{total}} = \sum_i \left( \mathcal{L}_{\text{cls},i} + \lambda \cdot \mathcal{L}_{\text{reg\_gated},i} \right)
 \]
 
-1.  **分类损失 `L_cls`:**
-    它是`K+1`个独立的二元交叉熵损失之和。对于真实标签为`j`的样本，`y_k`在`k=j`时为1，否则为0。
+1.  **分类损失 `L_cls,i`:**
+    它是位置`i`上`K+1`个独立的二元交叉熵损失之和。对于该位置的真实标签为`j`的样本，`y_{k,i}`在`k=j`时为1，否则为0。
     \[
-    \mathcal{L}_{\text{cls}} = - \sum_{k=0}^{K} \left[ y_k \log(P_k) + (1-y_k) \log(1-P_k) \right]
+    \mathcal{L}_{\text{cls},i} = - \sum_{k=0}^{K} \left[ y_{k,i} \log(P_{k,i}) + (1-y_{k,i}) \log(1-P_{k,i}) \right]
     \]
 
-2.  **门控回归损失 `L_reg_gated`:**
-    此损失仅对真实标签为`<NUM>`的样本激活，并由模型自身的预测置信度加权。
-    - **回归基础损失 `L_cauchy_nll`:** 我们使用柯西分布的负对数似然(NLL)作为回归任务的基础损失，这与我们对`y`的柯西性质假设保持一致。
+2.  **门控回归损失 `L_reg_gated,i`:**
+    此损失仅对真实标签为`<NUM>`的位置`i`激活，并由模型在该位置自身的预测置信度加权。
+    - **回归基础损失 `L_cauchy_nll,i`:** 我们使用柯西分布的负对数似然(NLL)作为回归任务的基础损失，这与我们对`Y_i`的柯西性质假设保持一致。
         \[
-        \mathcal{L}_{\text{cauchy\_nll}} = \log(\pi \cdot \text{scale}_{\text{out}}) + \log\left(1 + \left(\frac{y_{\text{true}} - \text{loc}_{\text{out}}}{\text{scale}_{\text{out}}}\right)^2\right)
+        \mathcal{L}_{\text{cauchy\_nll},i} = \log(\pi \cdot \text{scale}_{Y_i}) + \log\left(1 + \left(\frac{y_{\text{true},i} - \text{loc}_{Y_i}}{\text{scale}_{Y_i}}\right)^2\right)
         \]
-    - **门控机制:** "门"即模型预测类别为`<NUM>`的概率`P_<NUM>`。
+    - **门控机制:** "门"即模型在位置`i`预测类别为`<NUM>`的概率`P_<NUM>,i`。
         \[
-        \mathcal{L}_{\text{reg\_gated}} = \mathbb{I}(y_{\text{true\_id}} = \text{<NUM>\_ID}) \cdot P_{\text{<NUM>}} \cdot \mathcal{L}_{\text{cauchy\_nll}}
+        \mathcal{L}_{\text{reg\_gated},i} = \mathbb{I}(y_{\text{true\_id},i} = \text{<NUM>\_ID}) \cdot P_{\text{<NUM>},i} \cdot \mathcal{L}_{\text{cauchy\_nll},i}
         \]
     这个设计迫使模型必须先提升对`<NUM>`的预测概率（打开大门），才能有效优化回归损失，从而学会**先分类，再回归**。
 
@@ -283,9 +285,9 @@ P_k = \frac{\exp(z_k)}{\sum_{j=1}^K \exp(z_j)}
 - 更灵活的决策边界
 
 **数学表述**：
-对于决策分数`S_k ~ Cauchy(loc_k, scale_k)`，类别`k`的概率为：
+对于在位置 `i` 的决策分数`S_{k,i} ~ Cauchy(loc_{k,i}, scale_{k,i})`，类别`k`在该位置的概率为：
 \[
-P_k = P(S_k > 0) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_k}{\text{scale}_k}\right)
+P_{k,i} = P(S_{k,i} > 0) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{k,i}}{\text{scale}_{k,i}}\right)
 \]
 
 #### A.4 门控损失的数学合理性
@@ -293,16 +295,16 @@ P_k = P(S_k > 0) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_k}{
 **设计目标**：确保模型"先学分类，再优化回归"。
 
 **数学机制**：
-总损失中的回归项：
+在位置 `i`，总损失中的回归项：
 \[
-\mathcal{L}_{\text{reg\_term}} = P_{\text{<NUM>}} \cdot \mathcal{L}_{\text{cauchy\_nll}}
+\mathcal{L}_{\text{reg\_term},i} = P_{\text{<NUM>},i} \cdot \mathcal{L}_{\text{cauchy\_nll},i}
 \]
 
 **优化动态**：
-- 当`P_<NUM>`很小时，回归损失贡献微弱
-- 模型必须先提高`P_<NUM>`（学会分类）
-- 只有`P_<NUM>`足够大，回归优化才有效果
-- 这种耦合确保了学习的层次性
+- 当`P_<NUM>,i`很小时，该位置的回归损失贡献微弱。
+- 模型必须先提升`P_<NUM>,i`（学会分类）。
+- 只有`P_<NUM>,i`足够大，该位置的回归优化才有效果。
+- 这种耦合确保了学习的层次性。
 
 ### 附录B：后续开发计划
 
@@ -312,22 +314,20 @@ P_k = P(S_k > 0) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_k}{
 
 ```mermaid
 graph TD
-    A["输入: 年龄25岁, 收入8k"] --> B{分词器};
-    B -- "文本转ID" --> C[Qwen-0.5B 主干];
-    C -- "h(x)" --> D[推断个体因果表征U的分布参数 loc, scale];
-    D --> E["U ~ Cauchy(loc, scale)"];
-    E -- "从P(U|x)中采样u" --> F[因果预测模块];
-    F --> G[OvR得分输出头];
-    G --> H1["K+1维决策向量"];
-    F --> I[回归头];
-    I --> H2[标量数值];
+    A["输入序列: '价格是99.9'"] --> B{分词器};
+    B -- "['价格', '是', '<NUM>']" --> C[Qwen-0.5B 主干];
+    C -- "序列特征 z_1, z_2, z_3" --> D[归因推断每个位置的因果表征<br>U_i ~ Cauchy(loc(z_i), scale(z_i))];
+    D -- "对每个位置i采样u_i" --> F[因果预测模块];
+    F --> G[序列OvR得分输出];
+    G --> H1["K+1维决策向量序列"];
+    F --> I[序列回归头];
+    I --> H2[标量值序列];
 
     subgraph "FeatureNetwork"
         C
     end
     subgraph "AbductionNetwork"
         D
-        E
     end
     subgraph "ActionNetwork"
         F

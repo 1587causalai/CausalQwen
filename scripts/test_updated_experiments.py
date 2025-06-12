@@ -55,8 +55,8 @@ def test_updated_config():
     
     model.init_weights(dummy_median, dummy_scale)
     
-    # 4. 验证AbductionNetwork的scale偏置
-    print(f"\n🔍 验证AbductionNetwork的scale偏置...")
+    # 4. 验证归因推断网络 (AbductionNetwork) 的scale偏置
+    print(f"\n🔍 验证归因推断网络 (AbductionNetwork) 的scale偏置...")
     
     abduction_bias = model.abduction_network.fc.bias.data
     causal_dim = model.causal_dim
@@ -116,7 +116,7 @@ def test_updated_config():
     if all_passed:
         print(f"🎉 所有测试通过!")
         print(f"   ✅ 新配置参数正确工作")
-        print(f"   ✅ AbductionNetwork支持可配置的初始不确定性")
+        print(f"   ✅ 归因推断网络 (AbductionNetwork) 支持可配置的初始不确定性")
         print(f"   ✅ ActionNetwork使用第一性原理初始化")
         print(f"   ✅ 整个框架准备好进行实验")
     else:

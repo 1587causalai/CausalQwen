@@ -194,70 +194,93 @@ class ActionNetwork(nn.Module):
         # Regression head for numerical prediction
         self.regression_head = RegressionHead(causal_dim)
 
-    def init_weights(self, qwen_lm_head, num_target_median, num_target_scale, num_token_id):
+    def init_weights(self, qwen_lm_head=None, num_target_median=None, num_target_scale=None, num_token_id=None):
         """
-        Initialize weights based on pretrained Qwen model using knowledge transfer.
+        Initialize the weights of the action network.
+        
+        知识传输策略（更新版）：
+        - 分类头：完全复用 Qwen 的 lm_head（包括权重和偏置）
+        - 回归头：复用 <NUM> token 对应的权重作为初始化
         
         Args:
-            qwen_lm_head (nn.Linear): The pretrained language model head from Qwen.
-            num_target_median (float): The median of the numerical target values.
-            num_target_scale (float): The scale parameter for numerical targets.
-            num_token_id (int): The token ID for the <NUM> token.
+            qwen_lm_head: Qwen's language model head (nn.Linear)
+            num_target_median: Deprecated, no longer used
+            num_target_scale: Deprecated, no longer used
+            num_token_id: The token ID for <NUM>
         """
-        print("  🧮 Applying knowledge transfer initialization...")
+        print("🔧 初始化 ActionNetwork...")
         
-        # 1. Initialize Classification Head
-        cls_head = self.classification_head.causal_linear
-        
-        # Handle vocabulary size mismatch between our tokenizer and Qwen model
-        qwen_vocab_size = qwen_lm_head.weight.shape[0]
-        our_vocab_size = self.vocab_size  # This includes our added <NUM> token
-        
-        print(f"    - Qwen vocab size: {qwen_vocab_size}, Our vocab size: {our_vocab_size}")
-
-        # Copy all weights directly from Qwen model (including pre-initialized reserved tokens)
-        # Since <NUM> token uses reserved token position, it already has proper initialization
-        copy_size = min(qwen_vocab_size, our_vocab_size)
-        cls_head.weight.data[:copy_size, :].copy_(
-            qwen_lm_head.weight.data[:copy_size, :]
-        )
-        print(f"    - Copied weights for {copy_size} tokens from Qwen model")
-        print(f"    - <NUM> token uses pre-initialized reserved token weights")
-        
-        # Initialize classification bias based on Qwen's bias (if it exists)
-        if cls_head.bias is not None:
-            if hasattr(qwen_lm_head, 'bias') and qwen_lm_head.bias is not None:
-                # Copy existing bias for overlapping tokens
-                qwen_bias_size = qwen_lm_head.bias.shape[0]
-                copy_size = min(qwen_bias_size, our_vocab_size)
-                cls_head.bias.data[:copy_size].copy_(qwen_lm_head.bias.data[:copy_size])
-                
-                # Initialize remaining bias to zero
-                if copy_size < our_vocab_size:
-                    cls_head.bias.data[copy_size:].zero_()
-                print(f"    - Copied bias for {copy_size} tokens from Qwen")
-            else:
-                # Qwen has no bias, initialize all to zero
-                cls_head.bias.data.zero_()
-                print(f"    - Initialized all biases to 0 (Qwen has no bias)")
-
-        # 2. Initialize Regression Head 
-        reg_head = self.regression_head.causal_linear
-        
-        with torch.no_grad():
-            # Small random weights for regression
-            nn.init.xavier_uniform_(reg_head.weight, gain=0.01)
+        if qwen_lm_head is not None and num_token_id is not None:
+            print("📚 从 Qwen lm_head 进行知识传输...")
             
-            # Initialize bias to zero (no data-dependent initialization)
-            if reg_head.bias is not None:
-                reg_head.bias.data.zero_()
+            # 获取维度信息
+            qwen_vocab_size, qwen_hidden_size = qwen_lm_head.weight.shape
+            our_vocab_size, our_causal_dim = self.classification_head.causal_linear.weight.shape
+            
+            print(f"   Qwen lm_head: [{qwen_vocab_size}, {qwen_hidden_size}]")
+            print(f"   Our cls_head: [{our_vocab_size}, {our_causal_dim}]")
+            
+            # 1. 分类头：完全复用 Qwen 的权重和偏置
+            with torch.no_grad():
+                # 复制权重
+                if our_vocab_size <= qwen_vocab_size:
+                    self.classification_head.causal_linear.weight.copy_(
+                        qwen_lm_head.weight[:our_vocab_size, :]
+                    )
+                    print(f"   ✅ 复制了前 {our_vocab_size} 个词汇的权重")
+                else:
+                    self.classification_head.causal_linear.weight[:qwen_vocab_size, :].copy_(
+                        qwen_lm_head.weight
+                    )
+                    print(f"   ⚠️  只能复制 {qwen_vocab_size} 个词汇的权重")
+                
+                # 复制偏置（如果存在）
+                if hasattr(qwen_lm_head, 'bias') and qwen_lm_head.bias is not None:
+                    if self.classification_head.causal_linear.bias is not None:
+                        if our_vocab_size <= qwen_vocab_size:
+                            self.classification_head.causal_linear.bias.copy_(
+                                qwen_lm_head.bias[:our_vocab_size]
+                            )
+                            print(f"   ✅ 复制了前 {our_vocab_size} 个词汇的偏置")
+                        else:
+                            self.classification_head.causal_linear.bias[:qwen_vocab_size].copy_(
+                                qwen_lm_head.bias
+                            )
+                            print(f"   ⚠️  只能复制 {qwen_vocab_size} 个词汇的偏置")
+                else:
+                    print("   ℹ️  Qwen lm_head 没有偏置项")
+                
+                # 2. 回归头：使用 <NUM> token 的权重作为初始化
+                print(f"\n🔧 初始化回归头（使用 <NUM> token 权重）...")
+                # 直接使用 <NUM> token 的权重，无需检查范围
+                # 因为 <NUM> 是保留词汇中的第一个，它在 lm_head 中已经有权重
+                num_token_weights = qwen_lm_head.weight[num_token_id, :]  # [hidden_size]
+                self.regression_head.causal_linear.weight.copy_(
+                    num_token_weights.unsqueeze(0)  # [1, hidden_size]
+                )
+                print(f"   ✅ 使用 <NUM> token (ID: {num_token_id}) 的权重初始化回归头")
+                
+                # 如果有偏置，也使用 <NUM> token 的偏置
+                if hasattr(qwen_lm_head, 'bias') and qwen_lm_head.bias is not None:
+                    if self.regression_head.causal_linear.bias is not None:
+                        self.regression_head.causal_linear.bias.copy_(
+                            qwen_lm_head.bias[num_token_id].unsqueeze(0)
+                        )
+                        print(f"   ✅ 使用 <NUM> token 的偏置初始化回归头偏置")
 
-        print(f"    - Regression head: weight Xavier(gain=0.01), bias = 0.0")
-        
-        print("  ✅ Knowledge transfer initialization complete:")
-        print("    * Classification head inherits Qwen's language modeling knowledge")
-        print("    * <NUM> token uses pre-initialized reserved token weights")  
-        print("    * Regression head initialized with zero bias (no data dependency)")
+            print("   ✅ 知识传输完成")
+            
+        else:
+            print("⚠️  未提供 Qwen lm_head 或 num_token_id，使用随机初始化")
+            # 分类头：Xavier 初始化
+            torch.nn.init.xavier_uniform_(self.classification_head.causal_linear.weight)
+            if self.classification_head.causal_linear.bias is not None:
+                self.classification_head.causal_linear.bias.zero_()
+            
+            # 回归头：小的 Xavier 初始化
+            torch.nn.init.xavier_uniform_(self.regression_head.causal_linear.weight, gain=0.1)
+            if self.regression_head.causal_linear.bias is not None:
+                self.regression_head.causal_linear.bias.zero_()
 
     def forward(self, causal_loc, causal_scale):
         """

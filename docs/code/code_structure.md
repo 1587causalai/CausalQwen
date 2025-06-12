@@ -65,11 +65,11 @@ causal-lm-project/
 
 ### 3. 推断网络 (`src/models/abduction_network.py`)
 
-推断网络负责从特征表示推断个体因果表征分布，是模型的第二个组件。
+归因推断网络负责从特征表示推断个体因果表征分布，是模型的第二个组件。
 
 主要类：
 
-- `AbductionNetwork`：推断网络类，实现了从特征到个体因果表征分布的映射
+- `AbductionNetwork`：归因推断网络类，实现了从特征到个体因果表征分布的映射
 
 关键方法：
 
@@ -82,7 +82,7 @@ causal-lm-project/
 
 主要类：
 
-- `ActionNetwork`：行动网络类，包含分类头和回归头
+- `ActionNetwork`：行动网络类，包含了分类头和回归头
 
 关键方法：
 
@@ -233,23 +233,23 @@ class CustomFeatureNetwork(FeatureNetwork):
         return features
 ```
 
-### 自定义推断网络
+### 自定义归因推断网络
 
-你可以通过修改`AbductionNetwork`类来创建自定义的推断网络：
+你可以通过修改`AbductionNetwork`类来创建自定义的归因推断网络：
 
 ```python
 from src.models.abduction_network import AbductionNetwork
 
 class CustomAbductionNetwork(AbductionNetwork):
-    def __init__(self, config):
-        super().__init__(config)
-        # 添加或修改网络层
+    def __init__(self, hidden_size, causal_dim):
+        super().__init__(hidden_size, causal_dim)
+        # 自定义初始化
         # ...
-    
+
     def forward(self, features):
-        # 实现自定义的前向传播
-        # ...
-        return causal_loc, causal_scale
+        # 在这里实现你自己的前向传播逻辑
+        x = self.custom_layer(features)
+        return super().forward(x)
 ```
 
 ### 自定义行动网络
@@ -303,7 +303,7 @@ class CustomActionNetwork(ActionNetwork):
 
 ### Q: 如何添加新的分布类型？
 
-A: 你可以在`src/utils/distributions.py`中添加新的分布函数，然后在`CausalLMConfig`中添加一个配置选项，最后在`AbductionNetwork`和`ActionNetwork`中添加对应的处理逻辑。
+A: 你可以在`src/utils/distributions.py`中添加新的分布函数，然后在`CausalLMConfig`中添加一个配置选项，最后在`归因推断网络 (AbductionNetwork)` 和`ActionNetwork`中添加对应的处理逻辑。
 
 ### Q: 如何支持多GPU训练？
 

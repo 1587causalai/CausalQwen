@@ -106,7 +106,7 @@ $$S_k \sim \text{Cauchy}(\vec{A}_k \cdot \text{loc}_U + B_k, |\vec{A}_k| \cdot \
 
 其中 $|\vec{A}_k|$ 表示向量 $\vec{A}_k$ 的各元素绝对值。
 
-**关键数学洞察**：决策分数的不确定性（$\text{scale}_{S_k} = |\vec{A}_k| \cdot \text{scale}_U$）完全由推断网络输出的 $\text{scale}_U$ 决定，与偏置 $B_k$ 无关。这意味着**所有的不确定性都应该通过推断阶段来表达**，而行动网络不应引入人为的偏见或偏好。
+**关键数学洞察**：决策分数的不确定性（$\text{scale}_{S_k} = |\vec{A}_k| \cdot \text{scale}_U$）完全由归因推断网络输出的 $\text{scale}_U$ 决定，与偏置 $B_k$ 无关。这意味着**所有的不确定性都应该通过归因推断阶段来表达**，而行动网络不应引入人为的偏见或偏好。
 
 这种解析推导使我们能够直接计算决策分数的分布参数，而无需进行采样，从而实现高效的训练和推理。
 
@@ -183,11 +183,11 @@ $$z = h(x)$$
 
 #### 2.2.2 个体因果表征分布参数化
 
-然后，推断网络（Abduction Network）将观测信息表征 $z$ 映射为后验分布 $P(U|x)$ 的参数：
+然后，归因推断网络（Abduction Network）将观测信息表征 $z$ 映射为后验分布 $P(U|x)$ 的参数：
 
 $$\text{loc}_U, \text{scale}_U = g(z)$$
 
-其中 $g$ 是推断网络函数。在这里，$\text{loc}_U$ 刻画了这个子总体的**中心趋势**或最典型的代表。而 $\text{scale}_U$ 则量化了这个子总体的**多样性或异质性**。一个较大的 $\text{scale}_U$ 意味着观测证据 $x$ 不足以完全确定个体的所有内在属性，该子总体内部仍存在显著的不确定性。
+其中 $g$ 是归因推断网络函数。在这里，$\text{loc}_U$ 刻画了这个子总体的**中心趋势**或最典型的代表。而 $\text{scale}_U$ 则量化了这个子总体的**多样性或异质性**。一个较大的 $\text{scale}_U$ 意味着观测证据 $x$ 不足以完全确定个体的所有内在属性，该子总体内部仍存在显著的不确定性。
 
 在实际实现中，我们使用一个线性层来实现这个映射：
 
@@ -557,8 +557,6 @@ $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + \lambda \cdot \mathcal
 
 ### 4.3 门控机制的学习动态
 
-#### 4.3.1 学习阶段的自然分离
-
 门控损失函数导致学习过程自然分为两个阶段：
 
 1. **初始阶段**：模型主要学习分类任务，因为 $P_{\text{<NUM>}}$ 初始值较小，门控回归损失的贡献有限
@@ -566,7 +564,7 @@ $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + \lambda \cdot \mathcal
 
 这种自然分离符合人类的学习过程：先学会识别何时需要输出数值，再学会预测准确的数值。
 
-#### 4.3.2 梯度流的数学分析
+#### 4.3.1 梯度流的数学分析
 
 门控机制对梯度流有重要影响。考虑回归参数 $\theta_r$ 的梯度：
 
@@ -582,21 +580,19 @@ $$\frac{\partial \mathcal{L}_{\text{total}}}{\partial \theta_r} = \lambda \cdot 
 
 ### 4.4 门控损失的理论优势
 
-#### 4.4.1 学习顺序的自动调节
-
 门控损失最显著的优势是自动调节学习顺序，无需手动设计课程学习策略。这种自动调节有几个好处：
 
-1. **避免过早优化**：防止模型在学会基本分类之前过度优化回归任务
+1. **避免过早优化**：防止模型在学会基本分类任务之前过度优化回归任务
 2. **平滑过渡**：从分类主导到回归主导的平滑过渡，而不是突然切换
 3. **自适应权重**：每个样本的回归损失权重基于模型当前的分类能力自动调整
 
-#### 4.4.2 预测一致性的保证
+#### 4.4.1 预测一致性的保证
 
 门控损失鼓励模型的分类预测和回归预测保持一致。当模型预测一个词元不是`<NUM>`时，它没有动机去优化该词元的回归预测，因为回归损失被门控为接近零。
 
 这种一致性在推理时特别重要，确保模型只在预测`<NUM>`词元时才输出有意义的数值预测。
 
-#### 4.4.3 不确定性的传播
+#### 4.4.2 不确定性的传播
 
 门控机制允许分类不确定性传播到回归任务：
 
@@ -605,180 +601,210 @@ $$\frac{\partial \mathcal{L}_{\text{total}}}{\partial \theta_r} = \lambda \cdot 
 
 这种不确定性传播使模型能够在不确定的情况下保持谨慎，而在确定的情况下更加自信。
 
+## 5. 模型初始化的数学理论
 
+### 5.1 初始化的核心理念：恒等映射与知识迁移
 
+我们的初始化策略基于两个核心原则：
 
+1. **归因推断网络的恒等映射**：让个体因果表征初始时近似等于输入特征
+2. **行动网络的知识迁移**：充分利用预训练语言模型的知识，包括对数值的理解
 
-## 5. 基于第一性原理的初始化策略
+这种设计确保模型从一个有意义的起点开始，而非随机状态。
 
-### 5.1 传统启发式初始化的问题
+### 5.2 归因推断网络的恒等初始化
 
-在本文档的早期版本中，我们曾采用了一些启发式的初始化策略，例如：
-- 将 `<NUM>` Token 的偏置设置为 8.0（低于阈值 10.0）以抑制其初始概率
-- 将回归头的偏置设置为数据中位数（如 50.0）作为初始猜测
+#### 5.2.1 数学表达
 
-然而，**这些做法违背了我们框架的数学本质**。
+归因推断网络使用单一线性层将特征 $z$ 映射为个体因果表征分布的参数：
+$$[\text{loc}_U, \log \text{scale}_U] = W_{\text{fc}} \cdot z + b_{\text{fc}}$$
 
-#### 5.1.1 数学不一致性分析
+其中 $W_{\text{fc}} \in \mathbb{R}^{2C \times H}$，$b_{\text{fc}} \in \mathbb{R}^{2C}$，$C$ 是因果维度，$H$ 是特征维度。
 
-根据柯西分布的线性变换性质：
-$$S_k \sim \text{Cauchy}(\vec{A}_k \cdot \text{loc}_U + B_k, |\vec{A}_k| \cdot \text{scale}_U)$$
+#### 5.2.2 初始化策略
 
-关键观察：
-1. **不确定性的唯一来源**：决策分数的尺度参数 $\text{scale}_{S_k} = |\vec{A}_k| \cdot \text{scale}_U$ 完全由推断网络的输出 $\text{scale}_U$ 决定，与偏置 $B_k$ 无关。
-2. **偏置的实际作用**：偏置 $B_k$ 只影响位置参数 $\text{loc}_{S_k}$，即决策的"中心趋势"，但不影响不确定性的表达。
-3. **人为偏见的危害**：通过设置特殊的偏置值，我们实际上是在强加人为的决策偏好，这可能导致模型无法从纯净的、无偏见的状态开始学习。
+当 $H = C$（特征维度等于因果维度）时，实现精确的恒等映射：
 
-#### 5.1.2 启发式方法的具体害处
-
-1. **`<NUM>` Token 的偏置抑制**：
-   - **违背公平性**：为什么 `<NUM>` Token 应该被先验地抑制？如果数据中确实需要大量的数值预测，这种抑制会迫使模型花费额外的训练时间来"对抗"我们强加的偏见。
-   - **破坏自然学习节奏**：门控损失函数已经提供了自然的学习顺序调节机制，无需额外的人为干预。
-
-2. **回归头的数据中位数偏置**：
-   - **局部最优风险**：如果真实的最优预测并不在数据中位数附近，这个强加的先验可能将模型推向一个局部最优解。
-   - **梯度偏向**：初始的大偏置可能导致训练早期的梯度不平衡，影响学习的稳定性。
-
-### 5.2 基于第一性原理的纯净初始化
-
-#### 5.2.1 核心原则
-
-1. **不确定性的单一来源**：所有的不确定性都应该通过推断网络的 $\text{scale}_U$ 来表达，行动网络不应引入额外的不确定性操作。
-2. **无偏见起点**：模型应该从一个完全中性、无偏见的状态开始学习，让数据本身指导学习的方向。
-3. **数学一致性**：初始化策略应该完全符合我们框架的数学原理，不引入任何"工程hack"。
-
-#### 5.2.2 推荐的纯净初始化策略
-
-1. **推断网络（AbductionNetwork）**：
-   - **位置参数**：权重初始化为单位矩阵（恒等映射），偏置为0
-   - **尺度参数**：权重初始化为0，偏置设置为较大值（如 2.3，对应 $\exp(2.3) \approx 10$）
-   - **数学意义**：这确保了 $\text{loc}_U \approx z$（保持特征信息），$\text{scale}_U \approx 10$（高初始不确定性）
-
-2. **行动网络（ActionNetwork）**：
-   - **分类头权重**：从Qwen模型迁移，保持语言建模能力
-   - **分类头偏置**：**全部初始化为0**，包括 `<NUM>` Token
-   - **回归头权重**：小随机初始化（如 Xavier with gain=0.01）
-   - **回归头偏置**：**初始化为0**，不使用数据统计量
-
-#### 5.2.3 纯净初始化的预期效果
-
-在这种纯净初始化下，训练初期的状态将是：
-- **高且统一的不确定性**：所有 Token 的初始概率都接近 0.5（由于大的 $\text{scale}_U$ 和零偏置）
-- **公平竞争**：没有任何 Token 被人为地偏好或抑制
-- **自然学习节奏**：门控损失函数将自然地调节分类和回归任务的学习顺序
-- **数学纯净性**：整个框架的数学一致性得到完美保持
-
-### 5.3 纯净初始化的理论优势
-
-1. **消除人为偏见**：模型从完全中性的状态开始，让数据本身决定学习的方向。
-2. **保持数学一致性**：所有操作都严格遵循柯西分布的数学性质。
-3. **提高泛化能力**：避免因强加的先验假设而导致的过拟合。
-4. **简化调试**：移除"魔法数字"使得模型行为更容易理解和调试。
-
-## 6. 总结和展望
-
-
-### 6.1 数学框架流程图
-
-
-```mermaid
-graph TD
-    input_x["输入序列 x"] --"分词器"--> feature_z
-    
-    subgraph FN ["FeatureNetwork"]
-        feature_z["序列特征<br/>z_i = h(x_i, context_{<i})<br/>Shape: [B, S, H]"]
-    end
-    
-    feature_z -- "线性AbductionNetwork (逐位置)<br/>z_i → (loc_i, scale_i)" --> causal_U
-    
-    subgraph ABN ["个体因果表征 (逐位置)"]
-        causal_U["U_i ~ Cauchy(loc_i, scale_i)<br/>Shape: [B, S, C]"]
-    end
-    
-    subgraph ACN ["因果生成 ActionNetwork (逐位置)"]
-        causal_U -- "线性 Action" --> classification_action["分类分数<br/>S_{k,i} ~ Cauchy"]
-        causal_U -- "线性 Action" --> regression_action["回归值<br/>Y_i ~ Cauchy"]
-    end
-    
-    subgraph "损失计算 (逐位置)"
-        classification_action --> ovr_prediction["(OvR) P(S_{k,i} > C_k)"]
-        regression_action --> regression_prediction["(MLE) y_i ~ Y_i"]
-        ovr_prediction --> Loss_cls["分类损失 (BCE)"]
-        regression_prediction --> Loss_reg_gated["门控回归损失"]
-    end
-    
-    Loss_cls --> Loss_total["总损失<br/>(所有位置损失之和)"]
-    Loss_reg_gated --> Loss_total
-
-    subgraph "推理/生成 (逐位置)"
-        direction LR
-        classification_action --"采样 u_i"--> probability_output["输出词元<br/>argmax_k P(S_{k,i} > C_k)"]
-        regression_action --"采样 u_i"--> numerical_output["输出数值<br/>y_i"]
-    end
-    
-    style FN fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style ABN fill:#e6e6fa,stroke:#6a5acd,stroke-width:2px
-    style ACN fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+```python
+# 权重矩阵的前C行设为单位矩阵（对应loc）
+weight[:causal_dim, :] = I
+# 权重矩阵的后C行设为零矩阵（对应scale）  
+weight[causal_dim:, :] = 0
+# 偏置：loc部分为0，scale部分为2.3
+bias[:causal_dim] = 0
+bias[causal_dim:] = 2.3  # exp(2.3) ≈ 10
 ```
 
+这导致初始映射：
+$$\text{loc}_U = I \cdot z + 0 = z$$
+$$\log \text{scale}_U = 0 \cdot z + 2.3 = 2.3$$
 
+因此：
+$$U \sim \text{Cauchy}(z, \exp(2.3)) = \text{Cauchy}(z, 10)$$
 
+当 $H \neq C$ 时，使用 Xavier 初始化作为近似。
 
-### 6.2 理论贡献总结
+### 5.3 行动网络的知识迁移初始化
 
-本文详细阐述了因果语言模型的数学理论基础，主要包括四个核心方面：
+#### 5.3.1 分类头的完整迁移
 
-1. **柯西分布作为认知不确定性的数学表达**：我们论证了柯西分布的重尾特性和线性封闭性使其成为表示个体因果表征不确定性的理想选择，能够捕捉"开放世界"中的极端事件可能性。
+分类头使用 `CauchyLinear` 层，其权重和偏置都从预训练模型迁移：
 
-2. **推断-行动范式的数学表达**：我们提出了一个两阶段决策框架，将传统的直接映射分解为推断潜在个体因果表征和基于该状态采取行动两个步骤，实现了更灵活、更具解释性的决策过程。
+```python
+# 复制整个词表的权重（或可用部分）
+self.classification_head.causal_linear.weight.copy_(
+    qwen_lm_head.weight[:our_vocab_size, :]
+)
+# 复制偏置（如果存在）
+if qwen_lm_head.bias is not None:
+    self.classification_head.causal_linear.bias.copy_(
+        qwen_lm_head.bias[:our_vocab_size]
+    )
+```
 
-3. **OvR分类的理论基础**：我们展示了OvR分类如何克服传统Softmax的局限性，提供独立决策、多标签支持和细粒度不确定性表示，特别适合与柯西分布结合使用。
+数学上：
+$$S_k = \vec{A}_k^{\text{Qwen}} \cdot U + B_k^{\text{Qwen}}$$
 
-4. **门控损失函数的数学合理性**：我们分析了门控损失如何实现"先分类，再回归"的自然学习顺序，确保预测一致性并支持不确定性传播。
+#### 5.3.2 回归头的均匀先验初始化
 
-这些理论基础共同构成了一个统一的数学框架，使因果语言模型能够无缝处理混合数据任务，在统一的输出机制下自主理解何时生成文本、何时进行数值回归。
+**关键洞察**：回归任务在原始 Qwen 模型中没有对应的知识，因此我们采用小随机初始化来实现均匀先验。
 
-### 6.3 未来研究方向
+```python
+# Xavier初始化，但使用更小的增益
+nn.init.xavier_uniform_(self.regressor.weight, gain=0.01)
+nn.init.zeros_(self.regressor.bias)
+```
 
-基于当前的理论框架，我们识别了几个有前景的未来研究方向：
+数学表达：
+$$\vec{W} \sim \text{Xavier}(0, 0.01^2 \cdot \sigma^2), \quad b = 0$$
 
-1. **分布族扩展**：探索除柯西分布外的其他重尾分布（如学生t分布、稳定分布）作为个体因果表征的表示，可能提供更灵活的不确定性建模。
+其中 $\sigma^2 = \frac{2}{n_{\text{in}} + n_{\text{out}}}$ 是标准 Xavier 初始化的方差。
 
-2. **时序因果建模**：扩展框架以处理时序数据，捕捉个体因果表征随时间的演变，适用于时间序列预测和序列建模任务。
+这种设计的数学合理性：
+1. **小权重 → 大尺度**：由于初始 $\text{scale}_U = 10$ 很大，而权重很小（gain=0.01），回归输出的尺度参数会是：
+   $$\text{scale}_Y = \|\vec{W}\| \cdot \text{scale}_U \approx 0.01 \times 10 = 0.1$$
+   
+   但实际上，由于 $\text{scale}_U = 10$ 的主导作用，输出分布仍然具有很大的不确定性。
 
-3. **多模态融合**：将框架扩展到多模态输入（文本、图像、音频等），研究如何在统一的个体因果表征空间中融合不同模态的信息。
+2. **近似均匀先验**：大尺度的柯西分布接近均匀分布，这反映了我们对回归值的完全无知状态：
+   $$Y \sim \text{Cauchy}(0, \text{large scale}) \approx \text{Uniform prior}$$
 
-4. **因果表示学习**：研究如何学习更有意义的个体因果表征表示，可能通过引入结构化先验或自监督学习目标。
+3. **让数据决定一切**：这种初始化不引入任何关于数值的先验偏好，完全由训练数据来塑造回归行为。
 
-5. **可解释性增强**：开发技术来可视化和解释个体因果表征空间，帮助理解模型的决策过程和不确定性来源。
+### 5.4 初始状态的数学分析
 
-6. **效率优化**：研究如何在保持理论优势的同时，减少计算复杂度，使模型更适合资源受限的环境。
+#### 5.4.1 初始决策分布
 
-### 6.4 结语
+给定输入特征 $z$（假设 $H = C$），初始状态下：
 
-因果语言模型的数学理论框架代表了一种新的思考语言模型决策过程的方式，将传统的直接映射分解为推断和行动两个阶段，并利用柯西分布的独特性质提供统一的不确定性表示。
+1. **个体因果表征**：$U \sim \text{Cauchy}(z, 10)$
 
-这一框架不仅在理论上优雅，而且在实践中有效，为处理混合数据任务提供了一种原则性的方法。随着研究的深入，我们期待这一框架能够进一步发展，应用到更广泛的领域，并启发新的模型架构和学习算法。
+2. **分类决策分数**：
+   $$S_k \sim \text{Cauchy}(\vec{A}_k^{\text{Qwen}} \cdot z + B_k^{\text{Qwen}}, 10 \cdot \|\vec{A}_k^{\text{Qwen}}\|)$$
 
-## 参考文献
+3. **回归值**（由于权重很小）：
+   $$Y \sim \text{Cauchy}(\vec{W} \cdot z, 10 \cdot \|\vec{W}\|) \approx \text{Cauchy}(0, \text{small})$$
+   
+   但由于 $\text{scale}_U = 10$ 的影响，实际上回归值的分布具有很大的不确定性。
 
-[1] Cauchy, A. L. (1853). Sur les résultats moyens d'observations de même nature, et sur les résultats les plus probables. Comptes Rendus Hebdomadaires des Séances de l'Académie des Sciences, 37, 198-206.
+#### 5.4.2 初始化策略的对比
 
-[2] Kingma, D. P., & Welling, M. (2014). Auto-encoding variational Bayes. International Conference on Learning Representations (ICLR). https://arxiv.org/abs/1312.6114
+| 组件 | 初始化方法 | 理由 |
+|------|----------|------|
+| 归因推断网络 | 恒等映射 | 保持特征信息的无损传递 |
+| 分类头 | Qwen 权重迁移 | 利用预训练的语言理解能力 |
+| 回归头 | 小随机初始化 | 无先验知识，实现均匀先验 |
 
-[3] Rifkin, R., & Klautau, A. (2004). In defense of one-vs-all classification. Journal of Machine Learning Research, 5, 101-141. https://www.jmlr.org/papers/volume5/rifkin04a/rifkin04a.pdf
+这种差异化的初始化策略反映了不同组件的知识来源：
+- **分类**：可以从预训练模型中获益
+- **回归**：需要从零开始学习，因为原始模型没有数值预测能力
 
-[4] Kendall, A., & Gal, Y. (2017). What uncertainties do we need in Bayesian deep learning for computer vision? Advances in Neural Information Processing Systems (NeurIPS). https://arxiv.org/abs/1703.04977
+### 5.6 理论优势总结
 
-[5] Nalisnick, E., & Smyth, P. (2017). Learning priors for invariance. International Conference on Artificial Intelligence and Statistics (AISTATS). https://proceedings.mlr.press/v84/nalisnick18a.html
+1. **知识迁移的选择性**：只在有相关知识的地方（分类）进行迁移
+2. **数学上的一致性**：所有组件都遵循柯西分布框架
+3. **均匀先验的实现**：回归头的初始化实现了"无偏见"的起点
+4. **自适应学习**：高初始不确定性（$\text{scale}_U = 10$）允许模型灵活适应数据
 
-[6] Gal, Y., & Ghahramani, Z. (2016). Dropout as a Bayesian approximation: Representing model uncertainty in deep learning. International Conference on Machine Learning (ICML). https://arxiv.org/abs/1506.02142
+这种初始化策略体现了"让数据说话"的核心理念：在有先验知识的地方利用它（分类），在没有先验知识的地方保持开放（回归）。
 
-[7] Bengio, Y., Louradour, J., Collobert, R., & Weston, J. (2009). Curriculum learning. International Conference on Machine Learning (ICML). https://dl.acm.org/doi/10.1145/1553374.1553380
+## 6. 数值感知的因果表征
 
-[8] Kendall, A., Gal, Y., & Cipolla, R. (2018). Multi-task learning using uncertainty to weigh losses for scene geometry and semantics. IEEE Conference on Computer Vision and Pattern Recognition (CVPR). https://arxiv.org/abs/1705.07115
+### 6.1 动机与背景
 
-[9] Nalisnick, E., Matsukawa, A., Teh, Y. W., Gorur, D., & Lakshminarayanan, B. (2019). Do deep generative models know what they don't know? International Conference on Learning Representations (ICLR). https://arxiv.org/abs/1810.09136
+在处理包含数值信息的文本时，传统的语言模型面临一个根本性挑战：如何在统一的表示空间中同时编码离散的语义信息和连续的数值信息。我们的解决方案基于以下数学洞察：
 
-[10] Pearl, J. (2009). Causality: Models, reasoning, and inference (2nd ed.). Cambridge University Press. https://doi.org/10.1017/CBO9780511803161
+1. **表示空间的线性结构**：利用柯西分布的线性封闭性，我们可以通过简单的加法操作组合不同类型的信息
+2. **信息的可分离性**：基础语义和数值信息应该是可分离的，允许模型独立地学习和利用这两种信息
+
+### 6.2 数学框架
+
+#### 6.2.1 统一的特征表示
+
+我们定义一个完全统一的特征提取函数 $\tilde{h}: (\mathcal{X} \times \mathbb{R}) \rightarrow \mathbb{R}^H$：
+
+$$\tilde{h}(x_i, v_i) = h(x_i) + \phi(v_i) \quad \forall i$$
+
+其中数值编码函数 $\phi: \mathbb{R} \rightarrow \mathbb{R}^H$ 定义为：
+
+$$\phi(v) = \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e}$$
+
+**关键洞察**：当 $x_i \neq \text{<NUM>}$ 时，我们设定 $v_i = 0$，从而：
+$$\phi(0) = \text{sign}(0) \cdot \ln(1 + 0) \cdot \vec{e} = 0 \cdot 0 \cdot \vec{e} = \mathbf{0}$$
+
+这意味着非数值位置的特征退化为：
+$$\tilde{h}(x_i, 0) = h(x_i) + \mathbf{0} = h(x_i)$$
+
+这种设计的优雅之处在于：
+1. **完全统一**：所有位置都使用相同的公式，无需条件分支
+2. **自然退化**：非数值位置自动退化为纯语义表示
+3. **扩展性强**：每个位置都可以携带数值信息，为未来扩展提供基础
+
+#### 6.2.2 统一表示的理论优势
+
+**命题 6.2（统一性定理）**：定义序列的增广表示 $(x, v) \in (\mathcal{X}^S, \mathbb{R}^S)$，其中：
+$$v_i = \begin{cases}
+\text{numerical\_value}_i & \text{如果 } x_i = \text{<NUM>} \\
+0 & \text{否则}
+\end{cases}$$
+
+则特征提取函数 $\tilde{h}$ 在整个增广空间上是连续且可微的。
+
+**证明**：由于 $\phi(0) = 0$ 且 $\phi$ 在 $v=0$ 处连续（实际上 $\lim_{v \to 0} \phi(v) = 0$），函数 $\tilde{h}$ 在所有点都连续。可微性由 $h$ 和 $\phi$ 的可微性保证。□
+
+#### 6.2.3 未来扩展的可能性
+
+这种统一的框架为以下扩展提供了自然的基础：
+
+1. **连续位置编码**：可以将位置信息编码为连续数值
+   $$v_i^{\text{pos}} = \alpha \cdot i / S$$
+   
+2. **时间戳融合**：对于时序数据，可以编码时间信息
+   $$v_i^{\text{time}} = \beta \cdot t_i$$
+   
+3. **多维数值**：通过使用不同的方向向量 $\vec{e}_k$，可以编码多个数值
+   $$\phi(v_1, ..., v_K) = \sum_{k=1}^K \text{sign}(v_k) \cdot \ln(1 + |v_k|) \cdot \vec{e}_k$$
+
+4. **置信度编码**：可以将模型的置信度作为数值编码
+   $$v_i^{\text{conf}} = \gamma \cdot \text{confidence}_i$$
+
+### 6.3 加性融合的数学完备性
+
+#### 6.3.1 表示定理
+
+**定理 6.3（表示完备性）**：给定足够的隐藏维度 $H$，统一的特征表示函数
+$$\tilde{h}(x, v) = h(x) + \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e}$$
+可以近似任意的连续函数 $f: (\mathcal{X} \times \mathbb{R}) \rightarrow \mathbb{R}^H$。
+
+这个定理保证了我们的简单加性方法不会限制模型的表达能力。
+
+#### 6.3.2 计算效率
+
+统一的表示还带来计算效率的提升：
+
+1. **无条件分支**：所有位置使用相同的计算路径
+2. **向量化友好**：可以对整个序列并行计算
+3. **梯度计算简单**：
+   $$\frac{\partial \tilde{h}}{\partial v} = \frac{\vec{e}}{1 + |v|} \cdot \text{sign}(v)$$
+   在 $v=0$ 处为 0，保证了梯度的连续性
 

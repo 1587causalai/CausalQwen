@@ -33,7 +33,7 @@
     │
     ▼
 ┌─────────────────┐
-│   推断网络      │ ─── 推断因果状态分布参数
+│   归因推断网络    │ ─── 推断因果状态分布参数
 │(AbductionNetwork)│     loc(z), scale(z)
 └─────────────────┘
     │
@@ -86,7 +86,7 @@
    - 从输入序列提取高维特征表示
    - 可以是预训练的语言模型（如Qwen-0.5B）或简化的模拟器
 
-3. **推断网络（AbductionNetwork）**：
+3. **归因推断网络（AbductionNetwork）**：
    - 从特征表示推断潜在因果状态的概率分布参数
    - 输出柯西分布的位置参数（loc）和尺度参数（scale）
 
@@ -113,7 +113,7 @@
    - 对于包含`<NUM>`词元的输入，特征可能被数值调制
 
 3. **因果推断**：
-   - 推断网络将特征表示 $z$ 映射为因果状态 $U$ 的分布参数：$\text{loc}_U, \text{scale}_U = g(z)$
+   - 归因推断网络将特征表示 $z$ 映射为因果状态 $U$ 的分布参数：$\text{loc}_U, \text{scale}_U = g(z)$
    - 因果状态表示为柯西分布：$U \sim \text{Cauchy}(\text{loc}_U, \text{scale}_U)$
 
 4. **行动生成**：
@@ -359,107 +359,60 @@ class NumAwareFeatureNetwork(nn.Module):
 
 这种设计允许数值信息直接影响特征表示，使模型能够区分不同数值的`<NUM>`词元。
 
-### 2.3 推断网络（AbductionNetwork）
+### 2.3 归因推断网络（AbductionNetwork）
 
-#### 2.3.1 设计目标
+**作用**：将`FeatureNetwork`提取的特征`z`（观测信息）映射为因果表征`U`的分布参数。这是从"观测"到"归因"的关键一步。
 
-推断网络的主要目标是从特征表示推断潜在因果状态的概率分布。它需要：
-- 将特征映射为柯西分布的参数
-- 确保尺度参数始终为正
-- 提供适当的因果维度，平衡表达能力和计算效率
+**输入**：
+- `features` (`z`): `[batch_size, hidden_size]`
 
-#### 2.3.2 接口定义
+**输出**：
+- `causal_loc`: `[batch_size, causal_dim]`
+- `causal_scale`: `[batch_size, causal_dim]`
+
+**简化实现**：
+最简单的`AbductionNetwork`可以是一个线性层，后跟参数分割和必要的变换（如`exp`以确保`scale`为正）。
 
 ```python
+import torch
+import torch.nn as nn
+
 class AbductionNetwork(nn.Module):
-    def __init__(self, input_size: int, causal_dim: int):
-        """
-        初始化推断网络。
-        
-        Args:
-            input_size: 输入特征的维度
-            causal_dim: 因果状态的维度
-        """
+    """
+    一个简单的归因推断网络，使用单个线性层。
+    """
+    def __init__(self, hidden_size, causal_dim):
         super().__init__()
-        self.input_size = input_size
-        self.causal_dim = causal_dim
-        
-        # 线性层映射特征到分布参数
-        self.causal_inference_layer = nn.Linear(input_size, causal_dim * 2)
-    
-    def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        推断因果状态分布参数。
-        
-        Args:
-            features: 特征表示 [batch_size, input_size]
-            
-        Returns:
-            loc: 位置参数 [batch_size, causal_dim]
-            scale: 尺度参数 [batch_size, causal_dim]
-        """
-        # 映射特征到分布参数
-        params = self.causal_inference_layer(features)
-        
-        # 分离位置和尺度参数
-        loc, log_scale = torch.split(params, self.causal_dim, dim=-1)
-        
-        # 确保尺度参数为正
+        self.fc = nn.Linear(hidden_size, causal_dim * 2)
+
+    def forward(self, features):
+        # features: [B, H]
+        params = self.fc(features)  # [B, C*2]
+        loc, log_scale = torch.chunk(params, 2, dim=-1)
         scale = torch.exp(log_scale)
-        
-        return loc, scale
+        return loc, scale  # [B, C], [B, C]
 ```
 
-#### 2.3.3 变体设计
+**深度实现 (可选)**：
+为了增强模型的非线性能力，可以使用一个更深的MLP结构。
 
-推断网络有两个主要变体：
+```python
+class DeepAbductionNetwork(nn.Module):
+    """
+    一个更深的归因推断网络，使用MLP。
+    """
+    def __init__(self, hidden_size, causal_dim, dropout_rate=0.1):
+        super().__init__()
+        self.fc = nn.Linear(hidden_size, causal_dim * 2)
+        self.dropout = nn.Dropout(dropout_rate)
 
-1. **基础推断网络**：
-   - 使用单个线性层映射特征到分布参数
-   - 简单高效，参数少
-   - 适合初步验证和小规模实验
-
-2. **深度推断网络**：
-   - 使用多层感知机映射特征到分布参数
-   - 提供更强的非线性表达能力
-   - 适合复杂任务和大规模实验
-
-   ```python
-   class DeepAbductionNetwork(nn.Module):
-       def __init__(self, input_size, causal_dim, hidden_sizes=[512, 256]):
-           super().__init__()
-           self.input_size = input_size
-           self.causal_dim = causal_dim
-           
-           # 构建MLP层
-           layers = []
-           prev_size = input_size
-           
-           for hidden_size in hidden_sizes:
-               layers.append(nn.Linear(prev_size, hidden_size))
-               layers.append(nn.ReLU())
-               prev_size = hidden_size
-           
-           self.mlp = nn.Sequential(*layers)
-           
-           # 最终层输出分布参数
-           self.causal_inference_layer = nn.Linear(prev_size, causal_dim * 2)
-   ```
-
-#### 2.3.4 实现考虑
-
-1. **数值稳定性**：
-   - 使用对数尺度参数，然后通过指数函数转换为实际尺度参数
-   - 避免尺度参数变为负值或过小
-
-2. **初始化策略**：
-   - 使用适当的权重初始化，避免初始分布过于极端
-   - 可以考虑将初始尺度参数设置为较小值，随着训练逐渐增加
-
-3. **因果维度选择**：
-   - 因果维度是一个重要的超参数，影响模型的表达能力和计算效率
-   - 较小的因果维度（如16或32）适合简单任务和快速验证
-   - 较大的因果维度（如64或128）适合复杂任务和高性能要求
+    def forward(self, features):
+        # features: [B, H]
+        params = self.fc(features)  # [B, C*2]
+        loc, log_scale = torch.chunk(params, 2, dim=-1)
+        scale = torch.exp(log_scale)
+        return self.dropout(loc), self.dropout(scale)  # [B, C], [B, C]
+```
 
 ### 2.4 行动网络（ActionNetwork）
 
@@ -813,7 +766,7 @@ class CausalLanguageModel(nn.Module):
             else:
                 raise ValueError(f"Unknown feature network type: {config.feature_network_type}")
         
-        # 创建推断网络
+        # 创建归因推断网络
         self.abduction_network = AbductionNetwork(
             input_size=config.hidden_size,
             causal_dim=config.causal_dim
@@ -1483,7 +1436,7 @@ Qwen-0.5B的原始输出机制是标准的语言模型预测：
 
 1. **阶段1：冻结特征网络**
    - 冻结Qwen-0.5B的所有参数
-   - 只训练推断网络和行动网络
+   - 只训练归因推断网络和行动网络
    - 这一阶段可以快速验证因果架构的有效性
 
    ```python
@@ -1491,7 +1444,7 @@ Qwen-0.5B的原始输出机制是标准的语言模型预测：
    for param in causal_lm.feature_network.parameters():
        param.requires_grad = False
    
-   # 只优化推断网络和行动网络
+   # 只优化归因推断网络和行动网络
    optimizer = torch.optim.Adam([
        {'params': causal_lm.abduction_network.parameters()},
        {'params': causal_lm.action_network.parameters()}
