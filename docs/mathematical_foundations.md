@@ -206,6 +206,33 @@ $$Y_i \sim \text{Cauchy}(W_{\text{reg}} \cdot z_i, \gamma \cdot \|W_{\text{reg}}
 
 当 $\gamma \gg \|W_{\text{reg}}\|$ 时，回归输出近似为以 $0$ 为中心的宽泛分布，提供了**无偏的回归先验**。
 
+#### 步骤5：OvR 阈值 → 统一设置
+
+在 OvR 分类中，阈值 $C_k$ 决定了柯西分布决策分数超过阈值的概率计算：
+
+$$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
+
+**阈值初始化**：所有类别使用相同的常数阈值
+$$C_k = C_{\text{OvR}}, \quad \forall k \in \{0, 1, \ldots, V_{\text{full}}-1\}$$
+
+其中 $C_{\text{OvR}}$ 是预设常数（如 100.0）, 后续可以考虑让它是可学习参数。
+
+**数学效果**：
+- $C_{\text{OvR}} = 0$: 初始概率接近 0.5，无明显偏好
+- $C_{\text{OvR}} = 10$: 初始概率普遍较低，创造稀疏激活
+- $C_{\text{OvR}} \geq 100$: 极度稀疏的初始概率分布
+
+**推荐设置**：$C_{\text{OvR}} = 100.0$，这提供了良好的起点：
+1. **适度稀疏**：大多数类别初始概率远低于 0.5
+2. **数值稳定**：不至于因极端值导致梯度消失，且不会出现梯度爆炸
+
+通过上述初始化步骤，CausalQwen 在训练开始时具有以下性质：
+
+-   **因果表征**: 对于每个位置 $i$，因果表征 $U_i$ 服从宽泛的柯西分布 $U_i \sim \text{Cauchy}(z_i, \gamma)$，其中 $\gamma$ 是大常数。
+-   **分类决策**: 分类行动网络的输出与 Qwen 的原始输出完全一致，即 $\text{loc}_{S_{k,i}} = W_{\text{Qwen}}[k, :] \cdot z_i$。
+-   **回归决策**: 由于回归网络的标准初始化，回归预测的分布为 $Y_i \sim \text{Cauchy}(W_{\text{reg}} \cdot z_i, \gamma \cdot \|W_{\text{reg}}\|)$，当 $\gamma$ 很大时，近似为以 0 为中心的宽泛分布。
+-   **阈值设置**: 所有类别共享相同的初始阈值 $C_k = C_{\text{OvR}}$，这提供了一个适度稀疏且数值稳定的初始概率分布。
+
 
 ## 5. 核心洞察与总结
 
@@ -214,6 +241,7 @@ CausalQwen 的数学框架三个特色：
 1.  **因果表征**：通过 $U$ 建模个体因果性差异
 2.  **分布计算**：利用柯西分布的线性性质，实现无采样训练
 3.  **统一架构**：设计为 Qwen 的子类，通过扩展而非重构增加数值处理能力
+
 
 ---
 更详细的数学推导请参考：[`design-docs/math/mathematical_foundations.md`](design-docs/math/mathematical_foundations.md)
