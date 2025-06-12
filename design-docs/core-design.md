@@ -98,6 +98,24 @@ graph TD
 - **自然扩展**：为未来给每个位置赋予连续值（如置信度、时间戳等）提供了框架
 - **计算高效**：可以完全向量化，无需分支处理
 
+### 3.2.1 数值感知的并行化实现
+
+在实际工程中，我们通过向量化操作实现高效的数值感知：
+
+```python
+# 构建数值向量（batch_size, seq_len）
+numerical_values = torch.zeros_like(input_ids, dtype=torch.float)
+numerical_values[num_mask] = actual_values  # num_mask标记<NUM>位置
+
+# 向量化的数值编码
+sign_v = torch.sign(numerical_values)
+log_v = torch.log1p(torch.abs(numerical_values))
+numerical_features = sign_v * log_v * self.direction_vector  # [B, S, H]
+
+# 统一特征计算
+z = token_embeddings + numerical_features  # 自动广播
+```
+
 ### 3.3 词汇表设计与预留Token机制
 
 在实现CausalQwen时，我们发现了Qwen模型词汇表设计中的一个重要特性，这对我们的架构设计有着深远影响。
@@ -220,11 +238,16 @@ graph TD
         \[
         \mathcal{L}_{\text{cauchy\_nll},i} = \log(\pi \cdot \text{scale}_{Y_i}) + \log\left(1 + \left(\frac{y_{\text{true},i} - \text{loc}_{Y_i}}{\text{scale}_{Y_i}}\right)^2\right)
         \]
-    - **门控机制:** "门"即模型在位置`i`预测类别为`<NUM>`的概率`P_<NUM>,i`。
+    - **混合门控机制:** 为了在训练初期提供更稳定的梯度，我们采用混合门控策略：
         \[
-        \mathcal{L}_{\text{reg\_gated},i} = \mathbb{I}(y_{\text{true\_id},i} = \text{<NUM>\_ID}) \cdot P_{\text{<NUM>},i} \cdot \mathcal{L}_{\text{cauchy\_nll},i}
+        \mathcal{L}_{\text{reg\_gated},i} = m_i \cdot \left(\alpha + (1-\alpha) \cdot P_{\text{<NUM>},i}\right) \cdot \mathcal{L}_{\text{cauchy\_nll},i}
         \]
-    这个设计迫使模型必须先提升对`<NUM>`的预测概率（打开大门），才能有效优化回归损失，从而学会**先分类，再回归**。
+        其中：
+        - $m_i = \mathbb{I}(y_{\text{true\_id},i} = \text{<NUM>\_ID})$ 是位置掩码
+        - $\alpha \in [0, 1]$ 是门控系数（1.0表示无门控，0.0表示完全门控）
+        - $P_{\text{<NUM>},i}$ 是模型预测为`<NUM>`的概率
+        
+    这个设计允许在训练初期（$\alpha$ 较大）提供基础梯度，随着训练进行逐渐减小 $\alpha$，最终实现完全的自适应门控。
 
 ---
 
@@ -366,3 +389,54 @@ graph TD
 **阶段3：端到端优化**
 - 在真实混合数据集上训练
 - 性能调优和超参数搜索
+
+### 附录C：并行化架构的理论分析
+
+#### C.1 位置独立性的数学保证
+
+**定理C.1（位置独立性）**：在CausalQwen架构中，位置$i$的输出仅依赖于该位置的输入，与其他位置无关。
+
+**证明**：对于任意位置$i$：
+- 特征：$z_i = h(x_i) + \phi(v_i)$
+- 因果表征：$U_i | z_i \sim \text{Cauchy}(\text{loc}(z_i), \text{scale}(z_i))$
+- 决策：$S_{k,i} = \vec{A}_k \cdot U_i + B_k$，$Y_i = \vec{W} \cdot U_i + b$
+
+每一步计算都仅使用位置$i$的信息，因此位置间完全独立。□
+
+#### C.2 向量化等价性
+
+**定理C.2（向量化等价性）**：批量向量化计算与逐位置计算在数学上完全等价。
+
+**证明**：设批量操作为$\mathbf{F}$，逐位置操作为$f$，则：
+\[
+\mathbf{F}([x_1, ..., x_S]) = [f(x_1), ..., f(x_S)]
+\]
+由于没有位置间依赖，向量化不改变计算结果。□
+
+#### C.3 数值稳定性分析
+
+**柯西分布的数值优势**：
+1. **对数尺度的稳定性**：使用$\log \text{scale}$避免数值下溢
+2. **有界梯度**：$\arctan$函数确保梯度有界
+3. **混合精度友好**：重尾特性对精度损失不敏感
+
+### 附录D：工程实现检查清单
+
+- [ ] 实现向量化的数值编码模块
+- [ ] 验证批量因果推断的正确性
+- [ ] 测试并行化损失计算的数值稳定性
+- [ ] 基准测试：比较向量化与循环实现的性能
+- [ ] 内存分析：长序列下的内存使用优化
+- [ ] 混合精度训练的兼容性测试
+
+**阶段1：验证核心机制**
+- 使用简化实现验证数值感知和并行化的有效性
+- 确保核心因果推断和行动模块的正确性
+
+**阶段2：集成优化**
+- 集成数值感知机制和并行化工程技巧
+- 在合成数据上验证性能提升
+
+**阶段3：全面测试**
+- 在真实数据集上进行端到端测试
+- 验证模型的鲁棒性和泛化能力

@@ -72,40 +72,49 @@ P_{k,i} = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - 
 
 ## 6. 数值感知的统一表示
 
-对于序列中的**每个位置** $i$，特征向量都通过相同的公式计算：
-\[
-z_i = h(x_i) + \text{sign}(v_i) \cdot \ln(1 + |v_i|) \cdot \vec{e}
-\]
+对于序列中的**每个位置** $i$，我们在**输入层**就进行数值感知处理：
+
+$$e_i = \text{embed}(x_i) + \phi(v_i)$$
 
 其中：
-- 当 $x_i = \text{<NUM>}$ 时，$v_i$ 是对应的实际数值
-- 当 $x_i \neq \text{<NUM>}$ 时，$v_i = 0$
+- $\text{embed}(x_i)$ 是词元 $x_i$ 的基础嵌入
+- 当 $x_i = \text{<NUM>}$ 时，$v_i$ 是对应的实际数值；否则 $v_i = 0$
+- $\phi(v) = \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e}$ 是数值编码函数
 
-**关键性质**：$\text{sign}(0) \cdot \ln(1 + 0) = 0$，非数值位置自然退化为 $z_i = h(x_i)$。
+**关键性质**：$\phi(0) = 0$，非数值位置自然退化为 $e_i = \text{embed}(x_i)$。
+
+增强嵌入序列 $(e_1, ..., e_S)$ 然后通过 Transformer 得到特征：
+$$z = h(e_1, ..., e_S) = (z_1, ..., z_S)$$
+
+为什么选择对数编码？
+1. **数值稳定性**：将大范围的数值压缩到合理区间
+2. **相对误差保持**：对数空间中的等距对应原空间的等比
+3. **自然退化**：零值自动消失，无需特殊处理
 
 ## 7. 并行化计算的核心思想
 
-### 7.1 输入并行化
+CausalQwen的并行化发生在**因果推断-行动阶段**，而非特征提取阶段。
 
-**数值向量构建**：
-$$v_i = \begin{cases}
-\text{numerical\_value}_i & \text{如果 } x_i = \text{<NUM>} \\
-0 & \text{否则}
-\end{cases}$$
+**阶段1：特征提取**（串行，不可并行）
+- 输入：增强嵌入 $(e_1, ..., e_S)$
+- 处理：通过Transformer的自注意力机制
+- 输出：特征序列 $z = (z_1, ..., z_S)$
+- 特性：位置间有依赖关系
 
-**向量化特征计算**：
-$$\mathbf{z} = \mathbf{h}(\mathbf{x}) + \boldsymbol{\phi}(\mathbf{v})$$
+**阶段2：因果推断-行动**（并行）
+- 输入：特征 $z_i$（每个位置独立）
+- 处理：$U_i \sim \text{Cauchy}(\text{loc}(z_i), \text{scale}(z_i))$
+- 输出：$P_{k,i}$ 和 $(\text{loc}_{Y_i}, \text{scale}_{Y_i})$
+- 特性：给定 $z$ 后，位置间完全独立
 
-### 7.2 输出并行化
 
-**掩码向量**：
-$$m_i = \begin{cases}
-1 & \text{如果 } y_i = \text{<NUM>} \\
-0 & \text{否则}
-\end{cases}$$
+**条件独立性**：给定特征序列 $z$，位置 $i$ 的输出仅依赖 $z_i$：
+$$P(U_i, S_{k,i}, Y_i | z) = P(U_i, S_{k,i}, Y_i | z_i)$$
 
-**向量化损失**：
-$$\mathcal{L}_{\text{reg}} = \sum_{i=1}^S m_i \cdot P_{i,\text{<NUM>}} \cdot \ell_{\text{cauchy}}(y_i^{\text{val}}, \text{loc}_{Y,i}, \text{scale}_{Y,i})$$
+这保证了：
+- 所有位置可以同时进行因果推断
+- 损失计算可以完全向量化
+- 梯度计算可以并行进行
 
 ## 8. 总结
 

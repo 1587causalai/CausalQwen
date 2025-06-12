@@ -83,71 +83,106 @@ $$Q(p; \mu, \gamma) = \mu + \gamma \tan\left(\pi \left(p - \frac{1}{2}\right)\ri
 
 ### 2.2 推断-行动的数学分解
 
-我们将决策过程分解为：
+我们将决策过程分解为两个阶段。重要的是，这个分解在序列的**每个位置 $i$** 上独立进行：
 
-$$P(y|x) = \int P(y|u) \cdot P(u|x) \, du$$
+$$P(y_i|x) = \int P(y_i|u_i) \cdot P(u_i|x) \, du_i$$
 
 其中：
-- $P(u|x)$：推断阶段，从观测推断个体因果表征
-- $P(y|u)$：行动阶段，基于因果表征生成输出
+- $P(u_i|x)$：推断阶段，从观测序列推断位置 $i$ 的个体因果表征
+- $P(y_i|u_i)$：行动阶段，基于位置 $i$ 的因果表征生成该位置的输出
 
-### 2.3 推断阶段的数学表达
+### 2.3 特征提取与数值感知
 
-#### 2.3.1 特征提取
+#### 2.3.1 输入处理
 
-$$z = h(x)$$
+对于输入序列 $x = (x_1, ..., x_S)$：
+- 文本词元直接使用词汇表中的ID
+- 数值被替换为特殊词元 `<NUM>`，实际数值 $v_i$ 单独保存
 
-其中 $h$ 是特征网络（如Qwen）。
+#### 2.3.2 数值感知的嵌入
 
-#### 2.3.2 因果表征分布参数化
+对于每个位置 $i$，计算增强的词元嵌入：
 
-$$\text{loc}_U, \text{scale}_U = g(z)$$
+$$e_i = \text{embed}(x_i) + \phi(v_i)$$
 
-实现为：
-$$[\text{loc}_U, \log \text{scale}_U] = W_g \cdot z + b_g$$
-$$\text{scale}_U = \exp(\log \text{scale}_U)$$
+其中：
+- $\text{embed}(x_i)$ 是词元 $x_i$ 的基础嵌入向量
+- $v_i$ 是位置 $i$ 的数值（当 $x_i = \text{<NUM>}$ 时为实际数值，否则为 0）
+- $\phi(v) = \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e}$ 是数值编码函数
 
-#### 2.3.3 后验分布
+#### 2.3.3 特征提取
 
-$$U|x \sim \text{Cauchy}(\text{loc}_U, \text{scale}_U)$$
+增强的嵌入序列通过特征网络（Transformer）处理：
 
-### 2.4 行动阶段的数学表达
+$$z = h(e_1, ..., e_S) = (z_1, ..., z_S)$$
 
-#### 2.4.1 分类决策
+其中 $h$ 是特征网络（如Qwen），$z_i \in \mathbb{R}^H$ 是位置 $i$ 的特征向量。
 
-$$S_k = \vec{A}_k \cdot U + B_k$$
+**关键点**：数值信息在输入阶段就已经融入嵌入，后续的因果推断直接使用特征 $z_i$。
 
-由线性封闭性：
-$$S_k \sim \text{Cauchy}(\vec{A}_k \cdot \text{loc}_U + B_k, |\vec{A}_k| \cdot \text{scale}_U)$$
+### 2.4 推断阶段的数学表达
 
-#### 2.4.2 回归决策
+#### 2.4.1 位置独立的因果表征分布
 
-$$Y = \vec{W} \cdot U + b$$
+对每个位置 $i$，从特征 $z_i$ 推断因果表征分布：
 
-同样：
-$$Y \sim \text{Cauchy}(\vec{W} \cdot \text{loc}_U + b, |\vec{W}| \cdot \text{scale}_U)$$
+$$\text{loc}_{U_i}, \text{scale}_{U_i} = g(z_i)$$
 
-### 2.5 训练与推理的数学区别
+具体实现为：
+$$[\text{loc}_{U_i}, \log \text{scale}_{U_i}] = W_g \cdot z_i + b_g$$
+$$\text{scale}_{U_i} = \exp(\log \text{scale}_{U_i})$$
 
-#### 2.5.1 训练阶段：无采样路径
+#### 2.4.2 后验分布
 
-利用解析概率计算：
+每个位置的因果表征遵循独立的柯西分布：
 
-**分类概率**：
-$$P(S_k > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_k} - C_k}{\text{scale}_{S_k}}\right)$$
+$$U_i|z_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$$
 
-**回归损失**：
-$$\mathcal{L}_{\text{cauchy\_nll}} = \log(\pi \cdot \text{scale}_Y) + \log\left(1 + \left(\frac{y_{\text{true}} - \text{loc}_Y}{\text{scale}_Y}\right)^2\right)$$
+### 2.5 行动阶段的数学表达
 
-#### 2.5.2 推理阶段：确定性与随机性
+#### 2.5.1 分类决策
 
-**确定性推理**：使用分布参数
-- 分类：$\arg\max_k P(S_k > C_k)$
-- 回归：$\text{loc}_Y$
+对于位置 $i$ 的每个类别 $k \in \{0, 1, ..., K\}$：
 
-**随机推理**：采样后计算
-- 采样：$u \sim \text{Cauchy}(\text{loc}_U, \text{scale}_U)$
-- 计算：$S_k = \vec{A}_k \cdot u + B_k$, $Y = \vec{W} \cdot u + b$
+$$S_{k,i} = \vec{A}_k \cdot U_i + B_k$$
+
+由柯西分布的线性封闭性：
+$$S_{k,i} \sim \text{Cauchy}(\vec{A}_k \cdot \text{loc}_{U_i} + B_k, |\vec{A}_k| \cdot \text{scale}_{U_i})$$
+
+#### 2.5.2 回归决策
+
+位置 $i$ 的回归输出：
+
+$$Y_i = \vec{W} \cdot U_i + b$$
+
+同样由线性封闭性：
+$$Y_i \sim \text{Cauchy}(\vec{W} \cdot \text{loc}_{U_i} + b, |\vec{W}| \cdot \text{scale}_{U_i})$$
+
+### 2.6 训练与推理的数学区别
+
+#### 2.6.1 训练阶段：无采样路径
+
+利用解析概率计算，无需采样：
+
+**位置 $i$ 的分类概率**：
+$$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
+
+其中：
+$$\text{loc}_{S_{k,i}} = \vec{A}_k \cdot \text{loc}_{U_i} + B_k$$
+$$\text{scale}_{S_{k,i}} = |\vec{A}_k| \cdot \text{scale}_{U_i}$$
+
+**位置 $i$ 的回归损失**：
+$$\mathcal{L}_{\text{cauchy\_nll},i} = \log(\pi \cdot \text{scale}_{Y_i}) + \log\left(1 + \left(\frac{y_{\text{true},i} - \text{loc}_{Y_i}}{\text{scale}_{Y_i}}\right)^2\right)$$
+
+#### 2.6.2 推理阶段：确定性与随机性
+
+**确定性推理**（推荐）：直接使用分布参数
+- 分类：$\hat{y}_{\text{cls},i} = \arg\max_k P_{k,i}$
+- 回归：$\hat{y}_{\text{reg},i} = \text{loc}_{Y_i}$
+
+**随机推理**（探索性生成）：
+- 采样：$u_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$
+- 计算：$s_{k,i} = \vec{A}_k \cdot u_i + B_k$, $y_i = \vec{W} \cdot u_i + b$
 
 ## 3. OvR分类的深度理论分析
 
@@ -162,211 +197,317 @@ Softmax函数：$$P(y = k | x) = \frac{\exp(z_k)}{\sum_{j=1}^K \exp(z_j)}$$
 
 ### 3.2 OvR的数学优势
 
-#### 3.2.1 独立决策
+#### 3.2.1 位置独立的决策
 
-每个类别的概率独立计算：
-$$P(y = k | x) = P(S_k > C_k | x)$$
+每个类别在每个位置的概率独立计算：
+$$P_{k,i} = P(y_i = k | x) = P(S_{k,i} > C_k | x)$$
 
-这导致：
-$$\frac{\partial P_k}{\partial S_j} = 0 \quad \text{当 } j \neq k$$
+这导致位置间和类别间的完全解耦：
+$$\frac{\partial P_{k,i}}{\partial S_{j,\ell}} = 0 \quad \text{当 } (k,i) \neq (j,\ell)$$
 
 #### 3.2.2 柯西CDF的解析形式
 
-$$P(S_k > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_k} - C_k}{\text{scale}_{S_k}}\right)$$
+对于位置 $i$ 的类别 $k$：
+$$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
 
 **重要性质**：
-- 当 $\text{loc}_{S_k} \gg C_k$ 时，$P(S_k > C_k) \to 1$
-- 当 $\text{loc}_{S_k} \ll C_k$ 时，$P(S_k > C_k) \to 0$
-- 当 $\text{loc}_{S_k} = C_k$ 时，$P(S_k > C_k) = 0.5$
+- 当 $\text{loc}_{S_{k,i}} \gg C_k$ 时，$P_{k,i} \to 1$
+- 当 $\text{loc}_{S_{k,i}} \ll C_k$ 时，$P_{k,i} \to 0$
+- 当 $\text{loc}_{S_{k,i}} = C_k$ 时，$P_{k,i} = 0.5$
 
 #### 3.2.3 梯度分析
 
-$$\frac{\partial P(S_k > C_k)}{\partial \text{loc}_{S_k}} = \frac{1}{\pi \cdot \text{scale}_{S_k}} \cdot \frac{1}{1 + \left(\frac{\text{loc}_{S_k} - C_k}{\text{scale}_{S_k}}\right)^2}$$
+位置 $i$ 类别 $k$ 的概率对其位置参数的梯度：
+$$\frac{\partial P_{k,i}}{\partial \text{loc}_{S_{k,i}}} = \frac{1}{\pi \cdot \text{scale}_{S_{k,i}}} \cdot \frac{1}{1 + \left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)^2}$$
 
-这个梯度：
-- 在 $\text{loc}_{S_k} = C_k$ 处最大
-- 随着 $|\text{loc}_{S_k} - C_k|$ 增大而减小
-- 与 $\text{scale}_{S_k}$ 成反比
+这个梯度具有良好的性质：
+- 在决策边界 $\text{loc}_{S_{k,i}} = C_k$ 处最大
+- 远离决策边界时自然衰减
+- 尺度参数控制梯度的锐度
 
-### 3.3 多标签扩展
+### 3.3 序列级别的多标签扩展
 
-OvR自然支持多标签分类：
-$$\text{predicted\_labels} = \{k | P(S_k > C_k) > \tau\}$$
+OvR自然支持序列中每个位置的多标签分类：
+$$\text{predicted\_labels}_i = \{k | P_{k,i} > \tau\}$$
 
-其中 $\tau$ 是概率阈值。
+其中 $\tau$ 是概率阈值，可以是全局的或位置特定的。
 
 ## 4. 门控损失函数的深度分析
 
 ### 4.1 损失函数的完整数学表达
 
-#### 4.1.1 分类损失（OvR二元交叉熵）
+#### 4.1.1 位置级别的分类损失
 
-$$\mathcal{L}_{\text{cls}} = -\sum_{k=0}^{K} \left[ y_k \log(P_k) + (1-y_k) \log(1-P_k) \right]$$
+对于位置 $i$，OvR二元交叉熵损失：
+$$\mathcal{L}_{\text{cls},i} = -\sum_{k=0}^{K} \left[ y_{k,i} \log(P_{k,i}) + (1-y_{k,i}) \log(1-P_{k,i}) \right]$$
+
+其中 $y_{k,i} = \mathbb{I}(\text{target}_i = k)$ 是位置 $i$ 的真实标签指示器。
+
+#### 4.1.2 位置级别的回归损失
+
+对于位置 $i$，柯西负对数似然：
+$$\mathcal{L}_{\text{cauchy\_nll},i} = \log(\pi \cdot \text{scale}_{Y_i}) + \log\left(1 + \left(\frac{y_{\text{true},i} - \text{loc}_{Y_i}}{\text{scale}_{Y_i}}\right)^2\right)$$
+
+#### 4.1.3 混合门控机制
+
+位置 $i$ 的门控回归损失：
+$$\mathcal{L}_{\text{reg\_gated},i} = m_i \cdot \left(\alpha + (1-\alpha) \cdot P_{\text{<NUM>},i}\right) \cdot \mathcal{L}_{\text{cauchy\_nll},i}$$
 
 其中：
-$$P_k = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_k} - C_k}{\text{scale}_{S_k}}\right)$$
+- $m_i = \mathbb{I}(y_{\text{true\_id},i} = \text{<NUM>\_ID})$ 是位置 $i$ 的数值掩码
+- $\alpha \in [0, 1]$ 是门控系数
+- $P_{\text{<NUM>},i}$ 是模型在位置 $i$ 预测为 `<NUM>` 的概率
 
-#### 4.1.2 回归基础损失（柯西NLL）
+#### 4.1.4 序列总损失
 
-$$\mathcal{L}_{\text{cauchy\_nll}} = \log(\pi \cdot \text{scale}_Y) + \log\left(1 + \left(\frac{y_{\text{true}} - \text{loc}_Y}{\text{scale}_Y}\right)^2\right)$$
-
-#### 4.1.3 门控机制
-
-$$\mathcal{L}_{\text{reg\_gated}} = \mathbb{I}(y_{\text{true\_id}} = \text{<NUM>\_ID}) \cdot P_{\text{<NUM>}} \cdot \mathcal{L}_{\text{cauchy\_nll}}$$
-
-#### 4.1.4 总损失
-
-$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + \lambda \cdot \mathcal{L}_{\text{reg\_gated}}$$
+$$\mathcal{L}_{\text{total}} = \sum_{i=1}^{S} \left( \mathcal{L}_{\text{cls},i} + \lambda \cdot \mathcal{L}_{\text{reg\_gated},i} \right)$$
 
 ### 4.2 学习动态的数学分析
 
-#### 4.2.1 梯度流分析
+#### 4.2.1 位置特定的梯度流
 
-对于回归参数 $\theta_r$：
-$$\frac{\partial \mathcal{L}_{\text{total}}}{\partial \theta_r} = \lambda \cdot \mathbb{I}(y_{\text{true\_id}} = \text{<NUM>\_ID}) \cdot P_{\text{<NUM>}} \cdot \frac{\partial \mathcal{L}_{\text{cauchy\_nll}}}{\partial \theta_r}$$
+对于回归参数 $\theta_r$，位置 $i$ 的梯度贡献：
+$$\frac{\partial \mathcal{L}_{\text{reg\_gated},i}}{\partial \theta_r} = m_i \cdot \left(\alpha + (1-\alpha) \cdot P_{\text{<NUM>},i}\right) \cdot \frac{\partial \mathcal{L}_{\text{cauchy\_nll},i}}{\partial \theta_r}$$
 
-**关键性质**：
-1. **比例缩放**：梯度 $\propto P_{\text{<NUM>}}$
-2. **条件激活**：只在 $y = \text{<NUM>}$ 时非零
-3. **自适应强度**：随 $P_{\text{<NUM>}}$ 增大而增强
+**关键观察**：
+1. **位置选择性**：只有 $m_i = 1$ 的位置贡献回归梯度
+2. **自适应权重**：每个数值位置的梯度权重由其分类置信度调节
+3. **平滑过渡**：$\alpha$ 参数提供从均匀权重到完全门控的平滑过渡
 
-#### 4.2.2 学习阶段分析
+#### 4.2.2 学习阶段的演化
 
-**第一阶段（$P_{\text{<NUM>}} \approx 0$）**：
-- $\mathcal{L}_{\text{reg\_gated}} \approx 0$
-- 主要优化 $\mathcal{L}_{\text{cls}}$
-- 学习基本的token分类
+**初始阶段**（$\alpha \approx 1$，$P_{\text{<NUM>},i} \approx \frac{1}{K+1}$）：
+- 所有数值位置获得近似相等的回归梯度
+- 模型同时学习分类和回归
 
-**第二阶段（$P_{\text{<NUM>}}$ 增大）**：
-- $\mathcal{L}_{\text{reg\_gated}}$ 逐渐增大
-- 开始优化回归性能
-- 实现分类-回归的协调
+**中间阶段**（$\alpha$ 递减，$P_{\text{<NUM>},i}$ 分化）：
+- 正确分类的数值位置获得更大的回归梯度
+- 错误分类的位置回归学习被抑制
 
-**收敛阶段（$P_{\text{<NUM>}} \to 1$ 对于数值位置）**：
-- 完整的回归损失权重
-- 精细化数值预测
+**收敛阶段**（$\alpha \to 0$，$P_{\text{<NUM>},i} \to \{0, 1\}$）：
+- 只有高置信度的数值位置进行回归优化
+- 实现了完全的"先分类，后回归"
 
 ### 4.3 一致性保证的数学证明
 
-**定理 4.1（预测一致性）**：在门控损失下训练的模型，其分类预测和回归预测在期望意义下是一致的。
+**定理 4.1（位置级别的预测一致性）**：在门控损失下训练的模型，对于任意位置 $i$，其分类预测和回归预测在期望意义下是一致的。
 
-**证明要点**：设 $\hat{y}_{\text{cls}}$ 和 $\hat{y}_{\text{reg}}$ 分别是分类和回归预测。门控损失确保：
+**证明**：考虑位置 $i$ 的预测一致性。设 $\hat{y}_{\text{cls},i}$ 和 $\hat{y}_{\text{reg},i}$ 分别是该位置的分类和回归预测。
 
-$$\mathbb{E}[|\hat{y}_{\text{reg}} - y_{\text{true}}|^2 | \hat{y}_{\text{cls}} = \text{<NUM>}] \leq \mathbb{E}[|\hat{y}_{\text{reg}} - y_{\text{true}}|^2 | \hat{y}_{\text{cls}} \neq \text{<NUM>}]$$
+门控损失的结构确保：
+$$\mathbb{E}[|\hat{y}_{\text{reg},i} - y_{\text{true},i}|^2 | \hat{y}_{\text{cls},i} = \text{<NUM>}] \leq \mathbb{E}[|\hat{y}_{\text{reg},i} - y_{\text{true},i}|^2 | \hat{y}_{\text{cls},i} \neq \text{<NUM>}]$$
 
-即，当分类预测为数值时，回归预测的期望误差更小。□
+这是因为：
+1. 当 $\hat{y}_{\text{cls},i} = \text{<NUM>}$ 时，模型在训练中为该位置优化了回归损失
+2. 当 $\hat{y}_{\text{cls},i} \neq \text{<NUM>}$ 时，该位置的回归头未被充分训练
+
+因此，模型学会了只在预测为数值时才信任其回归输出。□
 
 ## 5. 数值感知机制的数学完备性
 
-### 5.1 统一表示的数学基础
+### 5.1 输入层的统一表示
 
-#### 5.1.1 数值编码函数的性质
+我们的数值感知机制在**输入层**实现，通过精心设计的编码函数统一处理数值和非数值位置。
 
-数值编码函数：
+#### 5.1.1 数值编码函数
+
+**定义5.1（数值编码函数）**：
 $$\phi(v) = \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e}$$
 
-**重要性质**：
+其中$\vec{e} \in \mathbb{R}^D$是归一化的方向向量，$\|\vec{e}\| = 1$，$D$是嵌入维度。
+
+**定理5.1（编码函数的关键性质）**：
 1. **零点性质**：$\phi(0) = 0$
-2. **单调性**：$\phi'(v) = \frac{\vec{e}}{1 + |v|} \cdot \text{sign}(v)$
-3. **有界性**：$|\phi(v)| \leq |\ln(1 + |v|)| \cdot \|\vec{e}\|$
+2. **单调性**：对于$v > 0$，$\phi'(v) = \frac{\vec{e}}{1 + v} > 0$
+3. **有界增长**：$|\phi(v)| = |\ln(1 + |v|)|$
+4. **符号保持**：$\text{sign}(\phi(v)) = \text{sign}(v) \cdot \vec{e}$
 
-#### 5.1.2 连续性证明
+#### 5.1.2 增强嵌入的数学形式
 
-**定理 5.1（连续性）**：统一特征函数 $\tilde{h}(x, v) = h(x) + \phi(v)$ 在整个定义域上连续。
+**定义5.2（位置级别的增强嵌入）**：
+对于位置 $i$：
+$$e_i = \text{embed}(x_i) + \phi(v_i)$$
 
-**证明**：需要证明在 $v = 0$ 处的连续性：
-$$\lim_{v \to 0} \phi(v) = \lim_{v \to 0} \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e} = 0 = \phi(0)$$
+其中：
+- $\text{embed}(x_i) \in \mathbb{R}^D$ 是词元 $x_i$ 的基础嵌入
+- $v_i$ 是位置 $i$ 的关联数值（非数值位置为0）
 
-因为 $\ln(1 + |v|) \to 0$ 当 $v \to 0$。□
+**定理5.2（嵌入退化性质）**：当 $v_i = 0$ 时，$e_i = \text{embed}(x_i)$。
 
-### 5.2 并行化计算的数学理论
+**证明**：由 $\phi(0) = 0$ 直接得出。□
 
-#### 5.2.1 向量化等价性定理
+### 5.2 数值信息的传播
 
-**定理 5.2（并行等价性）**：向量化计算与逐位置计算在数学上完全等价：
-$$[\tilde{h}(x_1, v_1), ..., \tilde{h}(x_S, v_S)] = \mathbf{h}(\mathbf{x}) + \boldsymbol{\phi}(\mathbf{v})$$
+#### 5.2.1 通过Transformer的信息流
 
-**证明**：对于任意位置 $i$：
-- 如果 $x_i = \text{<NUM>}$：$[\mathbf{h}(\mathbf{x}) + \boldsymbol{\phi}(\mathbf{v})]_i = h(x_i) + \phi(v_i) = \tilde{h}(x_i, v_i)$
-- 如果 $x_i \neq \text{<NUM>}$：$v_i = 0$，所以 $[\mathbf{h}(\mathbf{x}) + \boldsymbol{\phi}(\mathbf{v})]_i = h(x_i) + \phi(0) = h(x_i) + 0 = \tilde{h}(x_i, 0)$
+增强嵌入 $e_i$ 包含的数值信息通过Transformer的自注意力机制传播：
 
-两种情况都与逐位置计算结果相同。□
+$$z_i = \text{TransformerLayer}(e_1, ..., e_S)_i$$
 
-#### 5.2.2 计算复杂度分析
+数值信息通过以下机制影响最终特征：
+1. **直接影响**：位置 $i$ 的数值直接影响 $e_i$
+2. **间接影响**：通过注意力机制，数值信息可以影响其他位置的特征
 
-**传统条件分支方法**：
-- 时间复杂度：$O(S \cdot (T_{\text{branch}} + T_{\text{compute}}))$
-- 空间复杂度：$O(S \cdot H)$
-- 分支预测失败导致的性能损失
+#### 5.2.2 信息保持性
 
-**向量化方法**：
-- 时间复杂度：$O(S \cdot T_{\text{compute}} / P)$，其中 $P$ 是并行度
-- 空间复杂度：$O(S \cdot H)$（相同）
-- 无分支预测开销，充分利用SIMD指令
+**定理5.3（数值信息的可识别性）**：在适当的条件下，特征 $z_i$ 包含足够的信息来区分数值位置和非数值位置。
 
-## 6. 模型初始化的数学理论
+**直觉**：由于 $\phi(v)$ 在 $v \neq 0$ 时产生非零向量，而这个向量在方向 $\vec{e}$ 上具有特定的模式，Transformer可以学会识别这种模式。
 
-### 6.1 恒等映射初始化的数学证明
+### 5.3 并行化实现
 
-#### 6.1.1 目标映射
+#### 5.3.1 向量化的数值编码
 
-我们希望实现：
-$$\text{loc}_U = z, \quad \text{scale}_U = \text{const}$$
+```python
+# 批量计算所有位置的增强嵌入
+embeddings = self.embed(input_ids)  # [B, S, D]
+num_features = compute_phi(numerical_values)  # [B, S, D]
+enhanced_embeddings = embeddings + num_features  # [B, S, D]
+```
 
-#### 6.1.2 线性层配置
+#### 5.3.2 计算效率
 
-对于 $[\text{loc}_U, \log \text{scale}_U] = W \cdot z + b$，设置：
+由于数值编码在输入层完成，整个过程可以完全向量化：
+- 无需条件分支
+- 利用GPU的并行计算能力
+- 内存访问模式友好
+
+## 6. 并行化计算的数学理论
+
+### 6.1 条件独立性的形式化
+
+#### 6.1.1 两阶段架构
+
+我们的架构明确区分了两个阶段：
+
+1. **特征提取阶段**：
+   - 输入：增强嵌入序列 $(e_1, ..., e_S)$
+   - 输出：特征序列 $z = (z_1, ..., z_S)$
+   - 特性：位置间存在依赖（通过自注意力）
+
+2. **因果推断-行动阶段**：
+   - 输入：特征 $z_i$（对每个位置独立）
+   - 输出：概率 $P_{k,i}$ 和回归参数 $(\text{loc}_{Y_i}, \text{scale}_{Y_i})$
+   - 特性：给定 $z$ 后，位置间完全独立
+
+#### 6.1.2 条件独立性定理
+
+**定义6.1（条件计算函数）**：对于位置 $i$，定义条件计算函数：
+$$\mathcal{G}_i: z_i \mapsto (P_{0,i}, ..., P_{K,i}, \text{loc}_{Y_i}, \text{scale}_{Y_i})$$
+
+**定理6.1（条件独立性）**：给定特征序列 $z$，不同位置的因果推断和行动过程条件独立：
+$$\mathcal{G}_i(z_i) \perp \mathcal{G}_j(z_j) | z \quad \forall i \neq j$$
+
+**证明**：给定 $z$ 后，位置 $i$ 的计算流程：
+1. 因果推断：$(\text{loc}_{U_i}, \text{scale}_{U_i}) = g(z_i)$，仅依赖 $z_i$
+2. 分布定义：$U_i | z_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$
+3. 行动输出：$(S_{0,i}, ..., S_{K,i}, Y_i)$ 的分布参数仅依赖 $U_i$ 的分布参数
+
+不存在跨位置依赖。□
+
+### 6.2 并行计算的数学表达
+
+#### 6.2.1 批量因果推断
+
+给定特征张量 $\mathbf{Z} \in \mathbb{R}^{B \times S \times H}$：
+
+$$[\text{loc}_{\mathbf{U}}, \log \text{scale}_{\mathbf{U}}] = \mathbf{Z} \cdot W_g^T + \mathbf{1} \otimes b_g^T$$
+
+其中：
+- 输出形状：$[B, S, 2C]$
+- 每个位置独立计算，但使用相同的参数 $(W_g, b_g)$
+
+#### 6.2.2 批量行动计算
+
+**分类得分**：
+$$\text{loc}_{\mathbf{S}} = \text{einsum}('bsc,kc->bsk', \text{loc}_{\mathbf{U}}, A) + B$$
+$$\text{scale}_{\mathbf{S}} = \text{einsum}('bsc,kc->bsk', \text{scale}_{\mathbf{U}}, |A|)$$
+
+**回归参数**：
+$$\text{loc}_{\mathbf{Y}} = \text{einsum}('bsc,c->bs', \text{loc}_{\mathbf{U}}, W) + b$$
+$$\text{scale}_{\mathbf{Y}} = \text{einsum}('bsc,c->bs', \text{scale}_{\mathbf{U}}, |W|)$$
+
+### 6.3 梯度计算的并行性
+
+**定理6.2（梯度独立性）**：对于位置 $i$ 的损失 $\mathcal{L}_i$：
+
+$$\frac{\partial \mathcal{L}_i}{\partial W_g} = \frac{\partial \mathcal{L}_i}{\partial \text{loc}_{U_i}} \cdot z_i^T + \frac{\partial \mathcal{L}_i}{\partial \log \text{scale}_{U_i}} \cdot z_i^T$$
+
+梯度计算仅依赖于位置 $i$ 的特征和损失，可以并行计算所有位置的梯度贡献。
+
+## 7. 模型初始化的数学理论
+
+### 7.1 恒等映射初始化的数学证明
+
+#### 7.1.1 目标映射
+
+我们希望初始化后，对每个位置 $i$：
+$$\text{loc}_{U_i} \approx z_i, \quad \text{scale}_{U_i} = \text{const}$$
+
+注意这里是 $z_i$（特征），而不是增强后的特征，因为数值编码已经在输入层完成。
+
+#### 7.1.2 线性层配置
+
+对于 $[\text{loc}_{U_i}, \log \text{scale}_{U_i}] = W \cdot \tilde{z}_i + b$，设置：
 
 $$W = \begin{bmatrix} I_{C \times H} \\ 0_{C \times H} \end{bmatrix}, \quad b = \begin{bmatrix} 0_C \\ \text{scale\_bias} \cdot 1_C \end{bmatrix}$$
 
 其中 $I_{C \times H}$ 是恒等矩阵（当 $C = H$）或其近似。
 
-#### 6.1.3 近似理论
+#### 7.1.3 近似理论
 
-**定理 6.1（初始化近似性）**：当 $H = C$ 时，恒等映射初始化是精确的。当 $H \neq C$ 时，Xavier初始化提供最佳的近似。
+**定理 7.1（初始化近似性）**：当 $H = C$ 时，恒等映射初始化是精确的。当 $H \neq C$ 时，Xavier初始化提供最佳的近似。
 
 **证明要点**：
 - 精确情况显然成立
-- 近似情况下，Xavier初始化最小化了 $\|\text{loc}_U - z\|^2$ 的期望值
+- 近似情况下，Xavier初始化最小化了 $\|\text{loc}_{U} - \tilde{z}\|^2$ 的期望值
 
-### 6.2 知识迁移的数学基础
+### 7.2 知识迁移的数学基础
 
-#### 6.2.1 权重复制的理论依据
+#### 7.2.1 权重复制的理论依据
 
-设 Qwen 的权重为 $W^{\text{Qwen}}$，我们设置：
-$$W^{\text{CausalQwen}} = W^{\text{Qwen}}$$
+设 Qwen 在位置 $i$ 的输出为 $o_i^{\text{Qwen}}$，我们希望：
+$$S_{k,i}^{\text{CausalQwen}} \approx o_{k,i}^{\text{Qwen}}$$
 
-这确保了在恒等映射条件下：
-$$S_k^{\text{CausalQwen}} = W^{\text{Qwen}}_k \cdot z \approx S_k^{\text{Qwen}}$$
+通过权重复制和恒等映射初始化，在初始阶段：
+$$S_{k,i}^{\text{CausalQwen}} = W_k^{\text{Qwen}} \cdot \tilde{z}_i \approx W_k^{\text{Qwen}} \cdot z_i = o_{k,i}^{\text{Qwen}}$$
 
-#### 6.2.2 回归头的均匀先验
+#### 7.2.2 回归头的均匀先验
 
 小权重初始化 $\|\vec{W}\| \ll 1$ 结合大尺度 $\text{scale}_U = 10$ 导致：
 $$Y \sim \text{Cauchy}(\vec{W} \cdot z, 10 \cdot \|\vec{W}\|) \approx \text{Cauchy}(0, \text{large})$$
 
 大尺度的柯西分布近似均匀分布，实现无偏先验。
 
-## 7. 理论优势与局限性
+## 8. 理论优势与局限性
 
-### 7.1 理论优势
+### 8.1 理论优势
 
 1. **数学一致性**：所有组件都基于柯西分布的统一框架
-2. **计算效率**：无采样训练，解析概率计算
-3. **因果可解释性**：明确的因果表征和决策过程
-4. **扩展性**：自然支持多任务和多模态扩展
+2. **清晰的阶段划分**：数值感知（输入层）→ 特征提取（Transformer）→ 因果推断（条件独立）
+3. **计算效率**：无采样训练，后两阶段完全并行
+4. **因果可解释性**：每个位置都有明确的因果表征
+5. **扩展性**：自然支持变长序列和多任务学习
 
-### 7.2 理论局限
+### 8.2 理论局限
 
 1. **柯西分布的限制**：无定义的均值和方差可能在某些应用中不合适
 2. **线性假设**：行动网络的线性变换可能限制复杂的因果关系建模
-3. **阈值设置**：OvR阈值的选择影响分类性能，需要仔细调优
+3. **位置独立假设**：无法直接建模位置间的依赖关系
+4. **阈值设置**：OvR阈值的选择影响分类性能，需要仔细调优
 
-### 7.3 未来研究方向
+### 8.3 未来研究方向
 
 1. **非线性行动网络**：探索保持分布封闭性的非线性变换
-2. **自适应阈值**：动态调整OvR阈值的方法
-3. **多元柯西分布**：扩展到多元输出的情况
-4. **理论收敛性**：门控损失函数的收敛性质分析
+2. **位置依赖扩展**：在保持并行化优势的前提下引入位置间交互
+3. **自适应阈值**：位置特定的动态阈值调整
+4. **多元柯西分布**：扩展到向量值输出的情况
+
+### 8.4 并行化的理论边界
+
+1. **Amdahl定律的限制**：序列级别的规约操作（如损失求和）限制了并行加速比
+2. **内存墙问题**：当计算强度低时，内存带宽成为瓶颈
+3. **批次效应**：极大批次可能影响数值稳定性
 
 ---
 
