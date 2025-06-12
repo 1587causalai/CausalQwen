@@ -1,10 +1,12 @@
 ## 项目核心文档
 
-design-docs/math/mathematical_foundations.md 是整个项目数学内核的文档.
+design-docs/math/mathematical_foundations.md 是整个项目详细数学原理的文档. docs/math/mathematical_foundations.md 是数学文档的简化版本. 请优先使用简化版本.
 
 design-docs/core-design.md 是严格依照数学内核设计的架构文档.
 
 design-docs/U_deep_dive.md 是因果表征变量 U 的深度解读文档.
+
+docs/testing_guide.md 是测试指南文档.
 
 
 ## 项目目录结构
