@@ -29,6 +29,7 @@ class CausalLMConfig:
     use_real_qwen: bool = True
     use_mock_feature_network: bool = False  # 补全缺失的属性
     qwen_model_path: str = "~/models/Qwen2.5-0.5B"
+    use_numerical_features: bool = True  # 添加数值感知功能控制
     
     # OvR classification settings
     use_ovr_classifier: bool = True
@@ -41,8 +42,6 @@ class CausalLMConfig:
     # Distribution settings
     use_cauchy_distribution: bool = True
     initial_scale_bias: float = 2.3  # log(10) ≈ 2.3
-
-# ...existing code...
 
 class CausalLanguageModel(nn.Module):
     """
@@ -106,6 +105,20 @@ class CausalLanguageModel(nn.Module):
             num_token_id=self.num_token_id,
             ovr_threshold=config.ovr_threshold
         )
+
+        # 数值编码器 - 根据配置决定是否使用
+        if config.use_numerical_features:
+            # 可以从 feature_network 模块导入，如果存在的话
+            try:
+                from .feature_network import NumericalEncoder
+                self.numerical_encoder = NumericalEncoder(
+                    embedding_dim=config.hidden_size
+                )
+            except ImportError:
+                print("Warning: NumericalEncoder not found, numerical features will be handled by feature network")
+                self.numerical_encoder = None
+        else:
+            self.numerical_encoder = None
 
     def init_weights(self, num_target_median=None, num_target_scale=None):
         """
