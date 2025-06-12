@@ -9,15 +9,19 @@ design-docs/U_deep_dive.md 是因果表征变量 U 的深度解读文档.
 
 ## 项目目录结构
 
+~/models/Qwen2.5-0.5B 是 Qwen 的模型文件，请注意这个路径是默认路径.
+
 design-docs/PROJECT_BLUEPRINT.md 是项目目录结构的文档.
 
-各种功能的快速脚本应该放在 scripts 目录下
+各种功能的快速脚本应该放在 scripts 目录下.
 
-非强相关的背景知识应该放在 docs/background 目录下，保持我们项目目录的整洁
+非强相关的背景知识应该放在 docs/background 目录下，保持我们项目目录的整洁.
 
 
 ## 偏好设置
 
 所有 python 画图都要使用英文图标避免字体问题和方便分享
 
-Qwen 的词汇表大小为K， CausalQwen 的词汇表大小为K+1, 其中新增的 <NUM> 词元用于表示数值预测。如果文档中不小心使用 V 表示它，尽量帮助改过来。
+Qwen 的已用词汇表大小为K， CausalQwen 的已用词汇表大小为K+1, 其中新增的 <NUM> 词元用于表示数值预测。请注意 Qwen 中有271个保留词汇，我们使用第一个保留词汇来表示<NUM> 词元。
+
+AbductionNetwork 是用于归因推断而不是因果推断这个模糊表述
