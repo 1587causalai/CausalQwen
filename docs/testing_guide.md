@@ -7,7 +7,7 @@
 验证 CausalQwen 的八个核心功能实现的正确性：
 1. **数值感知嵌入**：统一文本和数值的表示
 2. **特征提取**：Transformer 的串行处理
-3. **因果推断**：柯西分布的并行建模（归因推断 AbductionNetwork）
+3. **归因推断**：柯西分布的并行建模
 4. **行动决策**：线性变换的并行计算
 5. **门控损失**：数值感知的训练策略
 6. **端到端一致性**：完整数学流程验证
@@ -26,15 +26,6 @@ python -m pytest tests/test_mathematical_validation.py -v
 
 # 运行生成功能测试
 python -m pytest tests/test_generation.py -v
-
-# 运行对话功能测试 🆕
-python -m pytest tests/test_conversation.py -v
-
-# 运行特定测试函数 - 数值感知测试
-python -m pytest tests/test_mathematical_validation.py::TestNumericalEncoding::test_phi_zero_property -v
-
-# 运行特定测试函数 - 对话功能测试 🆕
-python -m pytest tests/test_conversation.py::TestConversation::test_basic_chat -v
 ```
 
 ### 查看详细测试输出
@@ -274,7 +265,7 @@ def test_numerical_mask_application():
 2. **特征提取**：
    $$z = \text{Transformer}(e_1, ..., e_S)$$
 
-3. **因果推断**（并行）：
+3. **归因推断**（并行）：
    $$U_i | z_i \sim \text{Cauchy}(\mu_i, \gamma_i)$$
 
 4. **行动决策**（并行）：
