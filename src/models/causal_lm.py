@@ -420,11 +420,14 @@ class CausalLanguageModel(nn.Module):
             gating_alpha=self.config.reg_loss_gating_alpha
         )
         
-        # 返回格式化的结果
+        # 返回格式化的结果 - 保持与测试一致的键名
         return {
-            'loss': loss_dict['total'],
-            'cls_loss': loss_dict['cls'],
-            'reg_loss': loss_dict['reg'],
+            'total': loss_dict['total'],      # 测试期望的键名
+            'cls': loss_dict['cls'],          # 测试期望的键名
+            'reg': loss_dict['reg'],          # 测试期望的键名
+            'loss': loss_dict['total'],       # 向后兼容
+            'cls_loss': loss_dict['cls'],     # 向后兼容
+            'reg_loss': loss_dict['reg'],     # 向后兼容
             'gate_weights_mean': loss_dict['avg_gate_weight'],
             'num_positions': loss_dict['num_positions'].item(),
             'num_prob_mean': loss_dict['avg_gate_weight']  # 平均门控权重反映了平均概率

@@ -100,15 +100,15 @@ class QwenFeatureNetwork(FeatureNetworkBase):
             features: 序列特征 [batch_size, seq_len, hidden_size]
         """
         # 使用Qwen模型提取特征
-        with torch.no_grad():
-            # 如果需要梯度（训练时），则不使用no_grad
-            if self.qwen_model.training:
-                outputs = self.qwen_model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    output_hidden_states=True
-                )
-            else:
+        # 如果需要梯度（训练时），则不使用no_grad
+        if self.qwen_model.training:
+            outputs = self.qwen_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True
+            )
+        else:
+            with torch.no_grad():
                 outputs = self.qwen_model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -124,7 +124,7 @@ class QwenFeatureNetwork(FeatureNetworkBase):
 class MockFeatureNetwork(FeatureNetworkBase):
     """
     Mock特征网络，用于测试和调试。
-    生成随机特征向量，避免加载大型模型的开销。
+    生成基于输入的特征向量，支持数值感知，避免加载大型模型的开销。
     """
     
     def __init__(self, vocab_size: int, hidden_size: int):
@@ -133,8 +133,13 @@ class MockFeatureNetwork(FeatureNetworkBase):
         self.hidden_size = hidden_size
         self.use_real_model = False  # 添加属性以保持一致性
         
-        # 创建随机的嵌入层
+        # 创建token嵌入层
         self.embedding = nn.Embedding(vocab_size, hidden_size)
+        
+        # 数值方向向量（让数值变化产生不同特征）
+        self.numerical_direction = nn.Parameter(
+            torch.randn(hidden_size) / math.sqrt(hidden_size)
+        )
         
         # 初始化嵌入权重
         nn.init.normal_(self.embedding.weight, mean=0.0, std=0.02)
@@ -143,17 +148,37 @@ class MockFeatureNetwork(FeatureNetworkBase):
                 numerical_values: Optional[torch.Tensor] = None,
                 attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        生成mock特征向量。
+        生成支持数值感知的mock特征向量。
         
         Args:
             input_ids: 输入token IDs [batch_size, seq_len]
-            numerical_values: 数值信息（暂时忽略）
+            numerical_values: 数值信息 [batch_size, seq_len]
             attention_mask: 注意力掩码（暂时忽略）
             
         Returns:
             features: mock特征 [batch_size, seq_len, hidden_size]
         """
-        return self.embedding(input_ids)
+        # 基础token特征
+        base_features = self.embedding(input_ids)
+        
+        # 如果提供了数值信息，则融合数值特征
+        if numerical_values is not None:
+            # 数值变换：φ(v) = sign(v) * ln(1 + |v|)
+            # 对于v=0，结果为0
+            transformed_values = torch.sign(numerical_values) * torch.log1p(torch.abs(numerical_values))
+            
+            # 扩展到特征维度 [batch_size, seq_len, 1]
+            transformed_values = transformed_values.unsqueeze(-1)
+            
+            # 计算数值嵌入 [batch_size, seq_len, hidden_size]
+            numerical_embeddings = transformed_values * self.numerical_direction
+            
+            # 融合特征：基础特征 + 数值特征
+            features = base_features + numerical_embeddings
+        else:
+            features = base_features
+            
+        return features
     
     def get_lm_head(self):
         """
