@@ -67,9 +67,12 @@ class ClassificationHead(nn.Module):
         
         From core-design.md: P(S_k > C_k) = 1/2 + (1/π) * arctan((loc_Sk - C_k)/scale_Sk)
         """
+        # Add epsilon for numerical stability, especially if scale can be zero
+        stable_scale = score_scale + 1e-9
+        
         # Direct implementation of the formula from core-design.md
         # P(S_k > C_k) = 1/2 + (1/π) * arctan((loc_Sk - C_k)/scale_Sk)
-        probs = 0.5 + (1 / torch.pi) * torch.atan((score_loc - self.thresholds) / score_scale)
+        probs = 0.5 + (1 / torch.pi) * torch.atan((score_loc - self.thresholds) / stable_scale)
         
         return probs
     
@@ -295,32 +298,45 @@ class ActionNetwork(nn.Module):
     
     def predict(self, causal_loc, causal_scale=None):
         """
-        Make a deterministic prediction using the median of the individual causal representation.
+        Make a deterministic prediction based on the output distributions.
         
         Args:
             causal_loc (torch.Tensor): Location parameters of the individual causal representation
-            causal_scale (torch.Tensor, optional): Scale parameters (not used for median prediction).
+            causal_scale (torch.Tensor, optional): Scale parameters. If None, a zero tensor is used
+                                                   for a purely deterministic prediction from loc.
         
         Returns:
-            dict: A dictionary containing the predicted token and regression value.
+            dict: A dictionary containing the predicted token, regression value, and <NUM> probability.
         """
-        # For prediction, we use the location parameters (median) as point estimates
-        # 1. Classification: Use the classification head's weight directly (no bias)
-        cls_scores = F.linear(causal_loc, self.classification_head.causal_linear.weight, None)
+        if causal_scale is None:
+            # If no scale is provided, assume a deterministic input (zero scale)
+            causal_scale = torch.zeros_like(causal_loc)
+
+        # 1. Get output distribution parameters by running the forward pass
+        outputs = self.forward(causal_loc, causal_scale)
+        cls_loc, cls_scale = outputs['cls_loc'], outputs['cls_scale']
+        reg_loc, reg_scale = outputs['reg_loc'], outputs['reg_scale']
         
-        # 2. Regression: Use the regression head's weight and bias directly for deterministic value
-        reg_value = F.linear(causal_loc, self.regression_head.causal_linear.weight, 
-                            self.regression_head.causal_linear.bias).squeeze(-1)
+        # 2. Get classification prediction from the distribution
+        # This computes probabilities and takes argmax
+        cls_pred = self.classification_head.predict(cls_loc, cls_scale)
         
-        # Get probability of <NUM> token (computed using the deterministic scores)
-        # Apply Cauchy CDF formula: P(S > threshold) = 0.5 + (1/π) * arctan((loc - threshold)/scale)
-        # For prediction, we can use a default scale of 1.0 or compute it if needed
-        threshold = self.classification_head.thresholds[self.num_token_id]
-        num_prob = 0.5 + (1 / torch.pi) * torch.atan((cls_scores[:, self.num_token_id] - threshold) / 1.0)
+        # 3. Get regression prediction (point estimate is the location parameter)
+        reg_pred = self.regression_head.predict(reg_loc, reg_scale)
         
+        # 4. Get probability of <NUM> token
+        all_probs = self.classification_head.compute_probabilities(cls_loc, cls_scale)
+        
+        # Handle sequence vs. non-sequence input for num_prob
+        if all_probs.dim() > 1:
+            num_prob = all_probs[..., self.num_token_id]
+        else:
+            # This case might not be typical, but handle it for robustness
+            num_prob = all_probs[self.num_token_id]
+
         return {
-            'cls_pred': torch.argmax(cls_scores, dim=-1),
-            'reg_pred': reg_value,
+            'cls_pred': cls_pred,
+            'reg_pred': reg_pred,
             'num_prob': num_prob
         }
 

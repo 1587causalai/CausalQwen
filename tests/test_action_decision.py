@@ -280,7 +280,8 @@ class TestActionDecision(unittest.TestCase):
             # 将序列展平进行预测，然后重新整形
             batch_size, seq_len, causal_dim = causal_loc.shape
             causal_loc_flat = causal_loc.view(batch_size * seq_len, causal_dim)
-            predictions_flat = self.action_network.predict(causal_loc_flat)
+            causal_scale_flat = causal_scale.view(batch_size * seq_len, self.causal_dim)
+            predictions_flat = self.action_network.predict(causal_loc_flat, causal_scale_flat)
             
             # 重新整形预测结果
             predictions = {
@@ -311,23 +312,10 @@ class TestActionDecision(unittest.TestCase):
             print(f"  数值概率一致性: {'✓' if num_prob_match else '✗'}")
             
             # 断言验证
-            # 注意：由于序列处理的复杂性，我们使用更宽松的验证
-            if not cls_pred_match:
-                print(f"  分类预测差异详情: 可能由于序列处理导致的细微差异")
-                # 验证至少大部分预测是一致的
-                match_ratio = (predictions['cls_pred'] == manual_cls_pred).float().mean()
-                print(f"  预测匹配率: {match_ratio.item():.3f}")
-                self.assertGreater(match_ratio, 0.5, "分类预测应该有合理的一致性")
-            
-            self.assertTrue(reg_pred_match, "回归预测应该使用loc参数")
-            
-            if not num_prob_match:
-                print(f"  数值概率差异详情: 可能由于计算路径不同导致")
-                # 检查差异是否在合理范围内
-                num_prob_diff = torch.abs(predictions['num_prob'] - expected_num_prob).max()
-                print(f"  最大概率差异: {num_prob_diff.item():.6f}")
-                # 放宽阈值从0.1到0.2，因为序列处理的复杂性
-                self.assertLess(num_prob_diff, 0.2, "数值概率差异应该在合理范围内")
+            # 经过修正，预测路径和手动计算路径应该完全一致
+            self.assertTrue(cls_pred_match, "分类预测应与基于概率的argmax一致")
+            self.assertTrue(reg_pred_match, "回归预测应该等于回归分布的loc参数")
+            self.assertTrue(num_prob_match, "预测的<NUM>概率应与完整概率计算一致")
         
         print("✓ 预测一致性验证通过")
     

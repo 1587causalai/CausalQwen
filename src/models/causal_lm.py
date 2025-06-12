@@ -284,37 +284,109 @@ class CausalLanguageModel(nn.Module):
         
         return predictions
     
-    def predict(self, input_ids, numerical_values=None, attention_mask=None):
+    @torch.no_grad()
+    def predict(self, input_ids: torch.Tensor, 
+                numerical_values: Optional[torch.Tensor] = None, 
+                attention_mask: Optional[torch.Tensor] = None,
+                strategy: str = 'deterministic') -> Dict[str, Union[torch.Tensor, float]]:
         """
-        Make deterministic predictions without sampling.
-        
-        This method uses the median (location parameter) of the individual causal representation distribution
-        for prediction, which is more stable and efficient.
-        
+        Performs a single-step prediction for the next token.
+
         Args:
-            input_ids (torch.Tensor): Input token IDs
-                                     Shape: [batch_size, seq_len]
-            numerical_values (torch.Tensor, optional): Numerical values for <NUM> tokens
-                                                     Shape: [batch_size, seq_len]
-            attention_mask (torch.Tensor, optional): Attention mask
-                                                   Shape: [batch_size, seq_len]
-        
+            input_ids (torch.Tensor): Input token IDs of shape [batch_size, seq_len].
+            numerical_values (torch.Tensor, optional): Numerical values for <NUM> tokens.
+            attention_mask (torch.Tensor, optional): Attention mask.
+            strategy (str): The prediction strategy.
+                            - 'deterministic': Use the median of the distribution (loc).
+                            - 'causal_sampling': Sample from the causal representation U.
+
         Returns:
-            dict: Dictionary containing predictions
+            A dictionary containing the predicted token ID, regression value, and <NUM> probability
+            for the last token in the sequence.
         """
-        # Extract features
-        features = self.feature_network(input_ids, numerical_values, attention_mask)
+        # 1. Get model outputs from the forward pass
+        outputs = self.forward(input_ids, numerical_values, attention_mask)
         
-        # Infer individual causal representation distribution
-        causal_loc, causal_scale = self.abduction_network(features)
-        
-        # Make predictions using the median of the individual causal representation distribution
-        predictions = self.action_network.predict(causal_loc, torch.zeros_like(causal_scale))
-        
-        return predictions
+        # We only care about the prediction for the last token in the sequence
+        causal_loc = outputs['causal_loc'][:, -1, :]
+        causal_scale = outputs['causal_scale'][:, -1, :]
+
+        # 2. Use the ActionNetwork's predict method with the chosen strategy
+        if strategy == 'causal_sampling':
+            # For sampling, we pass both loc and scale
+            predictions = self.action_network.predict(causal_loc, causal_scale)
+        else: # 'deterministic'
+            # For deterministic, we only pass loc (scale is assumed zero)
+            predictions = self.action_network.predict(causal_loc, None)
+
+        return {
+            "pred_token_id": predictions['cls_pred'],
+            "pred_value": predictions['reg_pred'],
+            "num_prob": predictions['num_prob']
+        }
+
+    @torch.no_grad()
+    def generate(self, input_ids: torch.Tensor, 
+                 max_new_tokens: int,
+                 numerical_values: Optional[torch.Tensor] = None, 
+                 attention_mask: Optional[torch.Tensor] = None,
+                 strategy: str = 'deterministic',
+                 stop_token_id: Optional[int] = None) -> torch.Tensor:
+        """
+        Generates a sequence of tokens auto-regressively.
+
+        Args:
+            input_ids (torch.Tensor): The initial sequence of token IDs.
+            max_new_tokens (int): The maximum number of new tokens to generate.
+            numerical_values (torch.Tensor, optional): Initial numerical values.
+            attention_mask (torch.Tensor, optional): Initial attention mask.
+            strategy (str): 'deterministic' or 'causal_sampling'.
+            stop_token_id (int, optional): A token ID that stops generation.
+
+        Returns:
+            The generated sequence of token IDs, including the initial input.
+        """
+        if numerical_values is None:
+            numerical_values = torch.zeros_like(input_ids, dtype=torch.float32)
+
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+            
+        generated_ids = input_ids
+
+        for _ in range(max_new_tokens):
+            # Get the prediction for the next token
+            next_token_preds = self.predict(
+                input_ids=generated_ids,
+                numerical_values=numerical_values,
+                attention_mask=attention_mask,
+                strategy=strategy
+            )
+            
+            next_token_id = next_token_preds['pred_token_id'].unsqueeze(-1)
+            
+            # Check for stop token
+            if stop_token_id is not None and next_token_id.item() == stop_token_id:
+                break
+            
+            # Append the new token to the generated sequence
+            generated_ids = torch.cat([generated_ids, next_token_id], dim=1)
+            
+            # For the next iteration, we need to handle numerical values and attention mask
+            # If the predicted token is <NUM>, we use its predicted value. Otherwise, 0.
+            next_value = torch.zeros_like(next_token_id, dtype=torch.float32)
+            if next_token_id.item() == self.num_token_id:
+                next_value[0, 0] = next_token_preds['pred_value']
+            
+            numerical_values = torch.cat([numerical_values, next_value], dim=1)
+            attention_mask = torch.cat([attention_mask, torch.ones_like(next_token_id)], dim=1)
+
+        return generated_ids
 
     def _apply_knowledge_transfer_initialization(self, num_target_median: float, num_target_scale: float):
-        """Apply knowledge transfer from Qwen model to action network."""
+        """
+        DEPRECATED: This method is kept for backward compatibility.
+        """
         print("Applying knowledge transfer initialization...")
         
         # Initialize abduction network for identity mapping
