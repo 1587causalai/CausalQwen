@@ -94,14 +94,22 @@ def ovr_classification_loss(probs: torch.Tensor, targets: torch.Tensor,
         raise ValueError(f"Invalid reduction: {reduction}")
 
 
-def regression_loss(loc: torch.Tensor, scale: torch.Tensor, target: torch.Tensor,
+def regression_loss(loc: torch.Tensor, scale: torch.Tensor, y_true: torch.Tensor,
                    reduction: Literal['none', 'mean', 'sum'] = 'mean') -> torch.Tensor:
     """
     计算回归损失（柯西负对数似然）。
     
-    这是 cauchy_nll_loss 的别名，为了接口一致性。
+    Args:
+        loc: 回归值的位置参数
+        scale: 回归值的尺度参数  
+        y_true: 真实回归值
+        reduction: 归约方式
+        
+    Returns:
+        损失值
     """
-    return cauchy_nll_loss(loc, scale, target, reduction)
+    # 修正：使用正确的参数顺序 (target, loc, scale)
+    return cauchy_nll_loss(y_true, loc, scale, reduction=reduction)
 
 
 def gated_regression_loss(loc: torch.Tensor, scale: torch.Tensor, y_true: torch.Tensor,

@@ -129,16 +129,17 @@ def cauchy_log_prob(value, loc, scale, reduction='none'):
         raise ValueError(f"reduction must be 'none', 'mean', or 'sum', got {reduction}")
 
 
-def cauchy_nll_loss(value, loc, scale, reduction='mean'):
+def cauchy_nll_loss(target, loc, scale, reduction='mean'):
     """
     Calculate the negative log-likelihood loss for Cauchy distribution.
     
-    这是回归任务中使用的损失函数：
-    L = log(π·scale) + log(1 + ((y_true - loc)/scale)²)
+    修正：参数顺序为 (target, loc, scale) 以符合 PyTorch 惯例
+    
+    数学公式：L = log(π·scale) + log(1 + ((target - loc)/scale)²)
     
     Args:
-        value (torch.Tensor): True values
-        loc (torch.Tensor): Predicted location parameters
+        target (torch.Tensor): True values (第一个参数)
+        loc (torch.Tensor): Predicted location parameters  
         scale (torch.Tensor): Predicted scale parameters
         reduction (str): Specifies the reduction to apply to the output:
                         'none' | 'mean' | 'sum'. Default: 'mean'
@@ -146,8 +147,19 @@ def cauchy_nll_loss(value, loc, scale, reduction='mean'):
     Returns:
         torch.Tensor: NLL loss values
     """
-    # 计算基础损失
-    loss = torch.log(torch.pi * scale) + torch.log(1 + ((value - loc) / scale) ** 2)
+    # 确保scale为正，避免数值问题
+    scale = torch.clamp(scale, min=1e-8)
+    
+    # 计算标准化残差
+    z = (target - loc) / scale
+    
+    # 柯西NLL公式：log(π * scale) + log(1 + z²)
+    # 使用 log1p 提高数值稳定性
+    import math
+    log_scale_term = torch.log(scale) + math.log(math.pi)
+    residual_term = torch.log1p(z ** 2)  # log(1 + z²)
+    
+    loss = log_scale_term + residual_term
     
     # 应用 reduction
     if reduction == 'none':
@@ -158,4 +170,7 @@ def cauchy_nll_loss(value, loc, scale, reduction='mean'):
         return loss.sum()
     else:
         raise ValueError(f"reduction must be 'none', 'mean', or 'sum', got {reduction}")
+
+# 确保所有必要的函数都被导出
+__all__ = ['cauchy_cdf', 'cauchy_pdf', 'cauchy_sample_reparameterized', 'cauchy_nll_loss', 'CauchyLinear']
 
