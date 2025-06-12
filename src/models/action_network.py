@@ -20,14 +20,15 @@ class ClassificationHead(nn.Module):
     where each class has an independent decision score.
     """
     
-    def __init__(self, causal_dim, num_classes, threshold=10.0):
+    def __init__(self, causal_dim, num_classes, threshold=0.0, bias=True):
         """
         Initialize the classification head.
         
         Args:
             causal_dim (int): Dimensionality of the latent causal state
             num_classes (int): Number of classes (vocabulary size)
-            threshold (float, optional): Decision threshold. Defaults to 10.0.
+            threshold (float, optional): Decision threshold. Defaults to 0.0.
+            bias (bool, optional): Whether to include bias. Defaults to True.
         """
         super().__init__()
         self.causal_dim = causal_dim
@@ -35,7 +36,8 @@ class ClassificationHead(nn.Module):
         self.threshold = threshold
         
         # Linear layer to map causal state to class decision scores
-        self.causal_linear = CauchyLinear(causal_dim, num_classes)
+        # 重要：根据 Qwen 的设计，分类头不应该有偏置
+        self.causal_linear = CauchyLinear(causal_dim, num_classes, bias=bias)
         
         # Register threshold as a buffer (not a parameter)
         self.register_buffer('thresholds', torch.ones(num_classes) * threshold)
@@ -64,16 +66,6 @@ class ClassificationHead(nn.Module):
         Compute class probabilities using the Cauchy CDF.
         
         From core-design.md: P(S_k > C_k) = 1/2 + (1/π) * arctan((loc_Sk - C_k)/scale_Sk)
-        
-        Args:
-            score_loc (torch.Tensor): Location parameters of decision scores
-                                     Shape: [batch_size, num_classes]
-            score_scale (torch.Tensor): Scale parameters of decision scores
-                                       Shape: [batch_size, num_classes]
-        
-        Returns:
-            torch.Tensor: Class probabilities
-                         Shape: [batch_size, num_classes]
         """
         # Direct implementation of the formula from core-design.md
         # P(S_k > C_k) = 1/2 + (1/π) * arctan((loc_Sk - C_k)/scale_Sk)
@@ -172,7 +164,7 @@ class ActionNetwork(nn.Module):
     (classification scores and regression values).
     """
     
-    def __init__(self, causal_dim, vocab_size, num_token_id, ovr_threshold=10.0):
+    def __init__(self, causal_dim, vocab_size, num_token_id, ovr_threshold=0.0):
         """
         Initialize the Action Network.
         
@@ -189,7 +181,13 @@ class ActionNetwork(nn.Module):
         self.ovr_threshold = ovr_threshold
         
         # Classification head for token prediction
-        self.classification_head = ClassificationHead(causal_dim, vocab_size, threshold=ovr_threshold)
+        # 重要：设置 bias=False 以匹配 Qwen 的设计
+        self.classification_head = ClassificationHead(
+            causal_dim, 
+            vocab_size, 
+            threshold=ovr_threshold,
+            bias=False  # Qwen lm_head 没有偏置
+        )
         
         # Regression head for numerical prediction
         self.regression_head = RegressionHead(causal_dim)
@@ -198,15 +196,15 @@ class ActionNetwork(nn.Module):
         """
         Initialize the weights of the action network.
         
-        知识传输策略（更新版）：
-        - 分类头：完全复用 Qwen 的 lm_head（包括权重和偏置）
-        - 回归头：复用 <NUM> token 对应的权重作为初始化
+        知识传输策略：
+        - 分类头：复制 Qwen lm_head 的所有权重（注意：Qwen 没有偏置）
+        - 回归头：使用小随机初始化，实现均匀先验
         
         Args:
             qwen_lm_head: Qwen's language model head (nn.Linear)
             num_target_median: Deprecated, no longer used
             num_target_scale: Deprecated, no longer used
-            num_token_id: The token ID for <NUM>
+            num_token_id: The token ID for <NUM> (should be 151665)
         """
         print("🔧 初始化 ActionNetwork...")
         
@@ -218,67 +216,56 @@ class ActionNetwork(nn.Module):
             our_vocab_size, our_causal_dim = self.classification_head.causal_linear.weight.shape
             
             print(f"   Qwen lm_head: [{qwen_vocab_size}, {qwen_hidden_size}]")
-            print(f"   Our cls_head: [{our_vocab_size}, {our_causal_dim}]")
+            print(f"   CausalQwen 分类头: [{our_vocab_size}, {our_causal_dim}]")
             
-            # 1. 分类头：完全复用 Qwen 的权重和偏置
+            # 1. 分类头：知识迁移
             with torch.no_grad():
-                # 复制权重
-                if our_vocab_size <= qwen_vocab_size:
+                if our_vocab_size == qwen_vocab_size:
+                    # 完整复制：保持与 Qwen 的完全兼容性
+                    self.classification_head.causal_linear.weight.copy_(
+                        qwen_lm_head.weight
+                    )
+                    print(f"   ✅ 完整复制了所有 {qwen_vocab_size} 个权重")
+                    print(f"      - Qwen 已用词汇: 151,665 个")
+                    print(f"      - 预留位置: 271 个（均已初始化）")
+                    print(f"      - <NUM> token (ID: {num_token_id}): 使用第一个预留位置")
+                elif our_vocab_size < qwen_vocab_size:
+                    # 部分复制（不推荐，但支持）
                     self.classification_head.causal_linear.weight.copy_(
                         qwen_lm_head.weight[:our_vocab_size, :]
                     )
-                    print(f"   ✅ 复制了前 {our_vocab_size} 个词汇的权重")
+                    print(f"   ⚠️  部分复制了 {our_vocab_size} 个权重（建议使用完整容量 151936）")
                 else:
-                    self.classification_head.causal_linear.weight[:qwen_vocab_size, :].copy_(
-                        qwen_lm_head.weight
-                    )
-                    print(f"   ⚠️  只能复制 {qwen_vocab_size} 个词汇的权重")
+                    raise ValueError(f"CausalQwen vocab size ({our_vocab_size}) > Qwen vocab size ({qwen_vocab_size})")
                 
-                # 复制偏置（如果存在）
+                # 检查 Qwen 是否有偏置
                 if hasattr(qwen_lm_head, 'bias') and qwen_lm_head.bias is not None:
-                    if self.classification_head.causal_linear.bias is not None:
-                        if our_vocab_size <= qwen_vocab_size:
-                            self.classification_head.causal_linear.bias.copy_(
-                                qwen_lm_head.bias[:our_vocab_size]
-                            )
-                            print(f"   ✅ 复制了前 {our_vocab_size} 个词汇的偏置")
-                        else:
-                            self.classification_head.causal_linear.bias[:qwen_vocab_size].copy_(
-                                qwen_lm_head.bias
-                            )
-                            print(f"   ⚠️  只能复制 {qwen_vocab_size} 个词汇的偏置")
+                    print("   ⚠️  Qwen lm_head 有偏置项，但 CausalQwen 设计为无偏置")
                 else:
-                    print("   ℹ️  Qwen lm_head 没有偏置项")
+                    print("   ✅ Qwen lm_head 无偏置项（符合预期）")
                 
-                # 2. 回归头：使用 <NUM> token 的权重作为初始化
-                print(f"\n🔧 初始化回归头（使用 <NUM> token 权重）...")
-                # 直接使用 <NUM> token 的权重，无需检查范围
-                # 因为 <NUM> 是保留词汇中的第一个，它在 lm_head 中已经有权重
-                num_token_weights = qwen_lm_head.weight[num_token_id, :]  # [hidden_size]
-                self.regression_head.causal_linear.weight.copy_(
-                    num_token_weights.unsqueeze(0)  # [1, hidden_size]
-                )
-                print(f"   ✅ 使用 <NUM> token (ID: {num_token_id}) 的权重初始化回归头")
+                # 确保我们的分类头也没有偏置
+                if self.classification_head.causal_linear.bias is not None:
+                    print("   ⚠️  警告：CausalQwen 分类头有偏置，将其置零")
+                    self.classification_head.causal_linear.bias.zero_()
                 
-                # 如果有偏置，也使用 <NUM> token 的偏置
-                if hasattr(qwen_lm_head, 'bias') and qwen_lm_head.bias is not None:
-                    if self.regression_head.causal_linear.bias is not None:
-                        self.regression_head.causal_linear.bias.copy_(
-                            qwen_lm_head.bias[num_token_id].unsqueeze(0)
-                        )
-                        print(f"   ✅ 使用 <NUM> token 的偏置初始化回归头偏置")
+                # 2. 回归头：小随机初始化
+                print(f"\n🔧 初始化回归头（小随机初始化）...")
+                # 使用小的 Xavier 初始化
+                torch.nn.init.xavier_uniform_(self.regression_head.causal_linear.weight, gain=0.01)
+                if self.regression_head.causal_linear.bias is not None:
+                    self.regression_head.causal_linear.bias.zero_()
+                print(f"   ✅ 使用 Xavier 初始化 (gain=0.01) 实现均匀先验")
 
             print("   ✅ 知识传输完成")
             
         else:
             print("⚠️  未提供 Qwen lm_head 或 num_token_id，使用随机初始化")
-            # 分类头：Xavier 初始化
+            # 分类头：Xavier 初始化（无偏置）
             torch.nn.init.xavier_uniform_(self.classification_head.causal_linear.weight)
-            if self.classification_head.causal_linear.bias is not None:
-                self.classification_head.causal_linear.bias.zero_()
             
             # 回归头：小的 Xavier 初始化
-            torch.nn.init.xavier_uniform_(self.regression_head.causal_linear.weight, gain=0.1)
+            torch.nn.init.xavier_uniform_(self.regression_head.causal_linear.weight, gain=0.01)
             if self.regression_head.causal_linear.bias is not None:
                 self.regression_head.causal_linear.bias.zero_()
 
@@ -318,9 +305,8 @@ class ActionNetwork(nn.Module):
             dict: A dictionary containing the predicted token and regression value.
         """
         # For prediction, we use the location parameters (median) as point estimates
-        # 1. Classification: Use the classification head's weight and bias directly for deterministic scores  
-        cls_scores = F.linear(causal_loc, self.classification_head.causal_linear.weight, 
-                             self.classification_head.causal_linear.bias)
+        # 1. Classification: Use the classification head's weight directly (no bias)
+        cls_scores = F.linear(causal_loc, self.classification_head.causal_linear.weight, None)
         
         # 2. Regression: Use the regression head's weight and bias directly for deterministic value
         reg_value = F.linear(causal_loc, self.regression_head.causal_linear.weight, 

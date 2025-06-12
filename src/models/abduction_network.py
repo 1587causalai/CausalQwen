@@ -79,8 +79,12 @@ class AbductionNetwork(nn.Module):
             - loc = I * z + 0 (恒等映射，保持特征信息)
             - scale = exp(scale_bias) (高初始不确定性)
             
+        重要：当输入是纯文本（无数值）时，这种初始化应该保证
+        输出与原始 Qwen 一致。
+            
         Args:
             scale_bias (float): 尺度参数的对数偏置，控制初始不确定性水平
+                              默认值 2.3 对应 scale = exp(2.3) ≈ 10
         """
         with torch.no_grad():
             # 权重矩阵设置
@@ -91,10 +95,11 @@ class AbductionNetwork(nn.Module):
             if self.hidden_size == self.causal_dim:
                 # C=H: 精确恒等映射
                 loc_weight.copy_(torch.eye(self.causal_dim))
+                print(f"  - AbductionNetwork initialized for identity mapping (scale_bias={scale_bias}).")
             else:
-                # C≠H: Xavier初始化作为恒等映射的近似
-                nn.init.xavier_uniform_(loc_weight, gain=1.0)
-                print(f"  - AbductionNetwork (归因推断网络) initialized with Xavier (hidden_size={self.hidden_size} != causal_dim={self.causal_dim})")
+                # C≠H: 使用更小的增益来减少初始差异
+                nn.init.xavier_uniform_(loc_weight, gain=0.1)  # 减小增益
+                print(f"  - AbductionNetwork initialized with small Xavier gain=0.1 (hidden_size={self.hidden_size} != causal_dim={self.causal_dim})")
             
             # 后半部分(scale)设为零矩阵（配合偏置实现常数输出）
             scale_weight = weight[self.causal_dim:, :]

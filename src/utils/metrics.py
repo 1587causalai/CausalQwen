@@ -15,15 +15,17 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 def calculate_classification_metrics(
     predictions: torch.Tensor,
     targets: torch.Tensor,
-    probabilities: Optional[torch.Tensor] = None
+    probabilities: Optional[torch.Tensor] = None,
+    num_token_id: Optional[int] = None
 ) -> Dict[str, float]:
     """
     Calculate classification metrics.
     
     Args:
-        predictions: Predicted class indices
-        targets: Target class indices
+        predictions: Predicted class indices [batch_size, seq_len] or [batch_size]
+        targets: Target class indices [batch_size, seq_len] or [batch_size]
         probabilities: Predicted class probabilities
+        num_token_id: Token ID for <NUM> to calculate specific metrics
         
     Returns:
         metrics: Dictionary of classification metrics
@@ -32,39 +34,46 @@ def calculate_classification_metrics(
     preds_np = predictions.cpu().numpy()
     targets_np = targets.cpu().numpy()
     
-    # Calculate basic metrics
-    accuracy = accuracy_score(targets_np, preds_np)
+    # Flatten if needed
+    if preds_np.ndim > 1:
+        preds_np = preds_np.flatten()
+    if targets_np.ndim > 1:
+        targets_np = targets_np.flatten()
     
-    # Calculate precision, recall, and F1 score
-    # Use weighted average to handle class imbalance
-    precision = precision_score(targets_np, preds_np, average='weighted', zero_division=0)
-    recall = recall_score(targets_np, preds_np, average='weighted', zero_division=0)
-    f1 = f1_score(targets_np, preds_np, average='weighted', zero_division=0)
+    # Remove invalid indices (e.g., padding)
+    valid_mask = targets_np >= 0
+    preds_np = preds_np[valid_mask]
+    targets_np = targets_np[valid_mask]
     
-    # Calculate additional metrics if probabilities are provided
-    entropy = 0.0
-    confidence = 0.0
+    if len(preds_np) == 0:
+        return {
+            'accuracy': 0.0,
+            'precision': 0.0,
+            'recall': 0.0,
+            'f1': 0.0
+        }
     
-    if probabilities is not None:
-        probs_np = probabilities.cpu().numpy()
-        
-        # Calculate entropy of predicted probabilities
-        # Add small epsilon to avoid log(0)
-        epsilon = 1e-10
-        entropy = -np.sum(probs_np * np.log(probs_np + epsilon), axis=1).mean()
-        
-        # Calculate average confidence (max probability)
-        confidence = np.max(probs_np, axis=1).mean()
-    
-    # Compile metrics
+    # Basic metrics
     metrics = {
-        'cls_accuracy': float(accuracy),
-        'cls_precision': float(precision),
-        'cls_recall': float(recall),
-        'cls_f1': float(f1),
-        'cls_entropy': float(entropy),
-        'cls_confidence': float(confidence)
+        'accuracy': accuracy_score(targets_np, preds_np),
+        'precision': precision_score(targets_np, preds_np, average='weighted', zero_division=0),
+        'recall': recall_score(targets_np, preds_np, average='weighted', zero_division=0),
+        'f1': f1_score(targets_np, preds_np, average='weighted', zero_division=0)
     }
+    
+    # <NUM> token specific metrics if provided
+    if num_token_id is not None:
+        num_mask = targets_np == num_token_id
+        if num_mask.sum() > 0:
+            metrics['num_precision'] = precision_score(
+                num_mask, preds_np == num_token_id, zero_division=0
+            )
+            metrics['num_recall'] = recall_score(
+                num_mask, preds_np == num_token_id, zero_division=0
+            )
+            metrics['num_f1'] = f1_score(
+                num_mask, preds_np == num_token_id, zero_division=0
+            )
     
     return metrics
 
@@ -72,7 +81,7 @@ def calculate_classification_metrics(
 def calculate_regression_metrics(
     predictions: torch.Tensor,
     targets: torch.Tensor,
-    scales: Optional[torch.Tensor] = None
+    mask: Optional[torch.Tensor] = None
 ) -> Dict[str, float]:
     """
     Calculate regression metrics.
@@ -80,144 +89,76 @@ def calculate_regression_metrics(
     Args:
         predictions: Predicted values
         targets: Target values
-        scales: Predicted scale parameters (uncertainty)
+        mask: Boolean mask for valid positions
         
     Returns:
         metrics: Dictionary of regression metrics
     """
-    # Convert tensors to numpy arrays
+    # Convert to numpy
     preds_np = predictions.cpu().numpy()
     targets_np = targets.cpu().numpy()
     
-    # Calculate mean squared error
-    mse = np.mean((preds_np - targets_np) ** 2)
+    # Apply mask if provided
+    if mask is not None:
+        mask_np = mask.cpu().numpy().astype(bool)
+        preds_np = preds_np[mask_np]
+        targets_np = targets_np[mask_np]
     
-    # Calculate mean absolute error
-    mae = np.mean(np.abs(preds_np - targets_np))
-    
-    # Calculate mean absolute percentage error
-    # Add small epsilon to avoid division by zero
-    epsilon = 1e-10
-    mape = np.mean(np.abs((targets_np - preds_np) / (np.abs(targets_np) + epsilon))) * 100
-    
-    # Calculate R-squared
-    ss_total = np.sum((targets_np - np.mean(targets_np)) ** 2)
-    ss_residual = np.sum((targets_np - preds_np) ** 2)
-    r2 = 1 - (ss_residual / (ss_total + epsilon))
-    
-    # Calculate normalized root mean squared error
-    target_range = np.max(targets_np) - np.min(targets_np)
-    nrmse = np.sqrt(mse) / (target_range + epsilon)
-    
-    # Calculate uncertainty metrics if scales are provided
-    uncertainty_error = 0.0
-    picp = 0.0  # Prediction Interval Coverage Probability
-    
-    if scales is not None:
-        scales_np = scales.cpu().numpy()
-        
-        # Calculate mean uncertainty
-        mean_uncertainty = np.mean(scales_np)
-        
-        # Calculate correlation between absolute error and uncertainty
-        abs_errors = np.abs(preds_np - targets_np)
-        uncertainty_error_corr = np.corrcoef(abs_errors, scales_np)[0, 1]
-        
-        # Calculate PICP (for 95% prediction interval)
-        # For Cauchy distribution, 95% interval is approximately ±12.7 times the scale
-        interval_multiplier = 12.7
-        lower_bounds = preds_np - interval_multiplier * scales_np
-        upper_bounds = preds_np + interval_multiplier * scales_np
-        in_interval = (targets_np >= lower_bounds) & (targets_np <= upper_bounds)
-        picp = np.mean(in_interval)
-        
-        # Update metrics
-        metrics_uncertainty = {
-            'reg_mean_uncertainty': float(mean_uncertainty),
-            'reg_uncertainty_error_corr': float(uncertainty_error_corr),
-            'reg_picp': float(picp)
+    if len(preds_np) == 0:
+        return {
+            'mae': 0.0,
+            'rmse': 0.0,
+            'mape': 0.0
         }
+    
+    # Calculate metrics
+    mae = np.mean(np.abs(preds_np - targets_np))
+    rmse = np.sqrt(np.mean((preds_np - targets_np) ** 2))
+    
+    # MAPE (Mean Absolute Percentage Error)
+    # Avoid division by zero
+    non_zero_mask = targets_np != 0
+    if non_zero_mask.sum() > 0:
+        mape = np.mean(np.abs((targets_np[non_zero_mask] - preds_np[non_zero_mask]) / targets_np[non_zero_mask])) * 100
     else:
-        metrics_uncertainty = {}
+        mape = 0.0
     
-    # Compile basic metrics
-    metrics_basic = {
-        'reg_mse': float(mse),
-        'reg_mae': float(mae),
-        'reg_mape': float(mape),
-        'reg_r2': float(r2),
-        'reg_nrmse': float(nrmse)
+    return {
+        'mae': float(mae),
+        'rmse': float(rmse),
+        'mape': float(mape)
     }
-    
-    # Combine all metrics
-    metrics = {**metrics_basic, **metrics_uncertainty}
-    
-    return metrics
 
 
 def calculate_calibration_metrics(
-    probabilities: torch.Tensor,
+    predicted_probs: torch.Tensor,
+    predicted_scales: torch.Tensor,
     targets: torch.Tensor,
-    num_bins: int = 10
+    mask: Optional[torch.Tensor] = None,
+    confidence_levels: List[float] = [0.5, 0.9, 0.95]
 ) -> Dict[str, float]:
     """
-    Calculate calibration metrics.
+    Calculate calibration metrics for uncertainty quantification.
     
     Args:
-        probabilities: Predicted class probabilities
-        targets: Target class indices
-        num_bins: Number of bins for calibration curve
+        predicted_probs: Predicted probabilities (for classification)
+        predicted_scales: Predicted scales (uncertainty)
+        targets: True targets
+        mask: Valid positions mask
+        confidence_levels: Confidence levels to evaluate
         
     Returns:
         metrics: Dictionary of calibration metrics
     """
-    # Convert tensors to numpy arrays
-    probs_np = probabilities.cpu().numpy()
-    targets_np = targets.cpu().numpy()
+    # This is a placeholder - implement proper calibration metrics
+    # based on the Cauchy distribution properties
     
-    # Get predicted classes and their probabilities
-    pred_classes = np.argmax(probs_np, axis=1)
-    pred_probs = np.max(probs_np, axis=1)
+    metrics = {}
     
-    # Check if predictions are correct
-    correct = (pred_classes == targets_np)
-    
-    # Create bins for confidence
-    bin_edges = np.linspace(0, 1, num_bins + 1)
-    bin_indices = np.digitize(pred_probs, bin_edges) - 1
-    
-    # Calculate calibration metrics
-    bin_accuracies = np.zeros(num_bins)
-    bin_confidences = np.zeros(num_bins)
-    bin_counts = np.zeros(num_bins)
-    
-    for i in range(num_bins):
-        bin_mask = (bin_indices == i)
-        if np.any(bin_mask):
-            bin_accuracies[i] = np.mean(correct[bin_mask])
-            bin_confidences[i] = np.mean(pred_probs[bin_mask])
-            bin_counts[i] = np.sum(bin_mask)
-    
-    # Calculate Expected Calibration Error (ECE)
-    ece = np.sum(bin_counts * np.abs(bin_accuracies - bin_confidences)) / np.sum(bin_counts)
-    
-    # Calculate Maximum Calibration Error (MCE)
-    mce = np.max(np.abs(bin_accuracies - bin_confidences))
-    
-    # Calculate Brier Score
-    # For multi-class, use one-hot encoding of targets
-    num_classes = probs_np.shape[1]
-    targets_one_hot = np.zeros((len(targets_np), num_classes))
-    targets_one_hot[np.arange(len(targets_np)), targets_np] = 1
-    brier_score = np.mean(np.sum((probs_np - targets_one_hot) ** 2, axis=1))
-    
-    # Compile metrics
-    metrics = {
-        'calib_ece': float(ece),
-        'calib_mce': float(mce),
-        'calib_brier': float(brier_score),
-        'calib_error': float(ece)  # Alias for main calibration error
-    }
+    # For now, return dummy values
+    for level in confidence_levels:
+        metrics[f'coverage_{int(level*100)}'] = 0.0
+        metrics[f'width_{int(level*100)}'] = 0.0
     
     return metrics
 

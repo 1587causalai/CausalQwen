@@ -25,66 +25,54 @@
 
 #### 步骤 1: 归因推断 (Abduction) - "你是谁？"
 
-我们无法直接观测到一个个体真实的 $u_i$。但我们可以根据其外在的**证据 $x_{\le i}$** (即到位置 $i$ 为止的上下文)，来**归因**其最有可能的内在本质。
-
-归因推断网络 (Abduction Network) 的任务正是如此：它接收来自上游特征网络提取的观测特征 $z_i$，分析并推断出该观测结果最可能源自于哪个"子群体"。这个子群体的数学画像，就是一个后验概率分布 $P(U_i|z_i)$。
+归因推断网络接收上下文特征 $z_i$，推断该位置的因果表征分布：
 \[
-\forall i \in \{1, \ldots, S\}: \quad U_i | z_i \sim \text{Cauchy}(\text{loc}(z_i), \text{scale}(z_i))
+U_i | z_i \sim \text{Cauchy}(\text{loc}(z_i), \text{scale}(z_i))
 \]
--   $z_i$: 在位置 $i$ 的上下文特征向量，它编码了到当前位置为止的所有信息 $x_{\le i}$。
--   $\text{loc}(z_i)$: 该位置因果表征的"典型特征"或"中心位置"，代表了归因出的子群体的平均画像。
--   $\text{scale}(z_i)$: 该位置因果表征的"多样性"或我们认知的不确定性，代表了该子群体的内部差异。
 
 #### 步骤 2: 行动 (Action) - "你会做什么？"
 
-一旦我们对位置 $i$ 的因果表征有了认知 ($P(U_i|z_i)$)，我们就可以预测该位置在不同干预下的反应。
-
-行动网络 (Action Network) 基于推断出的分布参数 ($\text{loc}(z_i), \text{scale}(z_i)$)，直接解析地计算出该位置上不同行动（分类或回归）的结果分布。
-
--   **分类决策分数**: $S_{k,i}|z_i \sim \text{Cauchy}(\dots)$
--   **回归值**: $Y_i|z_i \sim \text{Cauchy}(\dots)$
-
-这种逐位置的推断-行动过程，完美体现了模型在处理序列数据时，对每个步骤进行独立因果思考的核心思想。
+行动网络基于因果表征分布，直接计算分类和回归结果：
+- **分类决策分数**: $S_{k,i} = \vec{A}_k \cdot U_i + B_k$
+- **回归值**: $Y_i = \vec{W} \cdot U_i + b$
 
 ## 4. 数学引擎：柯西分布的威力
 
-我们选择**柯西分布**来贯穿整个模型，核心优势在于其**线性稳定性**。这意味着柯西变量的线性组合仍然是柯西变量。
+我们选择**柯西分布(Cauchy Distribution)** 的核心优势在于其**线性稳定性**：
 
-这一优美的数学特性，使得从 $U$ 的分布到 $S_k$ 和 $Y$ 的分布的整个前向传播过程，可以**完全在分布参数层面进行解析计算**，无需任何耗时的蒙特卡洛采样，保证了训练的高效性。
+**柯西分布的线性封闭性**：
+如果 $U \sim \text{Cauchy}(\mu, \gamma)$，则：
+\[
+Y = aU + b \sim \text{Cauchy}(a\mu + b, |a|\gamma)
+\]
 
-> 详细的数学推导请参见: [`design-docs/math/mathematical_foundations.md`](design-docs/math/mathematical_foundations.md)
+这使得从 $U$ 到 $S_k$ 和 $Y$ 的整个前向传播可以**完全在分布参数层面进行解析计算**，无需采样。
 
 ## 5. 训练策略：门控损失函数
 
-为了让模型能自主学习在序列的哪个**位置**进行文本分类、在哪个**位置**进行数值回归，我们设计了**门控损失函数**。
-
-其核心思想是，对于序列中的任意位置 $i$，只有当模型自己预测当前位置应该输出数值 (`<NUM>` 词元) 时，我们才按比例地激活该位置回归任务的损失。这通过将位置 $i$ 的回归损失与该位置 `<NUM>` 词元的预测概率相乘来实现。
-
+**OvR 分类概率**：
 \[
-\mathcal{L}_{\text{total}} = \sum_i \left( \mathcal{L}_{\text{classification}, i} + P_i(\text{<NUM>}) \cdot \mathcal{L}_{\text{regression}, i} \right)
+P_{k,i} = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)
 \]
 
-这种机制使得模型在训练初期专注于更简单的分类任务，在对任务有一定理解后，才逐渐将注意力转移到更复杂的回归任务上，实现了"课程学习"的自动化。
-
-## 6. 数值感知的特征融合
-
-为了让模型能够理解和处理数值信息，我们在特征提取阶段引入了**数值感知机制**。这种机制确保 `<NUM>` token 的嵌入能够反映其对应的具体数值。
-对于序列中的每个位置 $i$，特征向量 $z_i$ 的计算方式取决于该位置的 token 类型：
-
+**混合门控回归损失**：
 \[
-z_i = \begin{cases}
-h(x_i) & \text{如果 } x_i \neq \text{<NUM>} \\
-h(\text{<NUM>}) + g(v_i) & \text{如果 } x_i = \text{<NUM>}
-\end{cases}
+\mathcal{L}_{\text{reg\_gated},i} = m_i \cdot \left(\alpha + (1-\alpha) \cdot P_{\text{<NUM>},i}\right) \cdot \mathcal{L}_{\text{cauchy\_nll},i}
 \]
 
 其中：
-- $h(\cdot)$：基础特征提取函数（如 Qwen 的 token 嵌入）
-- $g(\cdot)$：数值嵌入函数，将数值 $v_i$ 映射到与 $h$ 相同的特征空间
-- $v_i$：位置 $i$ 对应的实际数值
+- $m_i$ 是位置 $i$ 的数值掩码（0或1）
+- $\alpha$ 是门控系数（1.0=无门控，0.0=完全门控）
+- $P_{\text{<NUM>},i}$ 是位置 $i$ 预测为 `<NUM>` 的概率
 
-** **我们采用了一个极其优雅的统一表示方法。对于序列中的**每个位置** $i$，特征向量都通过相同的公式计算：
+**总损失**：
+\[
+\mathcal{L}_{\text{total}} = \sum_i \left( \mathcal{L}_{\text{cls},i} + \lambda \cdot \mathcal{L}_{\text{reg\_gated},i} \right)
+\]
 
+## 6. 数值感知的统一表示
+
+对于序列中的**每个位置** $i$，特征向量都通过相同的公式计算：
 \[
 z_i = h(x_i) + \text{sign}(v_i) \cdot \ln(1 + |v_i|) \cdot \vec{e}
 \]
@@ -93,30 +81,39 @@ z_i = h(x_i) + \text{sign}(v_i) \cdot \ln(1 + |v_i|) \cdot \vec{e}
 - 当 $x_i = \text{<NUM>}$ 时，$v_i$ 是对应的实际数值
 - 当 $x_i \neq \text{<NUM>}$ 时，$v_i = 0$
 
-由于 $\text{sign}(0) \cdot \ln(1 + 0) = 0$，非数值位置的特征自然退化为纯语义表示 $h(x_i)$。
+**关键性质**：$\text{sign}(0) \cdot \ln(1 + 0) = 0$，非数值位置自然退化为 $z_i = h(x_i)$。
 
-这种设计的美妙之处在于：
-1. **完全统一**：无需条件判断，所有位置使用相同的计算
-2. **自然扩展**：为未来给每个位置赋予连续值（如置信度、时间戳等）提供了框架
-3. **计算高效**：可以完全向量化，无需分支处理
+## 7. 并行化计算的核心思想
 
+### 7.1 输入并行化
 
-这种纯加性融合具有以下数学优势：
+**数值向量构建**：
+$$v_i = \begin{cases}
+\text{numerical\_value}_i & \text{如果 } x_i = \text{<NUM>} \\
+0 & \text{否则}
+\end{cases}$$
 
-1. **线性保持性**：加法操作保持了柯西分布的线性性质。如果 $h(\text{<NUM>}) \sim \text{Cauchy}(\mu_h, \gamma_h)$ 且 $g(v_i) \sim \text{Cauchy}(\mu_g, \gamma_g)$，则：
-   \[
-   z_i = h(\text{<NUM>}) + g(v_i) \sim \text{Cauchy}(\mu_h + \mu_g, \gamma_h + \gamma_g)
-   \]
+**向量化特征计算**：
+$$\mathbf{z} = \mathbf{h}(\mathbf{x}) + \boldsymbol{\phi}(\mathbf{v})$$
 
-2. **信息叠加**：数值信息作为增量叠加在基础 token 语义之上，而非替换：
-   \[
-   z_i = \underbrace{h(\text{<NUM>})}_{\text{基础语义}} + \underbrace{g(v_i)}_{\text{数值信息}}
-   \]
+### 7.2 输出并行化
 
-3. **梯度传播**：加性操作确保梯度可以无阻碍地同时流向两个分支：
-   \[
-   \frac{\partial \mathcal{L}}{\partial h} = \frac{\partial \mathcal{L}}{\partial z_i}, \quad \frac{\partial \mathcal{L}}{\partial g} = \frac{\partial \mathcal{L}}{\partial z_i}
-   \]
+**掩码向量**：
+$$m_i = \begin{cases}
+1 & \text{如果 } y_i = \text{<NUM>} \\
+0 & \text{否则}
+\end{cases}$$
 
-这种设计遵循了我们框架的核心原则：**让数据自己决定如何平衡 token 的基础语义和数值信息**，而不是通过人为设计的机制来控制。
+**向量化损失**：
+$$\mathcal{L}_{\text{reg}} = \sum_{i=1}^S m_i \cdot P_{i,\text{<NUM>}} \cdot \ell_{\text{cauchy}}(y_i^{\text{val}}, \text{loc}_{Y,i}, \text{scale}_{Y,i})$$
+
+## 8. 总结
+
+CausalQwen 的数学框架基于三个核心洞察：
+
+1. **因果表征**：通过 $U$ 建模个体差异，实现真正的因果推理
+2. **分布计算**：利用柯西分布的线性性质，实现无采样训练
+3. **统一架构**：通过巧妙的数学设计，统一处理文本和数值
+
+更详细的数学推导请参考：[`design-docs/math/mathematical_foundations.md`](design-docs/math/mathematical_foundations.md)
 

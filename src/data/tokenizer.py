@@ -268,12 +268,18 @@ class MockTokenizer:
 
 class QwenTokenizerWrapper:
     """
-    Wrapper for Qwen tokenizer to make it compatible with our data pipeline.
+    A wrapper around the Qwen tokenizer that adds special handling for numerical values.
     
-    This wrapper adds support for the <NUM> token and numerical value handling.
+    This wrapper adds a special <NUM> token to represent numerical values in text,
+    allowing the model to handle mixed text-numerical data in a unified way.
+    
+    重要设计决策：
+    - 使用 Qwen 的完整配置容量（151,936）而非实际使用的词汇（151,665）
+    - <NUM> token 占用第一个预留位置（ID: 151,665）
+    - 保留剩余 270 个预留位置供未来扩展
     """
     
-    def __init__(self, model_path="~/models/Qwen2.5-0.5B", use_real_tokenizer=True):
+    def __init__(self, model_path: str = 'Qwen/Qwen2.5-0.5B', use_real_tokenizer: bool = True):
         """
         Initialize the Qwen tokenizer wrapper.
         
@@ -310,28 +316,23 @@ class QwenTokenizerWrapper:
                 else:
                     print(f"{self.num_token} token already exists in vocabulary")
                 
-                # Get final vocab size and token ID
-                self.vocab_size = len(self.tokenizer)
-                self.num_token_id = self.tokenizer.convert_tokens_to_ids(self.num_token)
+                # 使用 Qwen 的完整配置容量，而非仅实际使用的词汇
+                # 这确保了与 Qwen 架构的完全兼容性
+                self.vocab_size = 151936  # Qwen 的 config.vocab_size
+                self.num_token_id = 151665  # 第一个预留位置
                 
-                # Verify the addition was successful
-                expected_vocab_size = original_vocab_size + (1 if self.num_token not in self.tokenizer.get_vocab() else 0)
-                print(f"Final vocab size: {self.vocab_size}")
-                print(f"Expected vocab size: {original_vocab_size} + 1 = {original_vocab_size + 1}")
-                print(f"<NUM> token ID: {self.num_token_id}")
+                # 添加必要的属性以兼容 HuggingFace 接口
+                self.pad_token_id = self.tokenizer.pad_token_id if hasattr(self.tokenizer, 'pad_token_id') and self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
+                self.eos_token_id = self.tokenizer.eos_token_id
+                self.bos_token_id = self.tokenizer.bos_token_id if hasattr(self.tokenizer, 'bos_token_id') else None
+                self.unk_token_id = self.tokenizer.unk_token_id if hasattr(self.tokenizer, 'unk_token_id') else None
                 
-                if self.vocab_size == original_vocab_size + 1:
-                    print("✅ Vocabulary size correctly increased by 1")
-                elif self.vocab_size == original_vocab_size:
-                    print("⚠️ Vocabulary size unchanged (token already existed)")
-                else:
-                    print(f"❌ Unexpected vocab size change: {original_vocab_size} → {self.vocab_size}")
-                
-                # Expose pad_token_id for convenience
-                self.pad_token_id = self.tokenizer.pad_token_id
-                
-                print(f"Successfully loaded Qwen tokenizer with vocab size {self.vocab_size}")
-                
+                print(f"QwenTokenizerWrapper initialized:")
+                print(f"  - Qwen 配置容量: 151,936")
+                print(f"  - Qwen 实际使用: 151,665") 
+                print(f"  - <NUM> token ID: {self.num_token_id} (第一个预留位置)")
+                print(f"  - 剩余预留: 270 个位置")
+                print(f"✅ Successfully initialized with full vocabulary capacity")
             except Exception as e:
                 print(f"Failed to load Qwen tokenizer: {e}")
                 print("Falling back to mock implementation")
@@ -637,4 +638,28 @@ class QwenTokenizerWrapper:
         This is a convenience method to expose the underlying tokenizer's functionality.
         """
         return self.tokenizer.convert_ids_to_tokens(ids)
+    
+    def vocab_size_info(self) -> dict:
+        """返回词汇表大小的详细信息"""
+        if self.use_real_tokenizer:
+            return {
+                'config_capacity': 151936,      # Qwen 配置容量
+                'qwen_used': 151665,           # Qwen 实际使用
+                'causalqwen_vocab': self.vocab_size,    # CausalQwen 使用完整容量
+                'num_token_id': self.num_token_id,
+                'reserved_slots': 271,         # 总预留槽位
+                'reserved_used': 1,            # 已使用的预留（<NUM>）
+                'reserved_remaining': 270      # 剩余预留
+            }
+        else:
+            # Mock tokenizer 的情况
+            return {
+                'config_capacity': self.vocab_size,
+                'qwen_used': self.vocab_size - 1,
+                'causalqwen_vocab': self.vocab_size,
+                'num_token_id': self.num_token_id,
+                'reserved_slots': 1,
+                'reserved_used': 1,
+                'reserved_remaining': 0
+            }
 

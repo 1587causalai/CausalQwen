@@ -15,7 +15,7 @@ from ..utils.losses import CausalLMLoss, compute_ovr_probabilities
 class Trainer:
     """Handles the training loop, optimizer, and data loading for fine-tuning."""
     
-    def __init__(self, model, tokenizer, device, config, learning_rate=1e-4, batch_size=16, wandb_run=None):
+    def __init__(self, model, tokenizer, device, learning_rate=1e-4, batch_size=16, config=None, wandb_run=None):
         """
         Initialize the Trainer.
         
@@ -23,17 +23,31 @@ class Trainer:
             model (nn.Module): The model to be trained.
             tokenizer: The tokenizer to use.
             device (torch.device): The device to train on.
-            config (CausalLMConfig): The model's configuration object.
             learning_rate (float): The learning rate for the optimizer.
             batch_size (int): The batch size for training.
+            config: The model's configuration object.
             wandb_run: An active Weights & Biases run object.
         """
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
-        self.config = config
         self.batch_size = batch_size
         self.wandb_run = wandb_run
+        self.learning_rate = learning_rate
+        self.config = config  # 确保保存config为实例属性
+        
+        # 从配置中获取门控系数
+        self.gating_alpha = config.reg_loss_gating_alpha if config else 1.0
+        
+        # 在日志中记录门控策略
+        if self.gating_alpha == 1.0:
+            gating_strategy = "无门控（硬掩码）"
+        elif self.gating_alpha == 0.0:
+            gating_strategy = "完全门控（软注意力）"
+        else:
+            gating_strategy = f"混合门控（alpha={self.gating_alpha}）"
+        
+        print(f"   - 回归损失门控策略: {gating_strategy}")
         
         # Calculate data statistics for initialization
         print("Pre-calculating data statistics for initialization...")
@@ -254,4 +268,57 @@ class Trainer:
             "final_accuracy": accuracy,
             "final_num_accuracy": num_accuracy,
             "total_epochs": num_epochs
-        } 
+        }
+
+    def train_step(self, batch):
+        """执行单个训练步骤"""
+        self.model.train()
+        self.optimizer.zero_grad()
+        
+        # 解包批次数据
+        batch_input_ids = batch['input_ids']
+        batch_labels = batch['labels']
+        batch_numerical_values = batch['numerical_values']
+        batch_attention_mask = batch.get('attention_mask', None)
+        
+        # 前向传播
+        outputs = self.model(batch_input_ids, batch_numerical_values, batch_attention_mask)
+        
+        # 计算损失
+        loss_info = self.model.compute_loss(
+            outputs, 
+            batch_labels, 
+            batch_numerical_values, 
+            batch_attention_mask
+        )
+        
+        # 反向传播
+        loss = loss_info['loss']
+        loss.backward()
+        self.optimizer.step()
+        
+        # 记录指标
+        metrics = {
+            'loss': loss.item(),
+            'cls_loss': loss_info.get('cls_loss', 0),
+            'reg_loss': loss_info.get('reg_loss', 0),
+            'num_positions': loss_info.get('num_positions', 0)
+        }
+        
+        # 记录门控相关的统计信息
+        if hasattr(loss_info, 'gate_weights_mean'):
+            metrics['avg_gate_weight'] = loss_info.get('gate_weights_mean', 0.0)
+            if self.wandb_run:
+                self.wandb_run.log({
+                    'train/avg_gate_weight': metrics['avg_gate_weight'],
+                    'train/gating_alpha': self.gating_alpha
+                })
+        
+        if self.wandb_run:
+            self.wandb_run.log({
+                'train/loss': metrics['loss'],
+                'train/cls_loss': metrics['cls_loss'],
+                'train/reg_loss': metrics['reg_loss']
+            })
+        
+        return metrics

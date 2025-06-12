@@ -248,3 +248,35 @@ cd docs
 docsify serve
 ```
 
+## 🏗️ 架构设计
+
+### 词汇表设计（工业级实践）
+
+CausalQwen 采用了与 Qwen 完全兼容的词汇表设计：
+
+- **配置容量**：151,936（与 Qwen 完全一致）
+- **Qwen 已用**：151,665 个词汇
+- **预留空间**：271 个位置
+- **<NUM> token**：使用第一个预留位置（ID: 151,665）
+
+这种设计的优势：
+- ✅ 完全兼容 Qwen 的权重和架构
+- ✅ 利用预训练的预留权重初始化
+- ✅ 保留 270 个位置供未来扩展
+- ✅ 无需修改模型结构即可添加新 token
+
+详见：[Qwen 预留 Token 分析](docs/background/qwen_reserved_tokens_analysis.md)
+
+## 📊 实验验证
+
+运行知识迁移验证：
+```bash
+python scripts/compare_causal_vs_qwen.py
+```
+
+验证要点：
+- 特征提取一致性
+- 完整权重继承（151,936 个位置）
+- 前向传播兼容性
+- 预留空间的正确处理
+

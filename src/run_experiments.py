@@ -8,7 +8,7 @@ in the design documents, including:
 - comprehensive: Evaluates the baseline model across multiple datasets.
 - comparison: Compares model performance across different hyperparameter settings.
 - ablation: Conducts an ablation study to validate core architectural choices.
-- initialization: Compares first-principles vs heuristic initialization strategies.
+- initialization: Compares different initialization strategies.
 """
 import os
 import sys
@@ -33,12 +33,6 @@ from src.evaluation.evaluator import Evaluator
 def convert_numpy_types(obj):
     """
     Recursively convert numpy types to standard Python types for JSON serialization.
-    
-    Args:
-        obj: Any object that might contain numpy types.
-        
-    Returns:
-        Object with numpy types converted to standard Python types.
     """
     if isinstance(obj, np.integer):
         return int(obj)
@@ -67,7 +61,7 @@ def get_model_configs(base_config, experiment_type='ablation'):
     configs = {}
     
     if experiment_type == 'ablation':
-        # Full model (baseline for ablation) - uses first-principles initialization
+        # Full model (baseline for ablation)
         configs['full_model'] = deepcopy(base_config)
         
         # Ablation: No OVR (use Softmax)
@@ -87,16 +81,16 @@ def get_model_configs(base_config, experiment_type='ablation'):
         configs['no_ovr_no_cauchy'] = config_no_ovr_no_cauchy
 
     elif experiment_type == 'comparison':
-        # Base model (baseline for comparison) - uses first-principles initialization
+        # Base model (baseline for comparison)
         configs['base'] = deepcopy(base_config)
         
         # Comparison: Different OvR thresholds
         config_low_threshold = deepcopy(base_config)
-        config_low_threshold.ovr_threshold = 100.0  # 从 1.0 改为 100.0
+        config_low_threshold.ovr_threshold = 1.0
         configs['low_threshold'] = config_low_threshold
         
         config_high_threshold = deepcopy(base_config)
-        config_high_threshold.ovr_threshold = 100000.0  # 从 50.0 改为 100000.0
+        config_high_threshold.ovr_threshold = 100.0
         configs['high_threshold'] = config_high_threshold
         
         # Comparison: Different causal dimensions (only if not using identity mapping)
@@ -108,6 +102,8 @@ def get_model_configs(base_config, experiment_type='ablation'):
             config_large_causal = deepcopy(base_config)
             config_large_causal.causal_dim = 256
             configs['large_causal'] = config_large_causal
+        else:
+            print("📌 跳过因果维度比较（当前使用恒等映射，causal_dim == hidden_size）")
         
         # Comparison: Different regression loss weights
         config_high_reg_weight = deepcopy(base_config)
@@ -119,15 +115,10 @@ def get_model_configs(base_config, experiment_type='ablation'):
         configs['low_reg_weight'] = config_low_reg_weight
         
     elif experiment_type == 'initialization':
-        # NEW: Initialization strategy comparison experiment
+        # Initialization strategy comparison experiment
         
-        # First-principles initialization (our new approach)
-        configs['first_principles'] = deepcopy(base_config)
-        # This will use the default first-principles initialization in ActionNetwork
-        
-        # Note: We can't easily test the old heuristic initialization without 
-        # modifying the ActionNetwork code, but we can document the differences
-        # and compare against models trained with different initialization strategies
+        # Default initialization (our standard approach)
+        configs['default'] = deepcopy(base_config)
         
         # Different initial uncertainty levels
         config_low_uncertainty = deepcopy(base_config)
@@ -138,6 +129,12 @@ def get_model_configs(base_config, experiment_type='ablation'):
         config_high_uncertainty.initial_scale_bias = 3.0  # exp(3.0) ≈ 20
         configs['high_uncertainty'] = config_high_uncertainty
         
+        # No identity mapping (test Xavier initialization)
+        if base_config.hidden_size != 64:  # Avoid creating duplicate if already 64
+            config_no_identity = deepcopy(base_config)
+            config_no_identity.causal_dim = 64  # Force different dimension
+            configs['no_identity_mapping'] = config_no_identity
+        
     elif experiment_type in ['basic', 'comprehensive']:
         configs['base'] = deepcopy(base_config)
         
@@ -146,100 +143,181 @@ def get_model_configs(base_config, experiment_type='ablation'):
         
     return configs
 
+def print_experiment_header(experiment_type, timestamp, device):
+    """Print a formatted experiment header with key information."""
+    print("\n" + "="*80)
+    print(f"🚀 CausalQwen 实验运行器")
+    print("="*80)
+    print(f"📅 时间戳: {timestamp}")
+    print(f"🧪 实验类型: {experiment_type}")
+    print(f"💻 设备: {device}")
+    print(f"🏗️  架构版本: 推断-行动范式 v3")
+    print("="*80 + "\n")
+
+def print_config_info(config_name, config, base_config=None):
+    """Print configuration information in a formatted way."""
+    print(f"\n{'='*60}")
+    print(f"⚙️  配置: {config_name}")
+    print(f"{'='*60}")
+    
+    # Print key configuration parameters
+    print(f"📊 模型参数:")
+    print(f"   - 词汇表大小: {config.vocab_size:,} (Qwen 完整配置容量)")
+    print(f"   - 隐藏维度: {config.hidden_size}")
+    print(f"   - 因果维度: {config.causal_dim}")
+    print(f"   - 恒等映射: {'是' if config.causal_dim == config.hidden_size else '否'}")
+    
+    print(f"\n🎯 训练设置:")
+    print(f"   - OvR 分类: {'是' if config.use_ovr_classifier else '否 (Softmax)'}")
+    print(f"   - 柯西分布: {'是' if config.use_cauchy_distribution else '否 (正态分布)'}")
+    print(f"   - OvR 阈值: {config.ovr_threshold}")
+    print(f"   - 回归损失权重: {config.reg_loss_weight}")
+    print(f"   - 初始不确定性: exp({config.initial_scale_bias}) ≈ {np.exp(config.initial_scale_bias):.1f}")
+    
+    # Print differences from base config if provided
+    if base_config and config_name not in ['base', 'full_model', 'default']:
+        print(f"\n🔄 与基准配置的差异:")
+        differences = []
+        for attr in ['causal_dim', 'use_ovr_classifier', 'use_cauchy_distribution', 
+                     'ovr_threshold', 'reg_loss_weight', 'initial_scale_bias']:
+            if hasattr(config, attr) and hasattr(base_config, attr):
+                base_val = getattr(base_config, attr)
+                config_val = getattr(config, attr)
+                if base_val != config_val:
+                    differences.append(f"   - {attr}: {base_val} → {config_val}")
+        
+        if differences:
+            for diff in differences:
+                print(diff)
+        else:
+            print("   - 无差异")
+
 def main(args):
     """Main function to orchestrate the experiments."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     results_dir = os.path.join(args.results_base_dir, f"{args.experiment}_{timestamp}")
     os.makedirs(results_dir, exist_ok=True)
     
-    print(f"=== 运行实验: {args.experiment} ===")
-    print(f"结果将保存到: {results_dir}")
-    print(f"🧮 使用更新的初始化策略")
-    print(f"   - 分类头：完全复用 Qwen 的 lm_head（包括权重和偏置）")
-    print(f"   - 回归头：零初始化")
-    print(f"   - 保留词汇：自动处理，无需特殊配置")
+    # Print experiment header
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print_experiment_header(args.experiment, timestamp, device)
     
     # --- 1. Setup ---
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"使用设备: {device}")
-    
+    print("📚 初始化分词器...")
     tokenizer = QwenTokenizerWrapper(model_path=args.qwen_model_path, use_real_tokenizer=True)
-    print(f"加载分词器: vocab_size={tokenizer.vocab_size}, <NUM>_id={tokenizer.num_token_id}")
+    print(f"✅ 分词器加载完成")
     
+    # 获取详细的词汇表信息
+    vocab_info = tokenizer.vocab_size_info()
+    print(f"   - Qwen 配置容量: {vocab_info['config_capacity']:,}")
+    print(f"   - Qwen 实际使用: {vocab_info['qwen_used']:,}")
+    print(f"   - CausalQwen 词汇表: {vocab_info['causalqwen_vocab']:,}")
+    print(f"   - <NUM> token ID: {vocab_info['num_token_id']}")
+    print(f"   - 预留槽位: {vocab_info['reserved_slots']} (已用 {vocab_info['reserved_used']}, 剩余 {vocab_info['reserved_remaining']})")
+    
+    # Create base configuration - 使用完整的词汇表大小
     base_config = CausalLMConfig(
-        vocab_size=tokenizer.vocab_size,
+        vocab_size=vocab_info['causalqwen_vocab'],  # 使用 151936 而非 151666
         num_token_id=tokenizer.num_token_id,
         hidden_size=args.hidden_size,
-        # CRITICAL: Force causal_dim = hidden_size for identity mapping initialization
-        # This ensures AbductionNetwork uses identity mapping (C=H constraint)
+        # Force causal_dim = hidden_size for identity mapping by default
         causal_dim=args.hidden_size,
         use_real_qwen=True,
+        use_mock_feature_network=False,  # 明确设置
         qwen_model_path=args.qwen_model_path,
         ovr_threshold=args.ovr_threshold,
         reg_loss_weight=args.reg_loss_weight,
-        # Add support for different initial uncertainty levels
+        reg_loss_gating_alpha=getattr(args, 'reg_loss_gating_alpha', 1.0),  # 默认无门控
         initial_scale_bias=getattr(args, 'initial_scale_bias', 2.3)  # Default: exp(2.3) ≈ 10
     )
     
-    print(f"基础配置: hidden_size={base_config.hidden_size}, causal_dim={base_config.causal_dim}")
-    print(f"         ovr_threshold={base_config.ovr_threshold}, reg_loss_weight={base_config.reg_loss_weight}")
+    print(f"\n📋 基础配置创建完成")
+    print(f"   - 使用预训练 Qwen: {base_config.use_real_qwen}")
+    print(f"   - 模型路径: {base_config.qwen_model_path}")
     
     # --- 2. Get configurations and datasets ---
+    print(f"\n🔧 生成实验配置...")
     model_configs = get_model_configs(base_config, args.experiment)
+    print(f"✅ 生成 {len(model_configs)} 个配置变体")
+    
+    print(f"\n📊 加载评估数据集...")
     evaluation_datasets = get_all_evaluation_datasets(tokenizer)
     
     if args.experiment == 'basic':
         # Basic experiment only runs on the basic dataset
         evaluation_datasets = {'basic': evaluation_datasets['basic']}
-        print("运行基础实验，仅在 basic 数据集上测试")
+        print("✅ 基础实验模式：仅使用 basic 数据集")
     else:
-        print(f"运行 {args.experiment} 实验，共 {len(evaluation_datasets)} 个数据集")
+        print(f"✅ 加载 {len(evaluation_datasets)} 个评估数据集")
+        for name in evaluation_datasets.keys():
+            print(f"   - {name}")
+
+    # Save experiment metadata
+    experiment_info = {
+        'timestamp': timestamp,
+        'experiment_type': args.experiment,
+        'device': str(device),
+        'base_config': asdict(base_config),
+        'num_configs': len(model_configs),
+        'num_datasets': len(evaluation_datasets),
+        'training_epochs': args.epochs,
+        'batch_size': args.batch_size,
+        'learning_rate': args.lr,
+        'num_training_samples': args.num_samples
+    }
+    
+    with open(os.path.join(results_dir, 'experiment_info.json'), 'w') as f:
+        json.dump(experiment_info, f, indent=4)
+    
+    print(f"\n💾 实验元数据已保存")
+    print(f"   - 结果目录: {results_dir}")
 
     # --- 3. Run Experiment Loop ---
     all_results = {}
-    for config_name, config in model_configs.items():
-        print(f"\n{'='*60}")
-        print(f"🚀 运行配置: {config_name}")
-        print(f"{'='*60}")
-        
-        # Print config differences from base
-        if config_name != 'base' and config_name != 'full_model':
-            print("配置与基础配置的差异:")
-            for attr in dir(config):
-                if not attr.startswith('_') and hasattr(base_config, attr):
-                    base_val = getattr(base_config, attr)
-                    config_val = getattr(config, attr)
-                    if base_val != config_val:
-                        print(f"  {attr}: {base_val} → {config_val}")
+    
+    for config_idx, (config_name, config) in enumerate(model_configs.items()):
+        print_config_info(config_name, config, base_config)
         
         # --- WandB Initialization ---
         wandb_run = None
         if args.use_wandb:
             try:
                 wandb_run = wandb.init(
-                    project="CausalQwen2",  # 移除 FirstPrinciples 后缀
+                    project="CausalQwen",
                     name=f"{args.experiment}_{config_name}_{timestamp}",
                     config=asdict(config),
-                    tags=[args.experiment, "updated_init"],  # 更新标签
+                    tags=[args.experiment, "v3", "abduction-action"],
                     reinit=True
                 )
-                print("✅ Weights & Biases 初始化成功")
+                print("\n📊 Weights & Biases 初始化成功")
             except Exception as e:
-                print(f"⚠️  无法初始化 Weights & Biases。错误: {e}")
+                print(f"\n⚠️  无法初始化 Weights & Biases: {e}")
                 wandb_run = None
 
         # Instantiate model
+        print(f"\n🏗️  创建模型...")
         model = CausalLanguageModel(config).to(device)
-        print(f"📊 模型创建完成，共 {sum(p.numel() for p in model.parameters()):,} 个参数")
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"✅ 模型创建完成")
+        print(f"   - 总参数量: {total_params:,}")
+        print(f"   - 可训练参数: {trainable_params:,}")
         
-        # Initialize model weights with knowledge transfer
-        print("🔧 初始化模型权重（知识传输）...")
-        model.init_weights()  # 不再需要传递数值统计参数
-        print("✅ 模型初始化完成")
+        # Initialize model weights
+        print(f"\n🔧 初始化模型权重...")
+        model.init_weights()
+        print("✅ 权重初始化完成")
+        print("   - 归因推断网络: 恒等映射" if config.causal_dim == config.hidden_size else "   - 归因推断网络: Xavier 初始化")
+        print("   - 分类头: 从 Qwen lm_head 完整迁移 (151,936 个权重)")
+        print("   - 回归头: 小随机初始化 (gain=0.01)")
         
         # Train model if not skipped
         if not args.no_train:
-            print("🎯 开始训练模型...")
+            print(f"\n🎯 开始训练...")
+            print(f"   - 训练轮数: {args.epochs}")
+            print(f"   - 批次大小: {args.batch_size}")
+            print(f"   - 学习率: {args.lr}")
+            print(f"   - 训练样本数: {args.num_samples}")
             
             trainer = Trainer(
                 model=model,
@@ -257,86 +335,157 @@ def main(args):
             # Save the trained model
             model_path = os.path.join(results_dir, f"model_{config_name}.pth")
             torch.save(model.state_dict(), model_path)
-            print(f"💾 已保存训练后的模型到 {model_path}")
+            print(f"\n💾 模型已保存: {model_path}")
             
             # Log training summary
             if training_metrics:
-                print(f"📈 训练完成:")
-                print(f"   最终损失 (Final loss): {training_metrics.get('final_loss', 'N/A'):.4f}")
-                print(f"   最终分类损失 (Final cls_loss): {training_metrics.get('final_cls_loss', 'N/A'):.4f}")
-                print(f"   最终回归损失 (Final reg_loss): {training_metrics.get('final_reg_loss', 'N/A'):.4f}")
+                print(f"\n📈 训练完成摘要:")
+                print(f"   - 最终总损失: {training_metrics.get('final_loss', 'N/A'):.4f}")
+                print(f"   - 最终分类损失: {training_metrics.get('final_cls_loss', 'N/A'):.4f}")
+                print(f"   - 最终回归损失: {training_metrics.get('final_reg_loss', 'N/A'):.4f}")
+                
+                if wandb_run:
+                    wandb_run.summary.update({
+                        'final_loss': training_metrics.get('final_loss', 0),
+                        'final_cls_loss': training_metrics.get('final_cls_loss', 0),
+                        'final_reg_loss': training_metrics.get('final_reg_loss', 0)
+                    })
+        else:
+            print(f"\n⏭️  跳过训练（--no_train 模式）")
         
         # Evaluate model
-        print("📊 评估模型...")
+        print(f"\n📊 开始模型评估...")
         evaluator = Evaluator(model, tokenizer, device, config)
         
         config_results = {}
-        for name, dataset in evaluation_datasets.items():
-            print(f"  📋 在数据集 {name} 上评估")
+        for dataset_idx, (name, dataset) in enumerate(evaluation_datasets.items()):
+            print(f"\n📋 评估数据集 [{dataset_idx+1}/{len(evaluation_datasets)}]: {name}")
+            
             # Define path for saving raw evaluation outputs
-            eval_output_path = os.path.join(results_dir, f"evaluation_outputs_{config_name}_{name}.pt")
+            eval_output_path = os.path.join(results_dir, f"eval_{config_name}_{name}.pt")
+            
+            # Evaluate
             results = evaluator.evaluate(dataset, batch_size=args.batch_size, save_path=eval_output_path)
             config_results[name] = results
             
-            # Enhanced result reporting
-            cls_f1 = results.get('cls_f1', 0)
-            reg_mae = results.get('reg_mae', 0)
-            reg_picp = results.get('reg_picp', 0)
-            print(f"    📊 结果: 分类 F1: {cls_f1:.4f}, 回归 MAE: {reg_mae:.4f}, 回归 PICP: {reg_picp:.4f}")
+            # Report results
+            print(f"   ✅ 评估完成")
+            print(f"      - 分类 F1: {results.get('cls_f1', 0):.4f}")
+            print(f"      - 分类精确率: {results.get('cls_precision', 0):.4f}")
+            print(f"      - 分类召回率: {results.get('cls_recall', 0):.4f}")
+            print(f"      - 回归 MAE: {results.get('reg_mae', 0):.4f}")
+            print(f"      - 回归 RMSE: {results.get('reg_rmse', 0):.4f}")
+            print(f"      - 回归 PICP: {results.get('reg_picp', 0):.4f}")
             
             # Log to wandb if available
             if wandb_run:
                 wandb_run.log({
-                    f"{name}_cls_f1": cls_f1,
-                    f"{name}_reg_mae": reg_mae,
-                    f"{name}_reg_picp": reg_picp
+                    f"{name}/cls_f1": results.get('cls_f1', 0),
+                    f"{name}/cls_precision": results.get('cls_precision', 0),
+                    f"{name}/cls_recall": results.get('cls_recall', 0),
+                    f"{name}/reg_mae": results.get('reg_mae', 0),
+                    f"{name}/reg_rmse": results.get('reg_rmse', 0),
+                    f"{name}/reg_picp": results.get('reg_picp', 0)
                 })
             
         all_results[config_name] = config_results
-
-        # --- Finish WandB Run ---
+        
+        # Finish WandB run
         if wandb_run:
             wandb_run.finish()
-            print("✅ Weights & Biases 运行结束")
+            print("\n📊 Weights & Biases 运行已结束")
+        
+        print(f"\n✅ 配置 [{config_idx+1}/{len(model_configs)}] 完成: {config_name}")
 
     # --- 4. Save all results and generate summary ---
+    print(f"\n{'='*80}")
+    print("📊 实验总结")
+    print(f"{'='*80}")
+    
     # Convert numpy types to standard Python types for JSON serialization
     all_results_serializable = convert_numpy_types(all_results)
     
+    # Save detailed results
     results_path = os.path.join(results_dir, "results.json")
     with open(results_path, 'w') as f:
         json.dump(all_results_serializable, f, indent=4)
+    print(f"\n💾 详细结果已保存: {results_path}")
     
     # Generate experiment summary
-    summary_path = os.path.join(results_dir, "experiment_summary.md")
+    summary_path = os.path.join(results_dir, "summary.md")
     with open(summary_path, 'w') as f:
-        f.write(f"# 实验总结: {args.experiment}\n\n")
+        f.write(f"# CausalQwen 实验总结\n\n")
+        f.write(f"**实验类型:** {args.experiment}\n")
         f.write(f"**时间戳:** {timestamp}\n")
-        f.write(f"**初始化策略:** 完全复用 Qwen lm_head + 零初始化回归头\n")
         f.write(f"**设备:** {device}\n")
-        f.write(f"**基础配置:** hidden_size={base_config.hidden_size}, causal_dim={base_config.causal_dim}\n\n")
+        f.write(f"**架构:** 推断-行动范式 v3\n\n")
         
-        f.write("## 结果总结\n\n")
-        for config_name, config_results in all_results_serializable.items():
-            f.write(f"### 配置: {config_name}\n\n")
-            for dataset_name, metrics in config_results.items():
-                f.write(f"**{dataset_name}:**\n")
-                f.write(f"- 分类 F1 分数: {metrics.get('cls_f1', 0):.4f}\n")
-                f.write(f"- 回归 MAE: {metrics.get('reg_mae', 0):.4f}\n")
-                f.write(f"- 回归 PICP: {metrics.get('reg_picp', 0):.4f}\n\n")
+        f.write("## 配置总览\n\n")
+        f.write(f"- **基础模型:** Qwen-{args.hidden_size/1000:.1f}B\n")
+        f.write(f"- **Qwen 已用词汇:** 151,665\n")
+        f.write(f"- **CausalQwen 词汇表:** {base_config.vocab_size} (151,665 + 1)\n")
+        f.write(f"- **Qwen 配置容量:** 151,936 (含 271 个预留)\n")
+        f.write(f"- **隐藏维度:** {base_config.hidden_size}\n")
+        f.write(f"- **因果维度:** {base_config.causal_dim}\n")
+        f.write(f"- **恒等映射:** {'启用' if base_config.causal_dim == base_config.hidden_size else '禁用'}\n\n")
+        
+        f.write("## 实验结果\n\n")
+        
+        # Create results table
+        if len(evaluation_datasets) > 0:
+            # Table header
+            f.write("| 配置 | ")
+            for dataset_name in evaluation_datasets.keys():
+                f.write(f"{dataset_name} F1 | {dataset_name} MAE | ")
+            f.write("\n")
+            
+            # Table separator
+            f.write("|------|")
+            for _ in evaluation_datasets.keys():
+                f.write("-------|--------|")
+            f.write("\n")
+            
+            # Table rows
+            for config_name, config_results in all_results_serializable.items():
+                f.write(f"| {config_name} | ")
+                for dataset_name in evaluation_datasets.keys():
+                    metrics = config_results.get(dataset_name, {})
+                    f1 = metrics.get('cls_f1', 0)
+                    mae = metrics.get('reg_mae', 0)
+                    f.write(f"{f1:.4f} | {mae:.4f} | ")
+                f.write("\n")
+        
+        # Best performing configurations
+        if len(all_results) > 1 and len(evaluation_datasets) > 0:
+            f.write("\n## 最佳配置\n\n")
+            for dataset_name in evaluation_datasets.keys():
+                # Best F1
+                best_f1_config = max(all_results.keys(), 
+                                   key=lambda k: all_results[k].get(dataset_name, {}).get('cls_f1', 0))
+                best_f1_score = all_results[best_f1_config][dataset_name]['cls_f1']
+                
+                # Best MAE (lower is better)
+                best_mae_config = min(all_results.keys(), 
+                                    key=lambda k: all_results[k].get(dataset_name, {}).get('reg_mae', float('inf')))
+                best_mae_score = all_results[best_mae_config][dataset_name]['reg_mae']
+                
+                f.write(f"### {dataset_name} 数据集\n")
+                f.write(f"- **最佳分类 (F1):** {best_f1_config} ({best_f1_score:.4f})\n")
+                f.write(f"- **最佳回归 (MAE):** {best_mae_config} ({best_mae_score:.4f})\n\n")
     
-    print(f"\n🎉 实验完成！")
-    print(f"📁 所有结果已保存到: {results_path}")
-    print(f"📄 实验总结已保存到: {summary_path}")
+    print(f"💾 实验总结已保存: {summary_path}")
     
-    # Print best performing configuration
-    if len(all_results) > 1:
-        print(f"\n🏆 性能总结:")
+    # Print summary to console
+    print(f"\n🏆 性能总结:")
+    if len(all_results) > 1 and len(evaluation_datasets) > 0:
         for dataset_name in evaluation_datasets.keys():
             best_f1_config = max(all_results.keys(), 
                                key=lambda k: all_results[k].get(dataset_name, {}).get('cls_f1', 0))
             best_f1_score = all_results[best_f1_config][dataset_name]['cls_f1']
-            print(f"   {dataset_name} - 最佳分类 F1: {best_f1_config} ({best_f1_score:.4f})")
+            print(f"   {dataset_name}:")
+            print(f"      - 最佳 F1: {best_f1_config} ({best_f1_score:.4f})")
+    
+    print(f"\n🎉 实验完成！所有结果已保存到: {results_dir}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Unified Experiment Runner for Causal Language Model.")
@@ -361,7 +510,7 @@ if __name__ == '__main__':
     
     # Model architecture args
     parser.add_argument('--hidden_size', type=int, default=896, help='Hidden size of the model (for Qwen-0.5B).')
-    parser.add_argument('--ovr_threshold', type=float, default=10000.0, help='OvR decision threshold.')  # 从 100.0 改为 10000.0
+    parser.add_argument('--ovr_threshold', type=float, default=10.0, help='OvR decision threshold.')
     parser.add_argument('--reg_loss_weight', type=float, default=1.0, help='Weight for regression loss in total loss.')
     parser.add_argument('--initial_scale_bias', type=float, default=2.3, help='Initial bias for scale parameter (log scale).')
     

@@ -5,142 +5,108 @@ This module implements the complete causal language model by integrating
 all components: feature network, abduction network, and action network.
 """
 
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dataclasses import dataclass, field
-from typing import Optional
 
-from .feature_network import MockFeatureNetwork, NumAwareFeatureNetwork, QwenFeatureNetwork
+from .feature_network import QwenFeatureNetwork, NumAwareFeatureNetwork
 from .abduction_network import AbductionNetwork
 from .action_network import ActionNetwork
-from ..utils.distributions import cauchy_sample_reparameterized
 
 
 @dataclass
 class CausalLMConfig:
-    """
-    Configuration class for Causal Language Model.
+    """Configuration for the Causal Language Model."""
+    # Model architecture
+    vocab_size: int = 151936  # 使用完整的Qwen配置容量
+    num_token_id: int = 151665  # Token ID for <NUM>
+    hidden_size: int = 896  # Hidden size (896 for Qwen-0.5B)
+    causal_dim: int = 896  # Causal representation dimension
     
-    This class holds all the configuration parameters needed to initialize
-    a CausalLanguageModel instance.
-    """
-    vocab_size: int = 151936  # Qwen's full output space (config.vocab_size)
-    hidden_size: int = 1024
-    causal_dim: int = 64
-    num_token_id: Optional[int] = None
-    use_mock_feature_network: bool = True
-    use_real_qwen: bool = False  # New flag for using real Qwen model
-    qwen_model_path: str = "~/models/Qwen2.5-0.5B"  # Path to Qwen model
-    use_num_aware_features: bool = True
+    # Feature network settings
+    use_real_qwen: bool = True
+    use_mock_feature_network: bool = False  # 补全缺失的属性
+    qwen_model_path: str = "~/models/Qwen2.5-0.5B"
+    
+    # OvR classification settings
     use_ovr_classifier: bool = True
-    ovr_threshold: float = 10.0
-    initial_scale_bias: float = 2.3  # Initial bias for AbductionNetwork scale parameter (log scale)
-    knowledge_transfer_type: str = "full"  # Type of knowledge transfer from Qwen
+    ovr_threshold: float = 0.0  # 使用 0.0 作为默认阈值
     
-    # Loss configuration
-    reg_loss_weight: float = 1.0  # Weight for regression loss
+    # Regression loss settings
+    reg_loss_weight: float = 1.0
+    reg_loss_gating_alpha: float = 1.0  # 门控系数：1.0 = 无门控，0.0 = 完全门控
     
-    # Ablation flags
-    use_cauchy_distribution: bool = True  # Whether to use Cauchy distribution (vs Normal)
-    
-    def __post_init__(self):
-        if self.num_token_id is None:
-            # Based on Qwen model analysis:
-            # - Qwen's lm_head has 151,936 dimensions
-            # - Only 151,665 tokens are actually used by tokenizer
-            # - ID 151,665 is the first reserved token, which we use for <NUM>
-            self.num_token_id = 151665
-            print(f"num_token_id set to {self.num_token_id} (first reserved token position)")
+    # Distribution settings
+    use_cauchy_distribution: bool = True
+    initial_scale_bias: float = 2.3  # log(10) ≈ 2.3
 
+# ...existing code...
 
 class CausalLanguageModel(nn.Module):
     """
-    Complete Causal Language Model.
+    因果语言模型 (Causal Language Model)
     
-    This model integrates all components of the causal language model architecture:
-    1. Feature Network: Extracts features from input tokens
-    2. Abduction Network: Infers the distribution of the latent individual causal representation
-    3. Action Network: Transforms the individual causal representation into classification and regression outputs
+    通过推断-行动范式，将预训练的语言模型扩展为因果推理模型。
     """
     
-    def __init__(
-        self,
-        config=None,
-        vocab_size=None,
-        num_token_id=None,
-        hidden_size=1024,
-        causal_dim=64,
-        use_mock_feature_network=True,
-        use_num_aware_features=True
-    ):
-        """
-        Initialize the causal language model.
-        
-        Args:
-            config (CausalLMConfig, optional): Configuration object. If provided, other args are ignored.
-            vocab_size (int, optional): Size of the vocabulary
-            num_token_id (int, optional): Token ID for the <NUM> token
-            hidden_size (int, optional): Size of the hidden representation. Defaults to 1024.
-            causal_dim (int, optional): Dimensionality of the latent individual causal representation. Defaults to 64.
-            use_mock_feature_network (bool, optional): Whether to use a mock feature network. 
-                                                      Defaults to True.
-            use_num_aware_features (bool, optional): Whether to use numerical-aware features. 
-                                                    Defaults to True.
-        """
+    def __init__(self, config: CausalLMConfig):
         super().__init__()
+        self.config = config
         
-        # If config is provided, use it; otherwise use direct parameters
-        if config is not None:
-            self.config = config  # Save config reference for later use
-            self.vocab_size = config.vocab_size
-            self.num_token_id = config.num_token_id
-            self.hidden_size = config.hidden_size
-            self.causal_dim = config.causal_dim
-            use_mock_feature_network = config.use_mock_feature_network
-            use_num_aware_features = config.use_num_aware_features
-            use_real_qwen = config.use_real_qwen
-            qwen_model_path = config.qwen_model_path
-        else:
-            self.config = None  # No config provided
-            self.vocab_size = vocab_size or 1000
-            self.num_token_id = num_token_id or self.vocab_size
-            self.hidden_size = hidden_size
-            self.causal_dim = causal_dim
-            use_real_qwen = False
-            qwen_model_path = "~/models/Qwen2.5-0.5B"
+        # 保存常用配置为实例属性，方便访问
+        self.vocab_size = config.vocab_size
+        self.num_token_id = config.num_token_id
+        self.hidden_size = config.hidden_size
+        self.causal_dim = config.causal_dim
         
-        # Initialize feature network based on configuration
-        if use_real_qwen:
-            # Use real Qwen model as feature network via our QwenFeatureNetwork wrapper
+        # 验证词汇表大小配置
+        if config.use_real_qwen and config.vocab_size != 151936:
+            print(f"⚠️  警告：使用真实 Qwen 时，建议 vocab_size=151936（完整配置容量）")
+            print(f"   当前设置：{config.vocab_size}")
+        
+        # 特征网络选择逻辑（修复导入问题）
+        use_mock_feature_network = getattr(config, 'use_mock_feature_network', False)
+        
+        if config.use_real_qwen and not use_mock_feature_network:
             print("Initializing with real Qwen model...")
-            base_feature_network = QwenFeatureNetwork(
-                model_path=qwen_model_path,
-                hidden_size=self.hidden_size,
-                use_real_model=True
+            # 使用数值感知特征网络包装QwenFeatureNetwork
+            base_qwen_network = QwenFeatureNetwork(
+                model_path=config.qwen_model_path,
+                hidden_size=config.hidden_size
             )
+            
+            # 检查是否需要数值感知功能
+            if hasattr(config, 'use_numerical_features') and config.use_numerical_features:
+                self.feature_network = NumAwareFeatureNetwork(
+                    base_network=base_qwen_network,
+                    num_token_id=config.num_token_id,
+                    hidden_size=config.hidden_size
+                )
+            else:
+                # 直接使用QwenFeatureNetwork，但需要确保接口兼容
+                self.feature_network = base_qwen_network
         else:
-            base_feature_network = MockFeatureNetwork(hidden_size=self.hidden_size)
-        
-        # Wrap with numerical-aware feature network if requested
-        if use_num_aware_features:
-            self.feature_network = NumAwareFeatureNetwork(
-                base_feature_network, self.num_token_id, self.hidden_size
+            print("Initializing with mock feature network...")
+            # 需要导入MockFeatureNetwork
+            from .feature_network import MockFeatureNetwork
+            self.feature_network = MockFeatureNetwork(
+                vocab_size=config.vocab_size,
+                hidden_size=config.hidden_size
             )
-        else:
-            self.feature_network = base_feature_network
         
-        # Initialize abduction network
+        # Abduction network - 推断个体因果表征分布
         self.abduction_network = AbductionNetwork(self.hidden_size, self.causal_dim)
         
-        # Initialize action network
+        # Action network - 基于因果表征生成输出
         self.action_network = ActionNetwork(
-            self.causal_dim, 
-            self.vocab_size, 
-            self.num_token_id,
-            ovr_threshold=config.ovr_threshold if config is not None else 10.0
+            causal_dim=self.causal_dim,
+            vocab_size=self.vocab_size,
+            num_token_id=self.num_token_id,
+            ovr_threshold=config.ovr_threshold
         )
-        
+
     def init_weights(self, num_target_median=None, num_target_scale=None):
         """
         Initialize the weights of abduction and action networks using the
@@ -174,12 +140,29 @@ class CausalLanguageModel(nn.Module):
 
         # 2. Initialize Action Network
         qwen_lm_head = None
-        # We need to get the lm_head from the underlying QwenFeatureNetwork
-        if isinstance(self.feature_network, NumAwareFeatureNetwork) and \
-           isinstance(self.feature_network.base_network, QwenFeatureNetwork):
-            qwen_lm_head = self.feature_network.base_network.get_lm_head()
-        elif isinstance(self.feature_network, QwenFeatureNetwork):
-            qwen_lm_head = self.feature_network.get_lm_head()
+        
+        # 获取 lm_head 的逻辑需要更加健壮
+        try:
+            if isinstance(self.feature_network, NumAwareFeatureNetwork):
+                # 如果是数值感知特征网络，获取其基础网络的lm_head
+                if hasattr(self.feature_network, 'base_network'):
+                    base_network = self.feature_network.base_network
+                    if hasattr(base_network, 'get_lm_head'):
+                        qwen_lm_head = base_network.get_lm_head()
+                        print("Found language model head: lm_head (from NumAwareFeatureNetwork.base_network)")
+            elif hasattr(self.feature_network, 'get_lm_head'):
+                # 直接从特征网络获取lm_head
+                qwen_lm_head = self.feature_network.get_lm_head()
+                if qwen_lm_head is not None:
+                    print("Found language model head: lm_head")
+                else:
+                    print("Feature network returned None for lm_head (likely MockFeatureNetwork)")
+            else:
+                print("Feature network does not have get_lm_head method")
+                
+        except Exception as e:
+            print(f"Error getting lm_head: {e}")
+            qwen_lm_head = None
 
         if qwen_lm_head is not None:
             self.action_network.init_weights(
@@ -191,6 +174,14 @@ class CausalLanguageModel(nn.Module):
             print("  - Action network initialized from Qwen's lm_head (no data dependency).")
         else:
             print("  - WARNING: Action network not initialized (Qwen lm_head not available).")
+            print("  - Using random initialization for ActionNetwork")
+            # 如果没有Qwen的lm_head，使用随机初始化
+            self.action_network.init_weights(
+                qwen_lm_head=None,
+                num_target_median=0.0,
+                num_target_scale=1.0,
+                num_token_id=self.num_token_id
+            )
 
     def forward(self, input_ids, numerical_values=None, attention_mask=None):
         """
@@ -207,6 +198,10 @@ class CausalLanguageModel(nn.Module):
         Returns:
             dict: Dictionary containing all output distribution parameters and intermediate states
         """
+        # 如果没有提供numerical_values，创建全零向量
+        if numerical_values is None:
+            numerical_values = torch.zeros_like(input_ids, dtype=torch.float)
+        
         # Extract features
         features = self.feature_network(input_ids, numerical_values, attention_mask)
         
@@ -214,14 +209,29 @@ class CausalLanguageModel(nn.Module):
         causal_loc, causal_scale = self.abduction_network(features)
         
         # Transform individual causal representation to outputs
-        outputs = self.action_network(causal_loc, causal_scale)
+        action_outputs = self.action_network(causal_loc, causal_scale)
         
-        # Add intermediate states to outputs
-        outputs.update({
+        # 计算OvR概率
+        from ..utils.distributions import cauchy_cdf
+        
+        cls_loc = action_outputs['cls_loc']
+        cls_scale = action_outputs['cls_scale']
+        
+        # 计算每个类别的概率：P(S_k > C_k)
+        thresholds = self.action_network.classification_head.thresholds
+        cls_probs = 0.5 + (1 / torch.pi) * torch.atan((cls_loc - thresholds) / cls_scale)
+        
+        # 组织输出
+        outputs = {
             'features': features,
             'causal_loc': causal_loc,
-            'causal_scale': causal_scale
-        })
+            'causal_scale': causal_scale,
+            'cls_loc': cls_loc,
+            'cls_scale': cls_scale,
+            'cls_probs': cls_probs,
+            'reg_loc': action_outputs['reg_loc'],
+            'reg_scale': action_outputs['reg_scale']
+        }
         
         return outputs
     
@@ -356,90 +366,67 @@ class CausalLanguageModel(nn.Module):
                 print(f"    * Reserved tokens are preserved but not used")
                 print(f"    * Regression head initialized with zero bias (no data dependency)")
 
-class CausalQwen(nn.Module):
-    """
-    CausalQwen model that extends the base causal language model.
-    
-    This is a placeholder for the full implementation that would integrate
-    with the Qwen-0.5B model.
-    """
-    
-    def __init__(
-        self,
-        vocab_size,
-        num_token_id,
-        hidden_size=1024,
-        causal_dim=64
-    ):
+    def compute_loss(self, outputs, targets, numerical_values, attention_mask=None):
         """
-        Initialize the CausalQwen model.
+        Compute the loss for training the causal language model.
+        
+        This implements the gated loss function from core-design.md:
+        L_total = Σ(L_cls_i + λ * L_reg_gated_i)
+        
+        现在支持混合门控策略：
+        L_reg_gated = mask * (alpha + (1-alpha) * P_NUM) * L_cauchy_nll
         
         Args:
-            vocab_size (int): Size of the vocabulary
-            num_token_id (int): Token ID for the <NUM> token
-            hidden_size (int, optional): Size of the hidden representation. Defaults to 1024.
-            causal_dim (int, optional): Dimensionality of the latent individual causal representation. Defaults to 64.
+            outputs: Model outputs dictionary
+            targets: Target token IDs [batch_size, seq_len]
+            numerical_values: Target numerical values [batch_size, seq_len]
+            attention_mask: Attention mask [batch_size, seq_len]
+            
+        Returns:
+            Dictionary containing total loss and component losses
         """
-        super().__init__()
+        # 导入损失函数
+        from ..losses.loss_functions import compute_total_loss
         
-        # This is a placeholder. In a real implementation, we would initialize
-        # the model with the actual Qwen-0.5B backbone.
-        self.model = CausalLanguageModel(
-            vocab_size=vocab_size,
-            num_token_id=num_token_id,
-            hidden_size=hidden_size,
-            causal_dim=causal_dim,
-            use_mock_feature_network=True
+        # 获取模型输出
+        cls_probs = outputs['cls_probs']  # [batch_size, seq_len, vocab_size]
+        reg_loc = outputs['reg_loc']      # [batch_size, seq_len]
+        reg_scale = outputs['reg_scale']  # [batch_size, seq_len]
+        
+        # 创建数值掩码
+        num_mask = (targets == self.num_token_id).float()
+        
+        # 获取 <NUM> token 的预测概率
+        num_probs = cls_probs[:, :, self.num_token_id]
+        
+        # 处理attention mask
+        if attention_mask is not None:
+            # 将padding位置的损失设置为0
+            active_mask = attention_mask.float()
+            num_mask = num_mask * active_mask
+            # 可以考虑将padding位置的targets设置为-100（忽略索引）
+        
+        # 计算损失
+        loss_dict = compute_total_loss(
+            cls_probs=cls_probs,
+            cls_targets=targets,
+            reg_loc=reg_loc,
+            reg_scale=reg_scale,
+            reg_targets=numerical_values,
+            num_probs=num_probs,
+            num_mask=num_mask,
+            cls_weight=1.0,
+            reg_weight=self.config.reg_loss_weight,
+            gating_alpha=self.config.reg_loss_gating_alpha
         )
         
-    def forward(self, input_ids, numerical_values=None, attention_mask=None):
-        """
-        Forward pass of the CausalQwen model.
-        
-        Args:
-            input_ids (torch.Tensor): Input token IDs
-                                     Shape: [batch_size, seq_len]
-            numerical_values (torch.Tensor, optional): Numerical values for <NUM> tokens
-                                                     Shape: [batch_size, seq_len]
-            attention_mask (torch.Tensor, optional): Attention mask
-                                                   Shape: [batch_size, seq_len]
-        
-        Returns:
-            dict: Dictionary containing all output distribution parameters and intermediate states
-        """
-        return self.model(input_ids, numerical_values, attention_mask)
-    
-    def predict(self, input_ids, numerical_values=None, attention_mask=None):
-        """
-        Make deterministic predictions.
-        
-        Args:
-            input_ids (torch.Tensor): Input token IDs
-                                     Shape: [batch_size, seq_len]
-            numerical_values (torch.Tensor, optional): Numerical values for <NUM> tokens
-                                                     Shape: [batch_size, seq_len]
-            attention_mask (torch.Tensor, optional): Attention mask
-                                                   Shape: [batch_size, seq_len]
-        
-        Returns:
-            dict: Dictionary containing predictions
-        """
-        return self.model.predict(input_ids, numerical_values, attention_mask)
-    
-    def sample_and_predict(self, input_ids, numerical_values=None, attention_mask=None):
-        """
-        Sample from the individual causal representation distribution and make predictions.
-        
-        Args:
-            input_ids (torch.Tensor): Input token IDs
-                                     Shape: [batch_size, seq_len]
-            numerical_values (torch.Tensor, optional): Numerical values for <NUM> tokens
-                                                     Shape: [batch_size, seq_len]
-            attention_mask (torch.Tensor, optional): Attention mask
-                                                   Shape: [batch_size, seq_len]
-        
-        Returns:
-            dict: Dictionary containing predictions and sampled states
-        """
-        return self.model.sample_and_predict(input_ids, numerical_values, attention_mask)
+        # 返回格式化的结果
+        return {
+            'loss': loss_dict['total'],
+            'cls_loss': loss_dict['cls'],
+            'reg_loss': loss_dict['reg'],
+            'gate_weights_mean': loss_dict['avg_gate_weight'],
+            'num_positions': loss_dict['num_positions'].item(),
+            'num_prob_mean': loss_dict['avg_gate_weight']  # 平均门控权重反映了平均概率
+        }
 
