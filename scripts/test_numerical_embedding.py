@@ -38,9 +38,20 @@ def main():
     device = torch.device('cpu')
     qwen_model_path = os.path.expanduser('~/models/Qwen2.5-0.5B')
     tokenizer = QwenTokenizerWrapper(model_path=qwen_model_path, use_real_tokenizer=True)
+
+    # --- 词汇表信息展示 ---
+    vocab_info = tokenizer.vocab_size_info()
+    print("\n" + "="*70)
+    print("📊 词汇表信息概览")
+    print("-"*70)
+    print(f"   - 基础 Qwen 词汇表 (Base Qwen Vocab): {vocab_info['qwen_base_vocab']}")
+    print(f"   - CausalQwen 词汇表 (Model Vocab): {vocab_info['causalqwen_vocab']} (Qwen + <NUM>)")
+    print(f"   - 分词器内部长度 (Tokenizer Internal): {vocab_info['tokenizer_internal_len']} (CausalQwen + Placeholders)")
+    print(f"   - <NUM> Token ID: {vocab_info['num_token_id']}")
+    print("="*70)
     
     config = CausalLMConfig(
-        vocab_size=tokenizer.vocab_size_info()['causalqwen_vocab'],
+        vocab_size=vocab_info['causalqwen_vocab'],
         num_token_id=tokenizer.num_token_id,
         hidden_size=896,
         use_real_qwen=True,
@@ -49,7 +60,7 @@ def main():
     full_model = CausalLanguageModel(config).to(device)
     full_model.eval()
     feature_network = full_model.feature_network
-    print("✅ 组件初始化完成")
+    print("\n✅ 组件初始化完成")
 
     # --- 准备测试样本 ---
     test_samples = [

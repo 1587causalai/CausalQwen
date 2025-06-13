@@ -34,22 +34,29 @@ class QwenTokenizerWrapper:
         self.tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         self.num_token = "<NUM>"
         
-        # Add the <NUM> token if it's not already there.
+        # --- Vocab Size Calculation ---
+        # 1. Get the base Qwen vocabulary size before any additions.
+        self._qwen_base_vocab_size = len(self.tokenizer)
+
+        # 2. Add the <NUM> token.
         if self.num_token not in self.tokenizer.vocab:
-            # The official Qwen tokenizer has 271 reserved tokens for expansion.
-            # We use the first one for our <NUM> token.
             self.tokenizer.add_special_tokens({'additional_special_tokens': [self.num_token]})
+        
+        # 3. This is the "official" vocabulary size for the CausalQwen model.
+        self._causalqwen_vocab_size = len(self.tokenizer)
         
         self.num_token_id = self.tokenizer.convert_tokens_to_ids(self.num_token)
         
         # Regex to find numbers (integers, floats, negative numbers)
-        # It uses negative lookbehind and lookahead to avoid matching numbers that are part of other words (e.g. 'Qwen2.5')
         self.number_pattern = re.compile(r'(?<![a-zA-Z0-9_])(-?\d+(\.\d+)?)(?![a-zA-Z0-9_])')
         
-        # Use a unique placeholder that is unlikely to be in the vocabulary
+        # 4. Add an internal placeholder token for processing. This is not part of the public model vocab.
         self.placeholder = "_NUM_HOLDER_"
         self.tokenizer.add_tokens([self.placeholder], special_tokens=True)
         self.placeholder_id = self.tokenizer.convert_tokens_to_ids(self.placeholder)
+        
+        # 5. The final length of the tokenizer object, for internal use.
+        self._tokenizer_internal_len = len(self.tokenizer)
 
 
     def __call__(self, *args, **kwargs):
@@ -151,15 +158,16 @@ class QwenTokenizerWrapper:
 
     def vocab_size_info(self) -> dict:
         """
-        Provides information about the tokenizer's vocabulary size.
-        """
-        base_vocab_size = self.tokenizer.vocab_size
-        if self.num_token in self.tokenizer.get_added_vocab():
-             base_vocab_size -= 1
+        Provides clear and accurate information about the tokenizer's vocabulary sizes.
         
+        - qwen_base_vocab: The original vocabulary size of the Qwen model.
+        - causalqwen_vocab: The base size + 1 (for the <NUM> token). This is the official model vocab size.
+        - tokenizer_internal_len: The CausalQwen size + 1 (for the internal placeholder). Used by the tokenizer only.
+        """
         return {
-            "qwen_vocab_original": self.tokenizer.vocab_size,
-            "causalqwen_vocab": len(self.tokenizer),
-            "num_token_id": self.num_token_id
+            "qwen_base_vocab": self._qwen_base_vocab_size,
+            "causalqwen_vocab": self._causalqwen_vocab_size,
+            "tokenizer_internal_len": self._tokenizer_internal_len,
+            "num_token_id": self.num_token_id,
         }
 

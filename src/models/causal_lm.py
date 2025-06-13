@@ -60,11 +60,6 @@ class CausalLanguageModel(nn.Module):
         self.hidden_size = config.hidden_size
         self.causal_dim = config.causal_dim
         
-        # 验证词汇表大小配置
-        if config.use_real_qwen and config.vocab_size != 151936:
-            print(f"⚠️  警告：使用真实 Qwen 时，建议 vocab_size=151936（完整配置容量）")
-            print(f"   当前设置：{config.vocab_size}")
-        
         # 特征网络选择逻辑（修复导入问题）
         use_mock_feature_network = getattr(config, 'use_mock_feature_network', False)
         
