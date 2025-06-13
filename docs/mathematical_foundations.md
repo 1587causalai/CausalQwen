@@ -535,6 +535,27 @@ CausalQwen 的数学框架三个特色：
 2.  **分布计算**：利用柯西分布的线性性质，实现无采样训练
 3.  **统一架构**：设计为 Qwen 的子类，通过扩展而非重构增加数值处理能力
 
+### 6.1 ⚖️ CausalQwen vs. 标准 Qwen 对比清单
+
+Of course. Here is a concise comparison table in Markdown format, perfect for a section in your documentation, contrasting the core principles of CausalQwen and a standard Qwen model.
+
+-----
+
+### CausalQwen vs. Qwen：核心原理对比
+
+为了清晰地展示 CausalQwen 的创新之处，我们将其与标准的 Qwen 模型在几个核心维度上进行直接比较。
+
+| 对比维度 (Dimension) | 标准 Qwen (Standard Qwen) | CausalQwen |
+| :--- | :--- | :--- |
+| **核心假设** | **关联性**：学习输入 $X$ 和输出 $Y$ 之间的条件概率分布 $P(Y\|X)$。 | **因果性**：学习一个普适的因果函数 $Y = f(t; u)$，其中 $u$ 是代表个体内在属性的变量。 |
+| **数值处理** 🔢<br>Numerical Handling | **视为纯文本 (As Plain Text)**<br>将数字（如 "99.9"）当作普通词元处理，缺乏内在的数值概念。 | **双通道处理 (Dual-Channel)**<br>文本部分走词元嵌入，数值部分走独立的**回归通道**，真正理解数值大小。 |
+| **输出架构** 🏛️<br>Output Architecture | **单一 Logits 输出 (Single Logits Output)**<br>输出一个维度为词汇表大小的 logits 向量，用于 Softmax。 | **双重分布输出 (Dual Distribution Output)**<br>输出独立的**分类 OvR 分布**和**回归柯西分布**，分别处理文本与数值。 |
+| **损失函数** 🧮<br>Loss Function | **Softmax 交叉熵 (Softmax Cross-Entropy)**<br>在整个词汇表上进行归一化，计算单一正确答案的损失。 | **OvR + 门控回归损失 (OvR + Gated Regression Loss)**<br>分类上进行独立二元判断，回归上由分类结果**智能门控**，实现多任务学习。 |
+| **采样范式** 🎲<br>Sampling Paradigm | **对“结果”采样 (Sampling the "Effect")**<br>在最终的 logits 分布上使用 `top-k`/`top-p` 进行随机采样。 | **对“原因”采样 (Sampling the "Cause")**<br>引入**因果采样**，直接对“个体” $U$ 进行采样，得到更多样且风格一致的生成结果。 |
+| **核心创新** ✨<br>Key Innovation | 强大的语言建模与上下文理解能力。 | 引入外生**个体选择变量 $U$**，并利用柯西分布的数学特性，构建了一个可高效训练的因果生成框架。 |
+
+
+
 
 ---
 更详细的数学推导请参考：[`design-docs/math/mathematical_foundations.md`](design-docs/math/mathematical_foundations.md)
