@@ -23,17 +23,22 @@ def print_step(step_name, description):
     print(f"{'-'*70}")
 
 def print_tensor_stats(name, tensor):
-    """打印张量的详细统计信息。"""
+    """打印张量的详细统计信息，使用对柯西分布鲁棒的指标。"""
     if not isinstance(tensor, torch.Tensor):
         print(f"   - {name}: Not a tensor")
         return
     tensor = tensor.detach().cpu().to(torch.float32)
+
+    # 对于类柯西分布，中位数和IQR是更鲁棒的统计量
+    median = torch.median(tensor).item()
+    q1 = torch.quantile(tensor, 0.25).item()
+    q3 = torch.quantile(tensor, 0.75).item()
+    iqr = q3 - q1
+
     print(f"   - {name}:")
-    print(f"     - Shape: {tensor.shape}")
-    print(f"     - Mean: {tensor.mean().item():.4f}")
-    print(f"     - Std:  {tensor.std().item():.4f}")
-    print(f"     - Min:  {tensor.min().item():.4f}")
-    print(f"     - Max:  {tensor.max().item():.4f}")
+    print(f"     - Shape:  {tensor.shape}")
+    print(f"     - Median: {median:.4f} (中位数)")
+    print(f"     - IQR:    {iqr:.4f} (四分位距)")
 
 def main():
     print("🚀 CausalQwen - 因果核心流程深度验证")
@@ -75,28 +80,25 @@ def main():
     print(f"\n📊 准备 {len(test_samples)} 个测试样本进行批量处理。")
 
     with torch.no_grad():
-        # --- 完整前向传播 ---
-        # 模型现在返回一个包含所有中间步骤的字典
-        full_outputs = model(
+        # --- 图3 流程起点: 构造增强嵌入 e ---
+        print_step("A", "起点: 构造增强嵌入 e (Enhanced Embeddings)")
+        e = model.numerical_aware_embedding(
             input_ids=input_ids,
-            numerical_values=numerical_values,
-            attention_mask=attention_mask
+            numerical_values=numerical_values
         )
-
-        # --- 图3 流程起点: 获取增强嵌入 e ---
-        print_step("A", "起点: 获取增强嵌入 e (Enhanced Embeddings)")
-        e = full_outputs['enhanced_embeddings']
         print_tensor_stats("增强嵌入 e", e)
 
         # --- 图3 流程: e -> z (Qwen 特征网络) ---
         print_step("B", "Qwen特征网络: e -> z (上下文特征)")
-        z = full_outputs['features']
+        z = model.feature_network(
+            inputs_embeds=e,
+            attention_mask=attention_mask
+        )
         print_tensor_stats("上下文特征 z", z)
 
         # --- 图3 流程: z -> U (归因网络) ---
         print_step("C-D", "归因网络 (Abduction): z -> U (因果表征分布)")
-        loc_U = full_outputs['causal_loc']
-        scale_U = full_outputs['causal_scale']
+        loc_U, scale_U = model.abduction_network(z)
         print("   - 理论: loc_U ≈ z, scale_U 为大正数 (≈10)")
         print_tensor_stats("因果位置 loc_U", loc_U)
         print_tensor_stats("因果尺度 scale_U", scale_U)
@@ -105,18 +107,21 @@ def main():
 
         # --- 图3 流程: U -> S, Y (行动网络) ---
         print_step("E-H", "行动网络 (Action): U -> S, Y (决策分布)")
+        decision_outputs = model.action_network(loc_U, scale_U)
         
         print("\n   --- 分类输出 (S) ---")
         print("   - 理论: scale_S 应该是 scale_U 的线性变换，仍为大正数")
-        print_tensor_stats("分类 logits (loc_S)", full_outputs.get('cls_loc'))
-        print_tensor_stats("分类尺度 (scale_S)", full_outputs.get('cls_scale'))
+        print_tensor_stats("分类 logits (loc_S)", decision_outputs.get('loc_S'))
+        print_tensor_stats("分类尺度 (scale_S)", decision_outputs.get('scale_S'))
 
         print("\n   --- 回归输出 (Y) ---")
         print("   - 理论: scale_Y 应该是 scale_U 的线性变换，为一个合理的正数")
-        print_tensor_stats("回归预测 (loc_Y)", full_outputs.get('reg_loc'))
-        print_tensor_stats("回归不确定性 (scale_Y)", full_outputs.get('reg_scale'))
+        print_tensor_stats("回归预测 (loc_Y)", decision_outputs.get('loc_Y'))
+        print_tensor_stats("回归不确定性 (scale_Y)", decision_outputs.get('scale_Y'))
         
-        scale_Y_mean = full_outputs.get('reg_scale').mean().item()
+        scale_Y = decision_outputs.get('scale_Y')
+        assert scale_Y is not None, "ActionNetwork 未返回 scale_Y"
+        scale_Y_mean = scale_Y.mean().item()
         print(f"   - 验证: scale_Y 均值 > 0: {'✅' if scale_Y_mean > 0 else '❌'}")
     
     print(f"\n\n{'='*80}")

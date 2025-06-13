@@ -19,22 +19,26 @@ def print_step(step_num, description):
     print(f"{'='*70}")
 
 def print_tensor_stats(name, tensor):
-    """打印张量的详细统计信息，用于调试。"""
+    """打印张量的详细统计信息，使用对柯西分布鲁棒的指标。"""
     if not isinstance(tensor, torch.Tensor):
         print(f"   - {name}: Not a tensor")
         return
     
-    # 统一转换到CPU和float32进行分析，避免设备和类型问题
+    # 统一转换到CPU和float32进行分析
     tensor = tensor.detach().cpu().to(torch.float32)
     
+    # 对于类柯西分布，中位数和IQR是更鲁棒的统计量
+    median = torch.median(tensor).item()
+    q1 = torch.quantile(tensor, 0.25).item()
+    q3 = torch.quantile(tensor, 0.75).item()
+    iqr = q3 - q1
+
     print(f"   - {name}:")
-    print(f"     - Shape: {tensor.shape}")
+    print(f"     - Shape:  {tensor.shape}")
     print(f"     - Has NaN: {torch.isnan(tensor).any().item()}")
     print(f"     - Has Inf: {torch.isinf(tensor).any().item()}")
-    print(f"     - Mean: {tensor.mean().item():.6f}")
-    print(f"     - Std:  {tensor.std().item():.6f}")
-    print(f"     - Min:  {tensor.min().item():.6f}")
-    print(f"     - Max:  {tensor.max().item():.6f}")
+    print(f"     - Median: {median:.6f} (中位数)")
+    print(f"     - IQR:    {iqr:.6f} (四分位距)")
 
 def main():
     """主函数，运行调试前向传播。"""
