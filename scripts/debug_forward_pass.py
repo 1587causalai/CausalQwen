@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-因果语言模型的前向传播调试脚本 (V5: 简化版)
+因果语言模型的前向传播调试脚本 (V6: 深度分析版)
 
-修复了无输出的问题，专注于核心功能验证。
+专注于验证前向传播中每个核心组件的数学逻辑和数据流。
 """
 import os
 import sys
@@ -14,226 +14,162 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def print_step(step_num, description):
     """打印步骤信息"""
-    print(f"\n{'='*60}")
-    print(f"步骤 {step_num}: {description}")
-    print(f"{'='*60}")
+    print(f"\n{'='*70}")
+    print(f"➡️  步骤 {step_num}: {description}")
+    print(f"{'='*70}")
+
+def print_tensor_stats(name, tensor):
+    """打印张量的详细统计信息，用于调试。"""
+    if not isinstance(tensor, torch.Tensor):
+        print(f"   - {name}: Not a tensor")
+        return
+    
+    # 统一转换到CPU和float32进行分析，避免设备和类型问题
+    tensor = tensor.detach().cpu().to(torch.float32)
+    
+    print(f"   - {name}:")
+    print(f"     - Shape: {tensor.shape}")
+    print(f"     - Has NaN: {torch.isnan(tensor).any().item()}")
+    print(f"     - Has Inf: {torch.isinf(tensor).any().item()}")
+    print(f"     - Mean: {tensor.mean().item():.6f}")
+    print(f"     - Std:  {tensor.std().item():.6f}")
+    print(f"     - Min:  {tensor.min().item():.6f}")
+    print(f"     - Max:  {tensor.max().item():.6f}")
 
 def main():
     """主函数，运行调试前向传播。"""
     try:
-        print("🚀 CausalQwen 前向传播调试脚本 (简化版)")
+        print("🚀 CausalQwen 前向传播调试脚本 (深度分析版)")
         print("=" * 80)
 
         # 步骤1: 基本导入测试
         print_step(1, "测试基本导入")
-        
-        try:
-            from src.models.causal_lm import CausalLMConfig, CausalLanguageModel
-            print("✅ 导入 CausalLanguageModel 成功")
-        except Exception as e:
-            print(f"❌ 导入 CausalLanguageModel 失败: {e}")
-            return False
-        
-        try:
-            from src.data.tokenizer import QwenTokenizerWrapper
-            print("✅ 导入 QwenTokenizerWrapper 成功")
-        except Exception as e:
-            print(f"❌ 导入 QwenTokenizerWrapper 失败: {e}")
-            return False
+        from src.models.causal_lm import CausalLMConfig, CausalLanguageModel
+        from src.data.tokenizer import QwenTokenizerWrapper
+        print("✅ 导入成功")
 
-        # 步骤2: 设备和路径检查
-        print_step(2, "环境检查")
-        
+        # 步骤2: 环境和路径检查
+        print_step(2, "环境和路径检查")
         device = torch.device('cpu')
         qwen_model_path = os.path.expanduser('~/models/Qwen2.5-0.5B')
-        
         print(f"设备: {device}")
         print(f"Qwen路径: {qwen_model_path}")
-        
-        if not os.path.exists(qwen_model_path):
-            print(f"❌ Qwen模型路径不存在: {qwen_model_path}")
-            return False
-        else:
-            print(f"✅ Qwen模型路径存在")
+        assert os.path.exists(qwen_model_path), "Qwen模型路径不存在"
+        print(f"✅ Qwen模型路径存在")
 
         # 步骤3: 分词器初始化
         print_step(3, "分词器初始化")
-        
-        try:
-            tokenizer = QwenTokenizerWrapper(
-                model_path=qwen_model_path, 
-                use_real_tokenizer=True
-            )
-            print(f"✅ 分词器初始化成功")
-            print(f"   词汇表大小: {tokenizer.vocab_size}")
-            print(f"   <NUM> token ID: {tokenizer.num_token_id}")
-        except Exception as e:
-            print(f"❌ 分词器初始化失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+        tokenizer = QwenTokenizerWrapper(model_path=qwen_model_path, use_real_tokenizer=True)
+        print(f"✅ 分词器初始化成功")
+        vocab_info = tokenizer.vocab_size_info()
+        print(f"   - CausalQwen 词汇表大小: {vocab_info['causalqwen_vocab']}")
+        print(f"   - <NUM> token ID: {tokenizer.num_token_id}")
 
         # 步骤4: 模型配置
         print_step(4, "模型配置创建")
-        
-        try:
-            config = CausalLMConfig(
-                vocab_size=tokenizer.vocab_size,
-                num_token_id=tokenizer.num_token_id,
-                hidden_size=896,
-                causal_dim=896,
-                use_real_qwen=True,
-                qwen_model_path=qwen_model_path,
-                ovr_threshold=10.0,
-                reg_loss_weight=1.0
+        config = CausalLMConfig(
+            vocab_size=vocab_info['causalqwen_vocab'],
+            num_token_id=tokenizer.num_token_id,
+            hidden_size=896,
+            causal_dim=896,
+            use_real_qwen=True,
+            qwen_model_path=qwen_model_path
+        )
+        print(f"✅ 配置创建成功")
+
+        # 步骤5: 模型创建与初始化
+        print_step(5, "模型创建与初始化")
+        model = CausalLanguageModel(config).to(device)
+        model.init_weights()
+        print(f"✅ 模型创建与初始化成功")
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"   - 总参数数量: {total_params:,}")
+
+        # 步骤6: 测试数据准备
+        print_step(6, "准备测试数据")
+        test_texts = [
+            "The price of the book is 99.99 dollars and the temperature is -10.5 degrees.",
+            "Hello world! This is a test without numbers."
+        ]
+        inputs = tokenizer.batch_encode_plus(
+            test_texts, padding=True, truncation=True, return_tensors='pt'
+        )
+        input_ids = inputs['input_ids'].to(device)
+        numerical_values = inputs['numerical_values'].to(device)
+        attention_mask = inputs['attention_mask'].to(device)
+        print(f"✅ 测试数据准备成功 (Batch Size: {input_ids.shape[0]}, Seq Len: {input_ids.shape[1]})")
+
+        # 步骤7: 分步前向传播与验证
+        print_step(7, "分步前向传播与验证")
+        model.eval()
+        with torch.no_grad():
+            
+            # 7.1 特征提取网络
+            print("\n--- 7.1. 特征提取 (Feature Extraction) ---")
+            print("输入: input_ids, numerical_values")
+            print("输出: 上下文特征 z")
+            print("理论: z = FeatureNetwork(NumericalEmbedding(input))")
+            
+            # 注意：在我们的模型中，特征提取网络包含了数值嵌入的逻辑
+            z = model.feature_network(
+                input_ids=input_ids,
+                numerical_values=numerical_values,
+                attention_mask=attention_mask
             )
-            print(f"✅ 配置创建成功")
-            print(f"   vocab_size: {config.vocab_size}")
-            print(f"   hidden_size: {config.hidden_size}")
-        except Exception as e:
-            print(f"❌ 配置创建失败: {e}")
-            return False
+            print_tensor_stats("上下文特征 z", z)
+            assert z.shape == (input_ids.shape[0], input_ids.shape[1], config.hidden_size), "z 形状错误"
 
-        # 步骤5: 模型创建
-        print_step(5, "模型创建")
-        
-        try:
-            model = CausalLanguageModel(config).to(device)
-            print(f"✅ 模型创建成功")
+            # 7.2 归因推断网络
+            print("\n--- 7.2. 归因推断 (Abduction) ---")
+            print("输入: 上下文特征 z")
+            print("输出: loc_U, scale_U")
+            print("理论: loc_U 应该约等于 z (因初始化为恒等映射), scale_U 应该为较大的正数 (约10)")
             
-            # 获取参数数量
-            total_params = sum(p.numel() for p in model.parameters())
-            print(f"   总参数数量: {total_params:,}")
-        except Exception as e:
-            print(f"❌ 模型创建失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+            loc_U, scale_U = model.abduction_network(z)
+            print_tensor_stats("因果表征位置 loc_U", loc_U)
+            print_tensor_stats("因果表征尺度 scale_U", scale_U)
+            assert torch.allclose(loc_U, z, atol=1e-5), "loc_U 与 z 不一致"
+            assert scale_U.mean() > 5, "scale_U 的均值过小"
 
-        # 步骤6: 模型初始化
-        print_step(6, "模型权重初始化")
-        
-        try:
-            model.init_weights()
-            print(f"✅ 权重初始化成功")
-        except Exception as e:
-            print(f"❌ 权重初始化失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+            # 7.3 行动决策网络
+            print("\n--- 7.3. 行动决策 (Action) ---")
+            print("输入: loc_U, scale_U")
+            print("输出: loc_S, scale_S (分类), loc_Y, scale_Y (回归)")
+            print("理论: scale_S 和 scale_Y 应该也是较大的正数，因为它们是 scale_U 的线性变换")
 
-        # 步骤7: 测试数据准备
-        print_step(7, "测试数据准备")
-        
-        try:
-            test_texts = [
-                "The price is 99.99 dollars.",
-                "Hello world!"
-            ]
+            output_dict = model.action_network(loc_U, scale_U)
             
-            inputs = tokenizer.batch_encode_plus(
-                test_texts, 
-                padding=True, 
-                truncation=True, 
-                return_tensors='pt'
-            )
-            
-            print(f"✅ 测试数据准备成功")
-            print(f"   批次大小: {inputs['input_ids'].shape}")
-            print(f"   序列长度: {inputs['input_ids'].shape[1]}")
-        except Exception as e:
-            print(f"❌ 测试数据准备失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+            print("\n   --- 分类输出 ---")
+            print_tensor_stats("分类 logits (loc_S)", output_dict.get('loc_S'))
+            print_tensor_stats("分类尺度 (scale_S)", output_dict.get('scale_S'))
 
-        # 步骤8: 前向传播测试
-        print_step(8, "前向传播测试")
-        
-        try:
-            model.eval()
+            print("\n   --- 回归输出 ---")
+            print_tensor_stats("回归预测 (loc_Y)", output_dict.get('loc_Y'))
+            print_tensor_stats("回归不确定性 (scale_Y)", output_dict.get('scale_Y'))
             
-            with torch.no_grad():
-                outputs = model(
-                    inputs['input_ids'].to(device),
-                    inputs['numerical_values'].to(device),
-                    inputs['attention_mask'].to(device)
-                )
-            
-            print(f"✅ 前向传播成功")
-            print(f"   输出键: {list(outputs.keys())}")
-            
-            # 检查输出形状
-            for key, value in outputs.items():
-                if isinstance(value, torch.Tensor):
-                    print(f"   {key}: {value.shape}")
-                    
-        except Exception as e:
-            print(f"❌ 前向传播失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+            # 关键验证
+            final_scale_Y = output_dict.get('scale_Y')
+            assert final_scale_Y is not None, "模型未输出 scale_Y"
+            if final_scale_Y.mean().item() < 1.0:
+                 print("\n🚨🚨🚨 警告: 回归不确定性 scale_Y 的均值非常小! 这可能是导致 PICP=0 的直接原因。")
+            else:
+                 print("\n✅ 回归不确定性 scale_Y 的均值看起来合理。")
 
-        # 步骤9: 数学公式验证
-        print_step(9, "数学公式快速验证")
-        
-        try:
-            # 简单的柯西NLL测试
-            test_target = 3.5
-            test_loc = 2.0
-            test_scale = 1.5
-            
-            # 手工计算
-            import math
-            z = (test_target - test_loc) / test_scale
-            manual_nll = math.log(math.pi * test_scale) + math.log(1 + z**2)
-            
-            print(f"✅ 数学验证成功")
-            print(f"   柯西NLL手工计算: {manual_nll:.6f}")
-            
-            # 测试函数计算（如果可用）
-            try:
-                from src.utils.distributions import cauchy_nll_loss
-                computed_nll = cauchy_nll_loss(
-                    torch.tensor(test_target),
-                    torch.tensor(test_loc), 
-                    torch.tensor(test_scale),
-                    reduction='none'
-                ).item()
-                
-                diff = abs(manual_nll - computed_nll)
-                print(f"   柯西NLL函数计算: {computed_nll:.6f}")
-                print(f"   差异: {diff:.8f}")
-                print(f"   ✅ 数学一致性: {'通过' if diff < 1e-6 else '失败'}")
-                
-            except ImportError:
-                print("   ⚠️  无法导入柯西NLL函数，跳过比较")
-                
-        except Exception as e:
-            print(f"❌ 数学验证失败: {e}")
-
-        # 总结
+        # 步骤8: 总结
         print_step("完成", "调试总结")
-        print("🎉 所有基本功能测试通过！")
-        print("   - 模型可以正常创建和初始化")
-        print("   - 前向传播正常工作")
-        print("   - 输出形状符合预期")
+        print("🎉 脚本执行完毕。请仔细检查上面每个步骤的输出，特别是 `scale_U` 和 `scale_Y` 的值。")
         return True
 
     except KeyboardInterrupt:
         print(f"\n❌ 用户中断 (Ctrl+C)")
         return False
     except Exception as e:
-        print(f"\n❌ 意外错误: {e}")
+        print(f"\n❌ 脚本执行中出现意外错误: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 if __name__ == '__main__':
-    print("开始运行简化调试脚本...")
     success = main()
-    if success:
-        print("\n✅ 脚本执行成功")
-    else:
-        print("\n❌ 脚本执行失败")
-    print("脚本结束")
+    if not success:
+        sys.exit(1)

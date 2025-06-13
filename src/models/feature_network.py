@@ -253,28 +253,41 @@ class NumAwareFeatureNetwork(FeatureNetworkBase):
         
         batch_size, seq_len, hidden_size = base_features.shape
         
-        # 应用对数变换：sign(v) * ln(1 + |v|)
-        # 注意：当 v=0 时，结果为 0
+        # 数值变换：φ(v) = sign(v) * ln(1 + |v|)
+        # 对于v=0，结果为0
         transformed_values = torch.sign(numerical_values) * torch.log1p(torch.abs(numerical_values))
         
-        # 扩展到 hidden_size 维度
-        # transformed_values: [batch_size, seq_len] -> [batch_size, seq_len, 1]
+        # 扩展到特征维度 [batch_size, seq_len, 1]
         transformed_values = transformed_values.unsqueeze(-1)
         
-        # 使用学习的方向向量
-        direction = self.numerical_direction  # [hidden_size]
+        # 归一化方向向量，确保其范数为1
+        normed_direction = self.numerical_direction / (torch.norm(self.numerical_direction) + 1e-9)
         
-        # 计算数值嵌入：transformed_values * direction
-        # [batch_size, seq_len, 1] * [hidden_size] -> [batch_size, seq_len, hidden_size]
-        numerical_embeddings = transformed_values * direction
+        # 计算数值嵌入 [batch_size, seq_len, hidden_size]
+        numerical_embeddings = transformed_values * normed_direction
+            
+        # 应用掩码，只在<NUM>位置保留数值嵌入
+        output = numerical_embeddings * num_mask.unsqueeze(-1)
         
-        # 应用掩码：只在 <NUM> 位置有值
-        # num_mask: [batch_size, seq_len] -> [batch_size, seq_len, 1]
-        num_mask = num_mask.unsqueeze(-1)
-        numerical_embeddings = numerical_embeddings * num_mask
-        
-        return numerical_embeddings
+        return output
     
+    def get_numerical_aware_embedding(self, input_ids: torch.Tensor, numerical_values: torch.Tensor) -> torch.Tensor:
+        """
+        一个辅助方法，用于清晰地获取增强嵌入，方便测试。
+        这封装了"获取基础嵌入"和"融合数值编码"的逻辑。
+        """
+        # 1. 获取基础嵌入
+        # 注意：这里我们假设 base_network 是 Qwen-like 的，有一个可访问的 embedding 层
+        base_embeddings = self.base_network.qwen_model.model.embed_tokens(input_ids)
+
+        # 2. 创建数值编码
+        # 创建数值掩码
+        num_mask = (input_ids == self.num_token_id).float()
+        numerical_embeddings = self._create_numerical_embeddings(numerical_values, num_mask, base_embeddings)
+        
+        # 3. 融合
+        return base_embeddings + numerical_embeddings
+
     def get_lm_head(self):
         """
         代理到基础网络的get_lm_head方法。

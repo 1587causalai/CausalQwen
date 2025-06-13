@@ -274,26 +274,28 @@ class ActionNetwork(nn.Module):
 
     def forward(self, causal_loc, causal_scale):
         """
-        Transform the individual causal representation distribution to output distributions.
-        
+        Defines the forward pass for the Action Network.
+
         Args:
-            causal_loc (torch.Tensor): Location parameters of the individual causal representation
-            causal_scale (torch.Tensor): Scale parameters of the individual causal representation
-        
+            causal_loc (torch.Tensor): Location parameter of causal state distribution.
+            causal_scale (torch.Tensor): Scale parameter of causal state distribution.
+
         Returns:
-            dict: A dictionary containing the parameters for classification and regression.
+            dict: A dictionary containing the parameters of the output distributions.
+                  - 'loc_S', 'scale_S': Parameters for classification scores.
+                  - 'loc_Y', 'scale_Y': Parameters for regression values.
         """
-        # 1. Classification
-        cls_loc, cls_scale = self.classification_head(causal_loc, causal_scale)
-        
-        # 2. Regression
-        reg_loc, reg_scale = self.regression_head(causal_loc, causal_scale)
-        
+        # 1. Get classification score distribution parameters
+        loc_S, scale_S = self.classification_head(causal_loc, causal_scale)
+
+        # 2. Get regression value distribution parameters
+        loc_Y, scale_Y = self.regression_head(causal_loc, causal_scale)
+
         return {
-            'cls_loc': cls_loc,
-            'cls_scale': cls_scale,
-            'reg_loc': reg_loc,
-            'reg_scale': reg_scale
+            'loc_S': loc_S,
+            'scale_S': scale_S,
+            'loc_Y': loc_Y,
+            'scale_Y': scale_Y,
         }
     
     def predict(self, causal_loc, causal_scale=None):
@@ -314,18 +316,18 @@ class ActionNetwork(nn.Module):
 
         # 1. Get output distribution parameters by running the forward pass
         outputs = self.forward(causal_loc, causal_scale)
-        cls_loc, cls_scale = outputs['cls_loc'], outputs['cls_scale']
-        reg_loc, reg_scale = outputs['reg_loc'], outputs['reg_scale']
+        loc_S, scale_S = outputs['loc_S'], outputs['scale_S']
+        loc_Y, scale_Y = outputs['loc_Y'], outputs['scale_Y']
         
         # 2. Get classification prediction from the distribution
         # This computes probabilities and takes argmax
-        cls_pred = self.classification_head.predict(cls_loc, cls_scale)
+        cls_pred = self.classification_head.predict(loc_S, scale_S)
         
         # 3. Get regression prediction (point estimate is the location parameter)
-        reg_pred = self.regression_head.predict(reg_loc, reg_scale)
+        reg_pred = self.regression_head.predict(loc_Y, scale_Y)
         
         # 4. Get probability of <NUM> token
-        all_probs = self.classification_head.compute_probabilities(cls_loc, cls_scale)
+        all_probs = self.classification_head.compute_probabilities(loc_S, scale_S)
         
         # Handle sequence vs. non-sequence input for num_prob
         if all_probs.dim() > 1:
