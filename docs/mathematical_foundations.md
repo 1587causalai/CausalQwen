@@ -82,7 +82,7 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 -   **输入**: 
     - `e`: 增强嵌入张量 (形状: `[B, S, H]`)
 -   **处理**: 增强嵌入序列 `e` 被送入Qwen的Transformer主干网络中。通过多层自注意力机制，网络为每个位置的词元计算出融合了全局上下文信息的深层特征：
-    $$z = \text{FeatureNetwork}(e)$$
+    $$z = \text{FeatureNetwork}(e) = [z_1, z_2, ..., z_S]$$
 -   **输出**: 
     - `z`: 上下文特征张量 (形状: `[B, S, H]`)
 
@@ -92,10 +92,12 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 -   **输入**: 
     - `z`: 上下文特征张量 (形状: `[B, S, H]`)
 -   **处理**: 一个线性层（或一个小型MLP）作为归因网络，为每个位置独立地计算出因果表征 $U_i$ 所服从的柯西分布的参数：
-    $$(\text{loc}_{U_i}, \log(\text{scale}_{U_i})) = \text{AbductionNetwork}(z_i)$$
+    $$(\text{loc}_{U_i}, \log(\text{scale}_{U_i})) = \text{AbductionNetwork}(z_i), \quad i = 1, 2, ..., S$$
 -   **输出**: 
     - `loc_U`: 因果表征分布的位置参数 (形状: `[B, S, C]`)
     - `scale_U`: 因果表征分布的尺度参数 (形状: `[B, S, C]`)
+
+后续我们可以看到位置和尺度参数分别是不同的线性变化（或者小MLP）计算的。
 
 ### 2.4 模块四：行动决策网络 (Action Network)
 该模块基于推断出的因果表征分布，进行并行的分类和回归决策。这对应着"你会做什么？"的行动过程。
@@ -103,15 +105,20 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 -   **输入**: 
     - `loc_U` (形状: `[B, S, C]`) 和 `scale_U` (形状: `[B, S, C]`)
 -   **处理**: 通过两个独立的线性变换，将因果表征分布映射到分类和回归的决策空间。
-    $$(\text{loc}_{S_k}, \text{scale}_{S_k}) = \text{Action}_{\text{cls}}(\text{loc}_U, \text{scale}_U)$$
-    $$(\text{loc}_Y, \text{scale}_Y) = \text{Action}_{\text{reg}}(\text{loc}_U, \text{scale}_U)$$
+    $$
+    (\text{loc}_{S_{k,i}}, \text{scale}_{S_{k,i}}) = \text{Action}_{\text{cls}}(\text{loc}_{U_i}, \text{scale}_{U_i}), \quad k = 0, 1, ..., V_{\text{full}} \\
+    (\text{loc}_{Y_i}, \text{scale}_{Y_i}) = \text{Action}_{\text{reg}}(\text{loc}_{U_i}, \text{scale}_{U_i})
+    $$
 -   **输出**:
     - 分类决策分布参数: `loc_S` (形状: `[B, S, V_full]`), `scale_S` (形状: `[B, S, V_full]`)
     - 回归决策分布参数: `loc_Y` (形状: `[B, S]`), `scale_Y` (形状: `[B, S]`)
 
+尤其需要注意的是，不管分类还是回归线性变化，同时扮演了两个角色：
+1. 将因果表征 instance 映射到分类和回归的决策空间。
+2. 将因果表征 r.v. 映射到分类和回归的决策空间，是前者基于Cauchy分布假设的伴随映射。
+
 > **核心引擎：柯西分布的线性稳定性**
-> 整个归因-行动流程之所以能高效運作，完全得益于柯西分布的**线性稳定性**。如果一个随机变量 $U \sim \text{Cauchy}(\mu, \gamma)$，那么它的任何线性变换 $Y = aU + b$ 之后，依然服从柯西分布 $Y \sim \text{Cauchy}(a\mu + b, |a|\gamma)$。
-> 这意味着，行动网络中的线性变换可以直接作用于分布的参数（`loc` 和 `scale`），而无需进行任何耗时的随机采样。这是模型能够被高效训练的关键。
+> 整个归因-行动流程之所以能高效运作，完全得益于柯西分布的**线性稳定性**。如果一个随机变量 $U \sim \text{Cauchy}(\mu, \gamma)$，那么它的任何线性变换 $Y = aU + b$ 之后，依然服从柯西分布 $Y \sim \text{Cauchy}(a\mu + b, |a|\gamma)$。这意味着，行动网络中的线性变换可以直接作用于分布的参数（`loc` 和 `scale`），而无需进行任何耗时的随机采样。这是模型能够被高效训练的关键。
 
 ### 2.5 模块五：损失计算 (Loss Calculation)
 此模块计算模型预测与真实标签之间的差异，为反向传播提供依据。它由两部分组成：
@@ -123,10 +130,9 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
     - 分类决策分布参数: `loc_S`, `scale_S` (形状: `[B, S, V_full]`)
 -   **处理**: 
     1.  利用柯西分布的累积分布函数（CDF）计算每个类别的概率：
-        $$P_{k,i} = P(S_{k,i} > C_k)
-    2.  基于此概率计算标准的二元交叉熵损失。
--   **输出**: 
-    - `L_cls`: 序列的分类总损失。
+        $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
+    2.  基于此概率使用二元交叉熵损失, 计算标准的序列的位置 `i` 处分类总损失。
+        $$L_{\text{cls}, i} = \sum_{k=1}^{V_{\text{full}}} y_{k,i} \log P_{k,i} + (1-y_{k, i}) \log (1 - P_{k, i})$$
 
 #### 2. 门控回归损失
 我们只希望在模型确定当前位置是数值（`<NUM>`）时，才对其回归预测的准确性进行惩罚。
@@ -134,16 +140,16 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 -   **输入**: 
     - 回归决策分布参数: `loc_Y`, `scale_Y` (形状: `[B, S]`)
     - 真实数值: `true_numerical_values` (形状: `[B, S]`)
-    - `<NUM>`词元的预测概率: `P_<NUM>,i`
--   **处理**: 计算由分类概率加权的柯西负对数似然损失：
+    - `<NUM>`词元的预测概率: $P_{\text{<NUM>},i}$
+-   **处理**: 基于分类概率加权的柯西负对数似然损失， 计算序列的位置 `i` 处回归总损失：
     $$
+    \mathcal{L}_{\text{cauchy\_nll},i} = \log(\pi \cdot \text{scale}_{Y_i}) + \log\left(1 + \left(\frac{y_{\text{true},i} - \text{loc}_{Y_i}}{\text{scale}_{Y_i}}\right)^2\right) \\
     \mathcal{L}_{\text{reg\_gated},i} = m_i \cdot \left(\alpha + (1-\alpha) \cdot P_{\text{<NUM>},i}\right) \cdot \mathcal{L}_{\text{cauchy\_nll},i}
     $$
-    其中 $m_i$ 是指示真实标签是否为`<NUM>`的掩码, $\alpha$ 是一个可调的门控系数。
--   **输出**: 
-    - `L_reg`: 序列的回归总损失。
+    其中 $m_i$ 是指示真实标签是否为`<NUM>`的掩码, $\alpha$ 是一个可调的门控系数(默认选择0, 方便模型先学会分类再学回归)。
 
-最终的总损失是这两者的加权和: $\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}} + \lambda \cdot \mathcal{L}_{\text{reg}}$。
+最终的总损失是这两者的加权和: 
+$$\mathcal{L}_{\text{total}} = \sum_{i=1}^{S} \left(\mathcal{L}_{\text{cls},i} + \lambda \cdot \mathcal{L}_{\text{reg\_gated},i}\right)$$
 
 ## 3. 推理阶段：生成预测 (Inference)
 
@@ -166,7 +172,7 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 1.  **采样"原因"**: 根据上下文推断出的因果表征分布 `Cauchy(loc_U, scale_U)`，从中采样一个**具体的**表征向量 $u_i$。
 2.  **观察"结果"**: 将这个确定的 $u_i$ 传入**行动网络**，得到**确定性的**分类分数和回归值，并据此做出最终预测。
 
-传统大模型需要 Top-P 和 Top-K 采样，是因为它们提供了一种在保真度（fidelity）和多样性（diversity）之间进行权衡的有效手段。我们类似可以使用似然截断来来实现对应的功能， 也就是说概率密度 $p_{U_i}(u_i)$ 需要大于某个数值或者等于$\frac{1}{\pi \gamma_{U_i}}$(Cauchy密度最大值)的 $u_i$ 才被保留。
+传统大模型需要 Top-P 和 Top-K 采样，是因为它们提供了一种在保真度（fidelity）和多样性（diversity）之间进行权衡的有效手段。我们类似可以使用似然截断来来实现对应的功能， 也就是说概率密度 $p_{U_i}(u_i)$ 需要大于某个数值或者等于$\frac{1}{\pi \text{scale}_{U_i}}$(Cauchy密度最大值)的 $u_i$ 才被保留。
 
 
 
@@ -216,33 +222,35 @@ $$
 
 - **方向向量初始化**(后续可以考虑让他是可学习参数)：
 $$\vec{e} \sim \mathcal{N}(0, \sigma_e^2 I), \quad \text{然后归一化: } \vec{e} \leftarrow \frac{\vec{e}}{\|\vec{e}\|}$$
-其中 $\sigma_e$ 是小的标准差（如 $\sigma_e = 0.02$）。
 
-最终，数值($v_i$)感知嵌入层的计算公式为：
+其中 $\sigma_e$ 是小的标准差（如 $\sigma_e = 0.02$）。最终，位置 $i$ 的数值感知嵌入层的计算公式为：
 $$e_i = \text{embed}(x_i) + \phi(v_i), \quad \text{where }  \phi(v) = \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e}$$
+
+使用它作为输出，经过 Qwen 主干网络，得到高维的特征表征 $z_i$， 作为后续归因推断网络的输入。
+
 
 #### 步骤2：归因推断网络 → 恒等映射
 
 设定归因网络的权重和偏置，使得：
-$$\text{loc}_{U_i} = z_i, \quad \text{scale}_{U_i} = \gamma \text{ (大常数)}$$
+$$\text{loc}_{U_i} = z_i, \quad \text{scale}_{U_i} = \gamma_i \text{ (大数值)}$$
 
 **数学实现**：
-- 位置参数：$W_{\text{loc}} = I$（恒等矩阵），$b_{\text{loc}} = 0$
-- 尺度参数：$W_{\text{scale}} = 0$，$b_{\text{scale}} = \log(\gamma)$，其中 $\gamma$ 是大常数（如 $\gamma = 10$）
+- 初始化位置参数：$W_{\text{loc}} = I$（恒等矩阵），$b_{\text{loc}} = 0$
+- 初始化尺度参数：$W_{\text{scale}} = 0$，$b_{\text{scale}} = \log(\gamma)$，其中 $\gamma$ 是大常数（如 $\gamma = 10$）
 
-**效果**：因果表征 $U_i$ 的分布为宽泛分布 $U_i \sim \text{Cauchy}(z_i, \gamma)$，当 $\gamma$ 很大时，柯西分布近似**均匀先验**，归因网络在保持恒等映射的同时提供了高不确定性的表征。
+**效果**：因果表征 $U_i$ 的分布为宽泛分布 $U_i \sim \text{Cauchy}(z_i, \gamma_i)$，当 $\gamma_i$ 很大时，柯西分布近似**均匀先验**，归因网络在保持恒等映射的同时提供了高不确定性的表征。
 
 **数学直觉**：大尺度的柯西分布 $\text{Cauchy}(\mu, \gamma)$ 当 $\gamma \gg 1$ 时，在较大范围内近似均匀分布，这为模型提供了"无知先验"——模型开始时对个体差异保持最大的不确定性。
 
 #### 步骤3：行动网络(分类) → 复制 Qwen 权重
 
 直接将 Qwen 的词汇表预测头权重复制到分类行动网络：
-$$W_{\text{cls}} \leftarrow W_{\text{Qwen\_lm\_head}}, \quad b_{\text{cls}} = 0$$
+$$\mathbf{W}_{\text{cls}} \leftarrow \mathbf{W}_{\text{Qwen\_lm\_head}}, \quad \mathbf{b}_{\text{cls}} = 0$$
 
 **数学保证**：由于 $\text{loc}_{U_i} = z_i$，我们的分类 logits 与 Qwen 的原始 logits **完全相等**：
-$$\text{loc}_{S_{k,i}} = W_{\text{cls}}[k, :] \cdot z_i + b_{\text{cls}}[k] = W_{\text{Qwen}}[k, :] \cdot z_i$$
+$$\text{loc}_{S_{k,i}} = \mathbf{W}_{\text{cls}}[k, :] \cdot z_i + \mathbf{b}_{\text{cls}}[k] = \mathbf{W}_{\text{Qwen}}[k, :] \cdot z_i = s_{k,i}^{\text{Qwen}}$$
 
-**关键结论**：在兼容传统采样模式下，CausalQwen 的 Softmax 概率分布与 Qwen 的输出**数学上完全一致**：
+**关键结论**：在兼容传统采样模式下，CausalQwen 使用位置参数 $\text{loc}_{S_{k,i}}$ 作为 logits 的 Softmax 概率分布与 Qwen 的输出**数学上完全一致**：
 $$P_{\text{CausalQwen}}^{\text{softmax}}(y_i=k|\mathbf{x}) = P_{\text{Qwen}}(y_i=k|\mathbf{x})$$
 
 这确保了 CausalQwen 在初始化时不仅行为类似 Qwen，而是**精确地复制了 Qwen 的语言建模能力**。
@@ -251,10 +259,10 @@ $$P_{\text{CausalQwen}}^{\text{softmax}}(y_i=k|\mathbf{x}) = P_{\text{Qwen}}(y_i
 
 将回归行动网络使用标准的小权重初始化，如 Xavier 或 Kaiming 初始化。
 
-**数学效果**：由于 $\|W_{\text{reg}}\|$ 很小，结合大尺度的因果表征分布 $U_i \sim \text{Cauchy}(z_i, \gamma)$，回归预测的分布为：
-$$Y_i \sim \text{Cauchy}(W_{\text{reg}} \cdot z_i, \gamma \cdot \|W_{\text{reg}}\|)$$
+**数学效果**：由于 $\|W_{\text{reg}}\|$ 很小，结合大尺度的因果表征分布 $U_i \sim \text{Cauchy}(z_i, \gamma_i)$，位置 $i$ 的回归预测分布为：
+$$Y_i \sim \text{Cauchy}(W_{\text{reg}} \cdot z_i + b_{\text{reg}},  |W_{\text{reg}}| \cdot \gamma_i)$$
 
-当 $\gamma \gg \|W_{\text{reg}}\|$ 时，回归输出近似为以 $0$ 为中心的宽泛分布，提供了**无偏的回归先验**。
+其中 $|W_{\text{reg}}|$ 是该向量每个元素都取绝对值，回归输出近似为以 $0$ 为中心的宽泛分布，提供了**无偏的回归先验**。
 
 #### 步骤5：OvR 阈值 → 统一设置
 
@@ -276,9 +284,9 @@ $$C_k = C_{\text{OvR}}, \quad \forall k \in \{0, 1, \ldots, V_{\text{full}}-1\}$
 
 通过上述初始化步骤，CausalQwen 在训练开始时具有以下性质：
 
--   **因果表征**: 对于每个位置 $i$，因果表征 $U_i$ 服从宽泛的柯西分布 $U_i \sim \text{Cauchy}(z_i, \gamma)$，其中 $\gamma$ 是大常数。
--   **分类决策**: 分类行动网络的输出与 Qwen 的原始输出完全一致，即 $\text{loc}_{S_{k,i}} = W_{\text{Qwen}}[k, :] \cdot z_i$。
--   **回归决策**: 由于回归网络的标准初始化，回归预测的分布为 $Y_i \sim \text{Cauchy}(W_{\text{reg}} \cdot z_i, \gamma \cdot |W_{\text{reg}}|)$，当 $\gamma$ 很大时，近似为以 0 为中心的宽泛分布。
+-   **因果表征**: 对于每个位置 $i$，因果表征 $U_i$ 服从宽泛的柯西分布 $U_i \sim \text{Cauchy}(z_i, \gamma_i)$，其中 $\gamma_i$ 是大数。
+-   **分类决策**: 分类行动网络的输出与 Qwen 的原始输出完全一致，即 $\text{loc}_{S_{k,i}} = \mathbf{W}_{\text{Qwen}}[k, :] \cdot z_i$。
+-   **回归决策**: 由于回归网络的标准初始化，回归预测的分布为 $Y_i \sim \text{Cauchy}(W_{\text{reg}} \cdot z_i + b_{\text{reg}},  |W_{\text{reg}}| \cdot \gamma_i)$，当 $\gamma_i$ 很大时，近似为以 0 为中心的宽泛分布。
 -   **阈值设置**: 所有类别共享相同的初始阈值 $C_k = C_{\text{OvR}}$，这提供了一个适度稀疏且数值稳定的初始概率分布。
 
 
