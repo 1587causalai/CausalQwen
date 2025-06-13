@@ -38,7 +38,7 @@ class CausalLMConfig:
     
     # Regression loss settings
     reg_loss_weight: float = 1.0
-    reg_loss_gating_alpha: float = 1.0  # 门控系数：1.0 = 无门控，0.0 = 完全门控
+    reg_loss_gating_alpha: float = 1.0  # 门控系数: 1.0 = 硬门控 (默认), 0.0 = 软门控
     
     # Distribution settings
     use_cauchy_distribution: bool = True
