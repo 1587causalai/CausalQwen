@@ -19,7 +19,7 @@
 
 > 我们用 B 代表批次大小, S 代表序列长度, H 代表模型核心维度 (即词嵌入和隐藏层维度), C 代表因果表征维度, K 代表基座模型 Qwen 的已用词汇表大小, V_full代表总词汇表大小, CausalQwen 的已用词汇表大小为 K+1 (K+1 包含基座模型 Qwen 的已用词汇表大小 K 和 CausalQwen 的额外词汇 `<NUM>`) 
 
-
+> **设计决策**: 在当前实现中，我们设定因果表征维度 `C` 与模型隐藏层维度 `H` 相等，即 **`C = H`**。这方便了我们进行归因推断网络的初始化。
 
 ### 2.1 模块一：数值感知嵌入 (Numerical-aware Embedding)
 这一模块的目标是将混合了文本和数值的原始输入，转化为一个统一的、数值感知的特征向量序列。这个过程包含三个关键步骤, *输入示例**: 原始字符串文本 `"价格是99.9元"`:
@@ -98,6 +98,8 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 -   **输出**: 
     - `loc_U`: 因果表征分布的位置参数 (形状: `[B, S, C]`)
     - `scale_U`: 因果表征分布的尺度参数 (形状: `[B, S, C]`)
+
+> **注意**: 此处的因果表征维度 `C` 与模型隐藏层维度 `H` 相同，即 `C=H`。
 
 后续我们可以看到位置和尺度参数分别是不同的线性变化（或者小MLP）计算的。
 
@@ -228,12 +230,12 @@ $$\vec{e} \sim \mathcal{N}(0, \sigma_e^2 I), \quad \text{然后归一化: } \vec
 其中 $\sigma_e$ 是小的标准差（如 $\sigma_e = 0.02$）。最终，位置 $i$ 的数值感知嵌入层的计算公式为：
 $$e_i = \text{embed}(x_i) + \phi(v_i), \quad \text{where }  \phi(v) = \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e}$$
 
-使用它作为输出，经过 Qwen 主干网络，得到高维的特征表征 $z_i$， 作为后续归因推断网络的输入。
+使用它作为输出，经过 Qwen 主干网络，得到高维的特征表征 $z_i$(形状: [B, S, H]), 作为后续归因推断网络的输入。
 
 
 #### 步骤2：归因推断网络 → 恒等映射
 
-设定归因网络的权重和偏置，使得：
+设定归因网络的权重和偏置，其位置网络和尺度网络的输入输出维度都分别是 [B, S, H] 和 [B, S, C] (默认 C=H), 使得：
 $$\text{loc}_{U_i} = z_i, \quad \text{scale}_{U_i} = \gamma_i \text{ (大数值)}$$
 
 **数学实现**：
@@ -250,9 +252,13 @@ $$\text{loc}_{U_i} = z_i, \quad \text{scale}_{U_i} = \gamma_i \text{ (大数值)
 $$\mathbf{W}_{\text{cls}} \leftarrow \mathbf{W}_{\text{Qwen\_lm\_head}}, \quad \mathbf{b}_{\text{cls}} = 0$$
 
 **数学保证**：由于 $\text{loc}_{U_i} = z_i$，我们的分类 logits 与 Qwen 的原始 logits **完全相等**：
-$$\text{loc}_{S_{k,i}} = \mathbf{W}_{\text{cls}}[k, :] \cdot z_i + \mathbf{b}_{\text{cls}}[k] = \mathbf{W}_{\text{Qwen}}[k, :] \cdot z_i = s_{k,i}^{\text{Qwen}}$$
+$$
+S_{k,i} \sim \text{Cauchy}(\text{loc}_{S_{k,i}}, \text{scale}_{S_{k,i}}) \\
+\text{loc}_{S_{k,i}} = \mathbf{W}_{\text{cls}}[k, :] \cdot z_i + \mathbf{b}_{\text{cls}}[k] = \mathbf{W}_{\text{Qwen}}[k, :] \cdot z_i = s_{k,i}^{\text{Qwen}} \\
+\text{scale}_{S_{k,i}} = |\mathbf{W}_{\text{scale}}[k, :]| \cdot \gamma_i
+$$
 
-**关键结论**：在兼容传统采样模式下，CausalQwen 使用位置参数 $\text{loc}_{S_{k,i}}$ 作为 logits 的 Softmax 概率分布与 Qwen 的输出**数学上完全一致**：
+**关键结论**：在兼容传统采样模式下，CausalQwen 使用位置参数 $\text{loc}_{S_{k,i}}$ ( $\text{loc}_{S}$ 和 $\text{scale}_{S}$ 形状都是 [B, S, V_full]) 作为 logits 的 Softmax 概率分布与 Qwen 的输出**数学上完全一致**：
 $$P_{\text{CausalQwen}}^{\text{softmax}}(y_i=k|\mathbf{x}) = P_{\text{Qwen}}(y_i=k|\mathbf{x})$$
 
 这确保了 CausalQwen 在初始化时不仅行为类似 Qwen，而是**精确地复制了 Qwen 的语言建模能力**。
@@ -262,15 +268,18 @@ $$P_{\text{CausalQwen}}^{\text{softmax}}(y_i=k|\mathbf{x}) = P_{\text{Qwen}}(y_i
 将回归行动网络使用标准的小权重初始化，如 Xavier 或 Kaiming 初始化。
 
 **数学效果**：由于 $\|W_{\text{reg}}\|$ 很小，结合大尺度的因果表征分布 $U_i \sim \text{Cauchy}(z_i, \gamma_i)$，位置 $i$ 的回归预测分布为：
-$$Y_i \sim \text{Cauchy}(W_{\text{reg}} \cdot z_i + b_{\text{reg}},  |W_{\text{reg}}| \cdot \gamma_i)$$
+$$Y_i \sim \text{Cauchy}(\mu_{\text{reg},i}, \gamma_{\text{reg},i}),  \\
+\mu_{\text{reg},i} = W_{\text{reg}} \cdot z_i + b_{\text{reg}},  \gamma_{\text{reg},i} = |W_{\text{reg}}| \cdot \gamma_i$$
 
-其中 $|W_{\text{reg}}|$ 是该向量每个元素都取绝对值，回归输出近似为以 $0$ 为中心的宽泛分布，提供了**无偏的回归先验**。
+其中 $|W_{\text{reg}}|$ 是该向量每个元素都取绝对值，回归输出近似为以 $0$ 为中心的宽泛分布，提供了**无偏的回归先验** ($\mu_{\text{reg}}$ 和 $\gamma_{\text{reg}}$ 的张量形状都是 [B, S]) 。
 
 #### 步骤5：OvR 阈值 → 统一设置
 
 在 OvR 分类中，阈值 $C_k$ 决定了柯西分布决策分数超过阈值的概率计算：
 
 $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
+
+ 得一个形状是 [B, S, V_full] 的概率张量 $\mathbf{P}$。
 
 **阈值初始化**：所有类别使用相同的常数阈值
 $$C_k = C_{\text{OvR}}, \quad \forall k \in \{0, 1, \ldots, V_{\text{full}}-1\}$$
@@ -523,7 +532,7 @@ graph TD
 
     style E fill:#fce4ec,stroke:#880e4f,stroke-width:2px
 ```
-* **解读**：将形状为 `[B, S]` 的 `L_cls` 和 `L_reg_gated` 逐元素地加权求和，得到一个同样形状的 `L_token` 张量。这个张量代表了批次中每个位置的最终损失。最后，对这个张量中的所有元素求和或求平均，将其“ réduction (降维)”为一个**标量（Scalar）**，这个标量就是驱动整个模型参数更新的最终 `L_total`。
+* **解读**：将形状为 `[B, S]` 的 `L_cls` 和 `L_reg_gated` 逐元素地加权求和，得到一个同样形状的 `L_token` 张量。这个张量代表了批次中每个位置的最终损失。最后，对这个张量中的所有元素求和或求平均，将其" réduction (降维)"为一个**标量（Scalar）**，这个标量就是驱动整个模型参数更新的最终 `L_total`。
 
 
 
@@ -551,7 +560,7 @@ Of course. Here is a concise comparison table in Markdown format, perfect for a 
 | **数值处理** 🔢<br>Numerical Handling | **视为纯文本 (As Plain Text)**<br>将数字（如 "99.9"）当作普通词元处理，缺乏内在的数值概念。 | **双通道处理 (Dual-Channel)**<br>文本部分走词元嵌入，数值部分走独立的**回归通道**，真正理解数值大小。 |
 | **输出架构** 🏛️<br>Output Architecture | **单一 Logits 输出 (Single Logits Output)**<br>输出一个维度为词汇表大小的 logits 向量，用于 Softmax。 | **双重分布输出 (Dual Distribution Output)**<br>输出独立的**分类 OvR 分布**和**回归柯西分布**，分别处理文本与数值。 |
 | **损失函数** 🧮<br>Loss Function | **Softmax 交叉熵 (Softmax Cross-Entropy)**<br>在整个词汇表上进行归一化，计算单一正确答案的损失。 | **OvR + 门控回归损失 (OvR + Gated Regression Loss)**<br>分类上进行独立二元判断，回归上由分类结果**智能门控**，实现多任务学习。 |
-| **采样范式** 🎲<br>Sampling Paradigm | **对“结果”采样 (Sampling the "Effect")**<br>在最终的 logits 分布上使用 `top-k`/`top-p` 进行随机采样。 | **对“原因”采样 (Sampling the "Cause")**<br>引入**因果采样**，直接对“个体” $U$ 进行采样，得到更多样且风格一致的生成结果。 |
+| **采样范式** 🎲<br>Sampling Paradigm | **对"结果"采样 (Sampling the "Effect")**<br>在最终的 logits 分布上使用 `top-k`/`top-p` 进行随机采样。 | **对"原因"采样 (Sampling the "Cause")**<br>引入**因果采样**，直接对"个体" $U$ 进行采样，得到更多样且风格一致的生成结果。 |
 | **核心创新** ✨<br>Key Innovation | 强大的语言建模与上下文理解能力。 | 引入外生**个体选择变量 $U$**，并利用柯西分布的数学特性，构建了一个可高效训练的因果生成框架。 |
 
 

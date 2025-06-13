@@ -69,6 +69,8 @@ $$P(y_i|x) = \int P(y_i|u_i) \cdot P(u_i|x) \, du_i$$
 整个前向传播过程可以分解为四个核心模块。
 
 > 我们用 B 代表批次大小, S 代表序列长度, H 代表模型核心维度, C 代表因果表征维度, K 代表基座模型 Qwen 的已用词汇表大小, V_full代表总词汇表大小 (K+1)。
+>
+> **设计决策**: 在当前实现中，我们设定因果表征维度 `C` 与模型隐藏层维度 `H` 相等，即 **`C = H`**。这允许我们通过一个简单的线性层（其权重可初始化为单位矩阵）在特征空间和因果表征空间之间进行高效转换，如初始化策略部分所述。
 
 ### 3.1 模块一：数值感知嵌入
 
@@ -99,7 +101,7 @@ $$P(y_i|x) = \int P(y_i|u_i) \cdot P(u_i|x) \, du_i$$
 -   **处理**: 一个线性层（或一个小型MLP）作为归因网络，为每个位置独立地计算出因果表征 $U_i$ 所服从的柯西分布的参数：
     $$[\text{loc}_{U_i}, \log \text{scale}_{U_i}] = W_g \cdot z_i + b_g$$
     $$\text{scale}_{U_i} = \exp(\log \text{scale}_{U_i})$$
-    因此，每个位置的后验分布为 $U_i|z_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$。
+    因此，每个位置的后验分布为 $U_i|z_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$，其中 `loc_U_i` 和 `scale_U_i` 都是维度为 `C` (=`H`) 的向量。
 -   **输出**: 
     - `loc_U`: 因果表征分布的位置参数 (形状: `[B, S, C]`)
     - `scale_U`: 因果表征分布的尺度参数 (形状: `[B, S, C]`)
@@ -108,13 +110,13 @@ $$P(y_i|x) = \int P(y_i|u_i) \cdot P(u_i|x) \, du_i$$
 
 该模块基于推断出的因果表征分布，进行并行的分类和回归决策。
 
--   **输入**: `loc_U` 和 `scale_U`
+-   **输入**: `loc_U` (形状: `[B, S, C]`) 和 `scale_U` (形状: `[B, S, C]`)
 -   **处理**: 借助柯西分布的线性封闭性，通过两个独立的线性变换，将因果表征分布直接映射到决策空间。
-    - **分类**: $S_{k,i} = \vec{A}_k \cdot U_i + B_k \implies S_{k,i} \sim \text{Cauchy}(\vec{A}_k \cdot \text{loc}_{U_i} + B_k, |\vec{A}_k| \cdot \text{scale}_{U_i})$
-    - **回归**: $Y_i = \vec{W} \cdot U_i + b \implies Y_i \sim \text{Cauchy}(\vec{W} \cdot \text{loc}_{U_i} + b, |\vec{W}| \cdot \text{scale}_{U_i})$
+    - **分类**: $S_{k,i} = \vec{A}_k \cdot U_i + B_k \implies S_{k,i} \sim \text{Cauchy}(\vec{A}_k \cdot \text{loc}_{U_i} + B_k, |\vec{A}_k| \cdot \text{scale}_{U_i})$。此处的行动网络是一个权重矩阵为 $\mathbf{A}$ (形状: `[V_full, C]`)，偏置为 $\mathbf{B}$ (形状: `[V_full]`)的线性层。
+    - **回归**: $Y_i = \vec{W} \cdot U_i + b \implies Y_i \sim \text{Cauchy}(\vec{W} \cdot \text{loc}_{U_i} + b, |\vec{W}| \cdot \text{scale}_{U_i})$。此处的行动网络是一个权重向量为 $\mathbf{W}$ (形状: `[C]`)，偏置为 $b$ (标量)的线性层。
 -   **输出**:
-    - 分类决策分布参数: `loc_S`, `scale_S`
-    - 回归决策分布参数: `loc_Y`, `scale_Y`
+    - 分类决策分布参数: `loc_S` (形状: `[B, S, V_full]`), `scale_S` (形状: `[B, S, V_full]`)
+    - 回归决策分布参数: `loc_Y` (形状: `[B, S]`), `scale_Y` (形状: `[B, S]`)
 
 ## 4. 损失函数与理论分析
 
@@ -127,8 +129,10 @@ $$P(y_i|x) = \int P(y_i|u_i) \cdot P(u_i|x) \, du_i$$
 -   **计算**:
     1.  利用柯西CDF计算每个类别的概率：
         $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
+        该步骤产生一个概率张量 `P`，形状为 `[B, S, V_full]`。
     2.  基于此概率使用二元交叉熵损失, 计算序列的位置 `i` 处分类总损失。
         $$L_{\text{cls}, i} = \sum_{k=1}^{V_{\text{full}}} \left( -y_{k,i} \log P_{k,i} - (1-y_{k, i}) \log (1 - P_{k, i}) \right)$$
+        该步骤产生一个损失张量 `L_cls`，形状为 `[B, S]`。
 
 -   **理论优势**:
     1.  **独立性**: 每个类别的概率独立计算，避免了Softmax的"归一化"强约束。
@@ -143,7 +147,7 @@ $$P(y_i|x) = \int P(y_i|u_i) \cdot P(u_i|x) \, du_i$$
 -   **计算**:
     -   **柯西负对数似然**: $\mathcal{L}_{\text{cauchy\_nll},i} = \log(\pi \cdot \text{scale}_{Y_i}) + \log\left(1 + \left(\frac{y_{\text{true},i} - \text{loc}_{Y_i}}{\text{scale}_{Y_i}}\right)^2\right)$
     -   **门控机制**: $\mathcal{L}_{\text{reg\_gated},i} = m_i \cdot \left(\alpha + (1-\alpha) \cdot P_{\text{<NUM>},i}\right) \cdot \mathcal{L}_{\text{cauchy\_nll},i}$
-    其中 $m_i$ 是指示真实标签是否为`<NUM>`的掩码, $\alpha$ 是门控系数(常设为0), $P_{\text{<NUM>},i}$ 是模型预测`<NUM>`的概率。
+    其中 $m_i$ 是指示真实标签是否为`<NUM>`的掩码 (形状: `[B, S]`), $\alpha$ 是门控系数(常设为0), $P_{\text{<NUM>},i}$ 是模型预测`<NUM>`的概率 (形状: `[B, S]`)。最终得到的门控回归损失 `L_reg_gated` 形状也为 `[B, S]`。
 
 -   **理论优势**:
     1.  当模型不确定当前位置是否为数值时 ($P_{\text{<NUM>},i} \to 0$)，回归损失被抑制。
@@ -247,12 +251,12 @@ $$u_i = \text{loc}_{U_i} + \text{scale}_{U_i} \odot \tan\left(\pi \left(\vec{\ep
 #### 步骤2：归因推断网络 → 近似恒等映射
 - **位置参数**: $W_{\text{loc}} = I$（恒等矩阵），$b_{\text{loc}} = 0$
 - **尺度参数**: $W_{\text{scale}} = 0$，$b_{\text{scale}} = \log(\gamma)$，其中 $\gamma$ 是大常数（如 $\gamma = 10$）。
-**效果**: 使得 $\text{loc}_{U_i} \approx z_i$，而 $\text{scale}_{U_i} = \gamma$。因果表征的分布为一个以 $z_i$ 为中心、尺度巨大的柯西分布 $U_i \sim \text{Cauchy}(z_i, \gamma)$。这相当于一个"无知先验"，模型开始时对个体差异保持最大的不确定性。
+**效果**: 使得 $\text{loc}_{U_i} \approx z_i$（这在数学上要求 `C` 必须等于 `H`），而 $\text{scale}_{U_i} = \gamma$。因果表征的分布为一个以 $z_i$ 为中心、尺度巨大的柯西分布 $U_i \sim \text{Cauchy}(z_i, \gamma)$。这相当于一个"无知先验"，模型开始时对个体差异保持最大的不确定性。
 
 #### 步骤3：行动网络(分类) → 复制 Qwen 权重
 直接将 Qwen 的词汇表预测头权重复制到分类行动网络：
 $$\mathbf{W}_{\text{cls}} \leftarrow \mathbf{W}_{\text{Qwen\_lm\_head}}, \quad \mathbf{b}_{\text{cls}} = 0$$
-**数学保证**: 由于 $\text{loc}_{U_i} \approx z_i$，我们的分类 logits 与 Qwen 的原始 logits **几乎完全相等**：
+**数学保证**: 由于 $\text{loc}_{U_i} \approx z_i$ 且 $C=H$，我们的分类 logits 与 Qwen 的原始 logits **几乎完全相等**：
 $$\text{loc}_{S_{k,i}} = \mathbf{W}_{\text{cls}}[k, :] \cdot \text{loc}_{U_i} \approx \mathbf{W}_{\text{Qwen}}[k, :] \cdot z_i = s_{k,i}^{\text{Qwen}}$$
 这确保了 CausalQwen 在初始化时精确地复制了 Qwen 的语言建模能力。
 
