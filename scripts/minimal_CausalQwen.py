@@ -1,140 +1,179 @@
 import torch
 import torch.nn as nn
-from transformers import AutoTokenizer, Qwen2ForCausalLM
+import torch.nn.functional as F
+from transformers import Qwen2ForCausalLM, AutoTokenizer
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from typing import Optional, Tuple, Union, List
+import math
+import os
+from typing import Optional, Tuple, List
 
-# --- 1. 定义模型超参数 ---
-# 假设的超参数，可以放入模型 config 中
-CAUSAL_REPRESENTATION_DIM = 128 # 个体因果表征 U 的维度
-OVR_THRESHOLD = 100.0           # OvR 分类的决策阈值 C_k
-REG_LOSS_WEIGHT = 0.5           # 回归损失的权重 lambda
-GATE_ALPHA = 0.1                # 门控损失中的平滑系数 alpha
-NUM_TOKEN_ID = 151646           # Qwen2-0.5B 中 '<|extra_0|>' 的 ID, 我们用它作为 <NUM>
+# 确保模型路径正确，处理 "~" 符号
+QWEN_MODEL_PATH = os.path.expanduser("~/models/Qwen2.5-0.5B")
 
-class CausalQwenForCausalLM(Qwen2ForCausalLM):
+class CausalQwen(Qwen2ForCausalLM):
     """
-    CausalQwen 模型，通过继承 Qwen2ForCausalLM 实现。
-    增加了因果推断和双通道决策（分类+回归）的能力。
+    CausalQwen 的极简化 PyTorch 实现。
+    继承自 Qwen2ForCausalLM，并扩展了因果推断和数值处理能力。
     """
     def __init__(self, config):
         super().__init__(config)
+        
+        # 获取模型核心维度
+        H = config.hidden_size
+        C = H  # 设计决策: 因果表征维度 C 与隐藏维度 H 相等
+        V_full = config.vocab_size + 1 # Qwen 词汇表 + 1个 <NUM> 词元
+        
+        # === 1. 定义新增模块的参数 ===
+        
+        # 1.1 数值感知嵌入模块
+        # 方向向量 e, 初始化为随机方向并归一化
+        numeric_direction = torch.randn(H)
+        self.numeric_direction = nn.Parameter(numeric_direction / torch.norm(numeric_direction))
 
-        # --- 2. 定义新增的网络层 ---
-        hidden_size = config.hidden_size
+        # 1.2 归因网络 (Abduction Network)
+        # 将 z [B,S,H] 映射到 loc_U [B,S,C] 和 scale_U [B,S,C]
+        self.abduction_loc_layer = nn.Linear(H, C)
+        self.abduction_scale_layer = nn.Linear(H, C)
 
-        # 模块三：归因推断网络 (Abduction Network)
-        # 将 Qwen 的输出特征 z 映射到因果表征 U 的分布参数
-        self.abduction_loc = nn.Linear(hidden_size, CAUSAL_REPRESENTATION_DIM)
-        self.abduction_scale = nn.Linear(hidden_size, CAUSAL_REPRESENTATION_DIM)
+        # 1.3 行动网络 (Action Network)
+        # 分类部分直接使用 Qwen 的 lm_head
+        self.action_cls_layer = self.lm_head
+        
+        # 回归部分是新增的
+        self.action_reg_loc_layer = nn.Linear(C, 1)
+        self.action_reg_scale_layer = nn.Linear(C, 1)
 
-        # 模块四：行动决策网络 (Action Network) - 回归部分
-        # 将因果表征 U 映射到回归决策 Y 的分布参数
-        # 分类部分直接复用基座模型的 self.lm_head
-        self.action_reg_loc = nn.Linear(CAUSAL_REPRESENTATION_DIM, 1)
-        self.action_reg_scale = nn.Linear(CAUSAL_REPRESENTATION_DIM, 1)
+        # 1.4 OvR 阈值
+        self.ovr_threshold = nn.Parameter(torch.tensor(100.0))
+
+        # === 2. 执行知识迁移初始化策略 ===
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        """
+        应用文档中描述的精确初始化策略，确保 CausalQwen 初始行为与 Qwen 一致。
+        """
+        H = self.config.hidden_size
+        
+        # 步骤2: 归因推断网络 -> 恒等映射 + 高斯不确定性
+        # loc_U = z (近似恒等)
+        self.abduction_loc_layer.weight.data.copy_(torch.eye(H))
+        nn.init.zeros_(self.abduction_loc_layer.bias)
+        
+        # scale_U = gamma (大常数)
+        gamma = 10.0
+        nn.init.zeros_(self.abduction_scale_layer.weight)
+        self.abduction_scale_layer.bias.data.fill_(math.log(gamma))
+
+        # 步骤3: 行动网络(分类) -> 已通过共享 lm_head 权重实现
+        # self.action_cls_layer 与 self.lm_head 是同一对象，权重已继承
+
+        # 步骤4: 行动网络(回归) -> 常规初始化 (PyTorch 默认的 Kaiming He 初始化)
+        # 此处无需额外操作，保持默认初始化即可实现小权重效果
+        
+        print("CausalQwen's custom weights have been initialized.")
 
     def forward(
         self,
-        input_ids: torch.LongTensor = None,
-        numerical_values: Optional[torch.FloatTensor] = None, # CausalQwen 新增输入
+        input_ids: torch.LongTensor,
+        numeric_values: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
-        numerical_labels: Optional[torch.FloatTensor] = None, # CausalQwen 新增标签
+        numeric_labels: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, CausalLMOutputWithPast]:
-
-        # --- 模块一 & 二：数值感知嵌入 + 特征提取 ---
-        # 在这个极简版中，我们假设数值嵌入已在输入端处理完毕。
-        # 我们直接调用基座模型的 transformer 部分来获取上下文特征 z。
+    ) -> CausalLMOutputWithPast:
+        
+        # B, S = input_ids.shape
+        
+        # --- 模块一: 数值感知嵌入 ---
+        # 1. 词元嵌入
+        base_embeddings = self.model.embed_tokens(input_ids)
+        
+        # 2. 数值编码与融合
+        # numeric_values 如果没有提供，则视为全零
+        if numeric_values is None:
+            numeric_values = torch.zeros_like(input_ids, dtype=torch.float32)
+            
+        # φ(v) = sign(v) * ln(1 + |v|) * e_vec
+        # numeric_values [B, S] -> [B, S, 1] 以便广播
+        phi_v = torch.sign(numeric_values) * torch.log1p(torch.abs(numeric_values))
+        numeric_encoding = phi_v.unsqueeze(-1) * self.numeric_direction
+        
+        enhanced_embeddings = base_embeddings + numeric_encoding
+        
+        # --- 模块二: 特征提取网络 (Qwen主干) ---
+        # 直接调用父类的 transformer 模型部分
         transformer_outputs = self.model(
-            input_ids=input_ids,
+            inputs_embeds=enhanced_embeddings,
             attention_mask=attention_mask,
-            position_ids=position_ids,
             past_key_values=past_key_values,
             use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
-        # 上下文特征 z, 形状: [batch_size, seq_len, hidden_size]
-        z = transformer_outputs[0]
-
-        # --- 模块三：归因推断网络 (Abduction Network) ---
-        # 计算因果表征 U ~ Cauchy(loc_U, scale_U) 的分布参数
-        loc_U = self.abduction_loc(z)
-        # 使用 exp 确保尺度 > 0
-        scale_U = torch.exp(self.abduction_scale(z))
-
-        # --- 模块四：行动决策网络 (Action Network) ---
-        # 核心洞察：利用柯西分布的线性稳定性，直接变换分布参数
+        z = transformer_outputs[0] # 上下文特征 z, 形状 [B, S, H]
         
-        # 1. 分类决策 S
-        # loc_S 直接由基座的 lm_head 变换 loc_U 得到
-        loc_S = self.lm_head(loc_U) # 形状: [B, S, V_full]
+        # --- 模块三: 归因推断网络 ---
+        loc_U = self.abduction_loc_layer(z)
+        # 尺度参数需要经过 exp 转换 (因为网络输出的是 log(scale))
+        scale_U = torch.exp(self.abduction_scale_layer(z))
+        
+        # --- 模块四: 行动决策网络 ---
+        # 注意：为简化，此处我们直接用 loc_U 作为下一层的输入。
+        # 严格的柯西线性变换需要同时作用于 loc 和 scale，但此近似在实践中效果良好。
+        
+        # 4.1 分类决策
+        loc_S = self.action_cls_layer(loc_U)
+        # 根据线性变换性质计算 scale_S
+        scale_S = torch.matmul(torch.abs(self.action_cls_layer.weight), scale_U.unsqueeze(-1)).squeeze(-1)
 
-        # scale_S 的变换较为复杂 (涉及权重矩阵的绝对值)，此处简化
-        # 假设 lm_head 的权重为 W_cls，则 scale_S = |W_cls| @ scale_U
-        # 为了简化，我们用一个独立的线性层来近似这个变换
-        # (在实际实现中，这部分会有更精巧的处理)
-        # 为保持极简，我们在此处假设一个固定的尺度
-        scale_S = torch.ones_like(loc_S) * 1.0
+        # 4.2 回归决策
+        loc_Y = self.action_reg_loc_layer(loc_U).squeeze(-1) # [B, S, 1] -> [B, S]
+        scale_Y = torch.abs(self.action_reg_scale_layer(loc_U)).squeeze(-1) # 同样，简化处理
 
-        # 2. 回归决策 Y
-        loc_Y = self.action_reg_loc(loc_U).squeeze(-1) # 形状: [B, S]
-        scale_Y = torch.exp(self.action_reg_scale(loc_U)).squeeze(-1) # 形状: [B, S]
-
-        # --- 模块五：损失计算 (Loss Calculation) ---
+        # --- 模块五: 损失计算 ---
         total_loss = None
         if labels is not None:
-            # 将 labels 移动到与 loc_S 相同的设备
-            labels = labels.to(loc_S.device)
-            loss = 0.0
-
-            # 1. OvR 分类损失
-            # 计算柯西分布的累积分布函数 (CDF) 来得到概率
-            # P(S_k > C_k), C_k 是决策阈值
-            probs_S = 0.5 + torch.atan((loc_S - OVR_THRESHOLD) / scale_S) / torch.pi
+            # 1. 计算 OvR 分类损失
+            # P_k,i = 1/2 + 1/pi * arctan((loc_S - C_k) / scale_S)
+            scores = (loc_S - self.ovr_threshold) / scale_S
+            probs = 0.5 + torch.arctan(scores) / math.pi
             
-            # 使用二元交叉熵 (BCE)
-            # 将 labels 转换为 one-hot 编码
-            y_one_hot = F.one_hot(labels, num_classes=self.config.vocab_size).float()
-            cls_loss = F.binary_cross_entropy_with_logits(loc_S, y_one_hot, reduction='none').mean()
-            loss += cls_loss
-
-            # 2. 门控回归损失
-            if numerical_labels is not None:
-                numerical_labels = numerical_labels.to(loc_Y.device)
-                
-                # a. 计算基础柯西负对数似然 (NLL)
-                cauchy_nll = torch.log(torch.pi * scale_Y) + \
-                             torch.log(1 + ((numerical_labels - loc_Y) / scale_Y).pow(2))
-
-                # b. 计算门控权重
-                # 掩码 m_i: 只在真实标签是 <NUM> 的位置计算回归损失
-                mask_m = (labels == NUM_TOKEN_ID).float()
-                
-                # 获取 P_<NUM>,i 概率
-                prob_num = probs_S[:, :, NUM_TOKEN_ID]
-                
-                # 计算门控
-                gate = mask_m * (GATE_ALPHA + (1 - GATE_ALPHA) * prob_num)
-                
-                # c. 应用门控
-                reg_loss_gated = (gate * cauchy_nll).mean()
-                loss += REG_LOSS_WEIGHT * reg_loss_gated
+            # 使用 one_hot 标签计算二元交叉熵
+            cls_labels = F.one_hot(labels, num_classes=self.config.vocab_size).float()
+            # 此处 V_full 包括了 <NUM>，需要对齐
+            # 简化起见，我们假设 labels 中不包含 <NUM>_ID，所以 one_hot 维度正确
+            loss_cls = F.binary_cross_entropy(probs, cls_labels)
             
-            total_loss = loss
+            # 2. 计算门控回归损失
+            loss_reg_gated = torch.tensor(0.0, device=self.device)
+            if numeric_labels is not None:
+                # 获取 P_<NUM>
+                # 假设 <NUM>_ID 是词汇表的最后一个
+                num_token_id = self.config.vocab_size -1 
+                p_num = probs[:, :, num_token_id]
+                
+                # 获取掩码 m_i
+                mask = (numeric_labels != 0).float()
+                
+                # alpha 默认为 0
+                gate = mask * p_num
+                
+                # 柯西负对数似然
+                cauchy_nll = torch.log(math.pi * scale_Y) + torch.log1p(((numeric_labels - loc_Y) / scale_Y).pow(2))
+                
+                loss_reg_gated = (gate * cauchy_nll).mean()
 
-        # 返回 Hugging Face 风格的输出对象
+            # 3. 合并总损失
+            lambda_reg = 0.5 # 回归损失的权重
+            total_loss = loss_cls + lambda_reg * loss_reg_gated
+
         return CausalLMOutputWithPast(
             loss=total_loss,
-            logits=loc_S,  # loc_S 可以作为传统 logits 使用
+            logits=loc_S, # 将 loc_S 作为传统 logits 输出以便兼容
+            # 可以自定义输出更多内容，如 loc_Y, scale_Y 等
             past_key_values=transformer_outputs.past_key_values,
             hidden_states=transformer_outputs.hidden_states,
             attentions=transformer_outputs.attentions,
@@ -142,63 +181,70 @@ class CausalQwenForCausalLM(Qwen2ForCausalLM):
 
 
 if __name__ == '__main__':
-    import torch.nn.functional as F
-
-    # --- 使用示例 ---
-    # 注意: 请将 '~/models/Qwen2.5-0.5B' 替换为你的实际模型路径
-    model_path = 'Qwen/Qwen2.5-0.5B' # 如果已登录 huggingface-cli,可以直接使用
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        model = CausalQwenForCausalLM.from_pretrained(model_path, trust_remote_code=True)
-    except Exception as e:
-        print(f"模型加载失败，请检查路径 '{model_path}' 是否正确。错误: {e}")
-        print("将使用随机初始化的模型进行演示。")
-        from transformers import Qwen2Config
-        config = Qwen2Config.from_pretrained("~/models/Qwen2.5-0.5B")
-        model = CausalQwenForCausalLM(config)
-
-
-    print("模型加载成功！")
-    model.eval()
-
-    # --- 构造伪数据 ---
-    text = "这件衣服的价格是 <|extra_0|> 元，那件是 200 元。"
-    # 在这个例子中，我们用 <|extra_0|> (ID: 151646) 作为 <NUM> 的代理
+    # === 使用示例 ===
     
-    inputs = tokenizer(text, return_tensors="pt")
-    input_ids = inputs.input_ids
-    
-    # 构造标签 (向右移动一位)
-    labels = input_ids.clone()[:, 1:].contiguous()
-    input_ids = input_ids[:, :-1].contiguous()
-    
-    # 构造对应的数值标签
-    # 序列: "这件", "衣服", "的", "价格", "是", " <|extra_0|>", " 元", "，", "那件", "是", " 200"
-    # 假设分词后，<|extra_0|> 在第 5 个位置 (index=5)
-    # 真实数值为 99.9
-    numerical_labels = torch.zeros_like(labels, dtype=torch.float)
-    if labels.shape[1] > 5:
-      numerical_labels[0, 5] = 99.9 
+    # 1. 加载预训练的 Qwen 模型和分词器
+    # 确保你已经下载了模型到指定路径
+    if not os.path.exists(QWEN_MODEL_PATH):
+        print(f"Model path not found: {QWEN_MODEL_PATH}")
+        print("Please download Qwen2.5-0.5B model first.")
+    else:
+        base_model = Qwen2ForCausalLM.from_pretrained(QWEN_MODEL_PATH)
+        tokenizer = AutoTokenizer.from_pretrained(QWEN_MODEL_PATH)
+        
+        # 添加 <NUM> 词元
+        if '<NUM>' not in tokenizer.get_vocab():
+            tokenizer.add_tokens(['<NUM>'])
+            base_model.resize_token_embeddings(len(tokenizer))
+            print("Added <NUM> token.")
 
-    print(f"输入 input_ids 形状: {input_ids.shape}")
-    print(f"分类 labels 形状: {labels.shape}")
-    print(f"数值 numerical_labels 形状: {numerical_labels.shape}")
-    print("-" * 20)
+        # 2. 实例化 CausalQwen
+        causal_model = CausalQwen(base_model.config)
+        # 加载预训练权重 (除新增部分外)
+        causal_model.load_state_dict(base_model.state_dict(), strict=False)
+        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        causal_model.to(device)
+        causal_model.eval()
 
-    # --- 前向传播与损失计算 ---
-    with torch.no_grad():
-        outputs = model(
-            input_ids=input_ids,
-            labels=labels,
-            numerical_labels=numerical_labels
-        )
-    
-    print(f"计算出的总损失 (Total Loss): {outputs.loss}")
-    # loc_S 可以被视为传统的 logits
-    print(f"输出 logits (loc_S) 形状: {outputs.logits.shape}")
+        # 3. 准备输入数据
+        text = "这家餐厅的评分是4.5分，价格是99.8元。"
+        
+        # 手动实现分词与数值识别逻辑 (简化版)
+        tokens = []
+        numerics = []
+        import re
+        parts = re.split(r'(\d+\.?\d*)', text)
+        for part in parts:
+            if re.match(r'\d+\.?\d*', part) and part:
+                tokens.append('<NUM>')
+                numerics.append(float(part))
+            elif part:
+                toks = tokenizer.tokenize(part)
+                tokens.extend(toks)
+                numerics.extend([0.0] * len(toks))
 
-    # --- 检查回归输出 ---
-    # 在 forward 方法中，我们可以抽取出 loc_Y 和 scale_Y 进行检查
-    # (为保持 main 函数简洁，此处不重复调用 forward)
-    # 假设我们能拿到 loc_Y, 它的形状应该是 [batch_size, seq_len]
-    print(f"回归值位置参数 (loc_Y) 的期望形状: [{input_ids.shape[0]}, {input_ids.shape[1]}]")
+        input_ids = tokenizer.convert_tokens_to_ids(tokens)
+        input_ids = torch.tensor([input_ids], device=device)
+        numeric_values = torch.tensor([numerics], device=device, dtype=torch.float32)
+
+        print(f"Input Text: {text}")
+        print(f"Tokenized input_ids: {input_ids.shape}\n{input_ids}")
+        print(f"Numeric values: {numeric_values.shape}\n{numeric_values}")
+        
+        # 4. 执行前向传播
+        with torch.no_grad():
+            outputs = causal_model(input_ids=input_ids, numeric_values=numeric_values)
+
+        # 5. 查看输出
+        print("\n--- Model Output ---")
+        # loc_S 作为传统 logits
+        logits = outputs.logits
+        print(f"Output logits shape: {logits.shape}") # [B, S, V_full]
+        
+        # 打印最后一个 token 的预测
+        next_token_logits = logits[0, -1, :]
+        predicted_token_id = torch.argmax(next_token_logits).item()
+        predicted_token = tokenizer.decode(predicted_token_id)
+        
+        print(f"Predicted next token: '{predicted_token}' (ID: {predicted_token_id})")
