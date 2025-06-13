@@ -115,13 +115,77 @@ def main():
             attention_mask=attention_mask
         )
         
-        reg_loss = loss_dict.get('reg_loss')
+        reg_loss_diluted = loss_dict.get('reg_loss')
+        effective_reg_loss = loss_dict.get('effective_reg_loss')
         
         print(f"\n   - 计算得到的总损失 (Total Loss): {loss_dict['total']:.4f}")
         print(f"   - 计算得到的分类损失 (Classification Loss): {loss_dict['cls_loss']:.4f}")
-        print(f"   - 计算得到的回归损失 (Regression Loss): {reg_loss:.4f}")
+        print(f"   - (被稀释的)回归损失 (Diluted Regression Loss): {reg_loss_diluted:.4f}")
+        print(f"   - 有效的回归损失 (Effective Regression Loss): {effective_reg_loss:.4f}")
         print(f"   - 门控权重均值: {loss_dict.get('gate_weights_mean', -1):.4f}")
-        print(f"   - (理论: 回归损失应该只由包含数值的样本贡献)")
+        print(f"   - (注: '有效回归损失'只在有数值的位置上求平均，是更有意义的指标)")
+
+        # --- 步骤 6: 深入验证门控回归损失的逐词元行为 ---
+        print_step("步骤 6", "深入验证门控回归损失的逐词元行为")
+        print("   - 核心: 验证柯西NLL是否只在 `num_mask` 为1的位置被计算。")
+
+        # 为了拿到逐词元的损失，我们需要手动调用底层函数
+        from src.losses.loss_functions import gated_regression_loss
+        from src.utils.losses import compute_ovr_probabilities
+
+        # a. 获取模型输出
+        cls_loc = outputs['cls_loc']
+        cls_scale = outputs['cls_scale']
+        reg_loc = outputs['reg_loc']
+        reg_scale = outputs['reg_scale']
+        
+        # b. 计算 <NUM> 概率 和 mask
+        cls_probs = compute_ovr_probabilities(cls_loc, cls_scale, model.config.ovr_threshold)
+        num_probs = cls_probs[:, :, num_token_id]
+        num_mask = (cls_labels == num_token_id).float() * attention_mask
+
+        # c. 计算门控权重 (与模型内部逻辑一致)
+        alpha = model.config.reg_loss_gating_alpha
+        gate_weights = num_mask * (alpha + (1 - alpha) * num_probs)
+
+        # d. 计算逐词元的回归损失 (不降维)
+        per_token_reg_loss = gated_regression_loss(
+            reg_loc, reg_scale, numerical_values,
+            gate_prob=num_probs,
+            mask=num_mask,
+            alpha=alpha,
+            reduction='none'
+        )
+
+        # e. 打印关键样本的详细信息
+        for i, sample_name in [(0, "无 数值"), (1, "有 数值")]:
+            print(f"\n   --- 样本 {i+1} ({sample_name}) ---")
+            print(f"     回归目标: {numerical_values[i].cpu().numpy().round(1)}")
+            print(f"     数值掩码: {num_mask[i].cpu().numpy().astype(int)}")
+            print(f"     门控权重: {gate_weights[i].cpu().numpy().round(2)}")
+            print(f"     逐词元损失: {per_token_reg_loss[i].cpu().numpy().round(2)}")
+
+        # --- 步骤 7: 详细分析 <NUM> 位置的回归预测 ---
+        print_step("步骤 7", "详细分析 <NUM> 位置的回归预测")
+        reg_loc_Y = outputs['reg_loc']
+        reg_scale_Y = outputs['reg_scale']
+
+        for i in range(input_ids.shape[0]):
+            num_positions_mask = (input_ids[i] == num_token_id)
+            if num_positions_mask.any():
+                num_indices = num_positions_mask.nonzero(as_tuple=True)[0]
+                
+                print(f"\n   --- 样本 {i+1}: '{test_samples[i]}' ---")
+                for idx in num_indices:
+                    true_value = numerical_values[i, idx].item()
+                    # 仅当真实值不为0时才打印，因为0是默认填充值
+                    if true_value != 0.0:
+                        pred_loc = reg_loc_Y[i, idx].item()
+                        pred_scale = reg_scale_Y[i, idx].item()
+                        
+                        print(f"     - 在位置 {idx.item()}:")
+                        print(f"       - 真实值 (Target): {true_value:.2f}")
+                        print(f"       - 预测分布 (Predicted Cauchy): loc={pred_loc:.4f}, scale={pred_scale:.4f}")
 
     print(f"\n\n{'='*80}")
     print("🎉 端到端回归流程验证完成！")

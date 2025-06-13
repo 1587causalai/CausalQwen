@@ -152,8 +152,21 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
     $$
     其中 $m_i$ 是指示真实标签是否为`<NUM>`的掩码, $\alpha$ 是一个可调的门控系数(默认选择0, 方便模型先学会分类再学回归)。
 
-最终的总损失是这两者的加权和: 
-$$\mathcal{L}_{\text{total}} = \sum_{i=1}^{S} \left(\mathcal{L}_{\text{cls},i} + \lambda \cdot \mathcal{L}_{\text{reg\_gated},i}\right)$$
+**总损失的合并 (Corrected)**
+
+最终的总损失由平均分类损失和有效的平均回归损失加权构成。关键在于，这两种损失在求平均时使用了不同的基数（分母），以确保回归信号的强度，避免其因数值词元的稀疏性而被"稀释"。
+
+1.  **平均分类损失 ($\mathcal{L}_{\text{cls\_mean}}$)**: 对所有真实词元（排除填充词元）的分类损失求平均。
+    $$ \mathcal{L}_{\text{cls\_mean}} = \frac{\sum_{b,i} (\mathcal{L}_{\text{cls}, b,i} \cdot \text{attention\_mask}_{b,i})}{\sum_{b,i} \text{attention\_mask}_{b,i}} $$
+
+2.  **有效回归损失 ($\mathcal{L}_{\text{reg\_eff}}$)**: 只对真实标签为 `<NUM>` 的词元（这些词元也必然是真实词元）的回归损失求平均。
+    $$ \mathcal{L}_{\text{reg\_eff}} = \frac{\sum_{b,i} \mathcal{L}_{\text{reg\_gated},b,i}}{\sum_{b,i} m_{b,i}} $$
+    其中分母 $\sum m_{b,i}$ 是批次中所有数值词元的总数。
+
+3.  **最终总损失 ($\mathcal{L}_{\text{total}}$)**:
+    $$ \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls\_mean}} + \lambda \cdot \mathcal{L}_{\text{reg\_eff}} $$
+
+这种分离求平均的方式是模型能够同时有效学习分类和回归任务的关键。
 
 ## 3. 推理阶段：生成预测 (Inference)
 
@@ -519,20 +532,37 @@ graph TD
 
 ```mermaid
 graph TD
-    A["<b>分类损失 L_cls</b><br>形状: [B, S]"]
-    B["<b>门控回归损失 L_reg_gated</b><br>形状: [B, S]"]
+    subgraph "Inputs"
+        A["<b>分类损失 L_cls</b><br>[B, S]"]
+        B["<b>门控回归损失 L_reg_gated</b><br>[B, S]"]
+        C["<b>注意力掩码 attention_mask</b><br>[B, S]"]
+        D["<b>数值位置掩码 m</b><br>[B, S]"]
+    end
 
-    C[逐元素加权求和 L_token <br>= L_cls + λ * L_reg_gated]
-    A & B --> C
-    
-    C --> D["<b>逐词元总损失 L_token</b><br>形状: [B, S]"]
-    D -- "在批次(B)和序列(S)维度上<br>求和或求平均" --> E
+    subgraph "分类损失路径"
+        A & C --> E["带掩码的分类损失<br>L_cls * attention_mask"]
+        E -- "求和后除以 attention_mask.sum()" --> F["<b>平均分类损失 L_cls_mean</b><br>(标量)"]
+    end
 
-    E["<b>最终总损失</b><br> L_total(标量)"]
+    subgraph "回归损失路径"
+        B & D --> G["门控回归损失<br>(已包含掩码 m)"]
+        G -- "求和后除以 m.sum()" --> H["<b>有效回归损失 L_reg_eff</b><br>(标量)"]
+    end
 
-    style E fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    subgraph "合并"
+        F & H --> I["加权求和<br>L_total = L_cls_mean + λ * L_reg_eff"]
+        I --> J["<b>最终总损失 L_total</b><br>(标量)"]
+    end
+
+    style J fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    style C fill:#f1f8e9
+    style D fill:#f1f8e9
 ```
-* **解读**：将形状为 `[B, S]` 的 `L_cls` 和 `L_reg_gated` 逐元素地加权求和，得到一个同样形状的 `L_token` 张量。这个张量代表了批次中每个位置的最终损失。最后，对这个张量中的所有元素求和或求平均，将其" réduction (降维)"为一个**标量（Scalar）**，这个标量就是驱动整个模型参数更新的最终 `L_total`。
+* **关键修正与解读**：我们**不能**简单地将 `L_cls` 和 `L_reg_gated` 逐元素相加再求平均。由于数值 (`<NUM>`) 词元在文本中是**稀疏**的，`L_reg_gated` 张量中绝大部分元素为零。如果直接求平均，回归损失的信号会被严重"稀释"，无法有效指导模型优化。
+* **正确流程**：正确的做法是分别对两个损失进行归约，然后再合并：
+   1.  **分类损失**：对 `L_cls` 张量应用 `attention_mask` 来排除填充词元，然后求平均，得到一个标量 `L_cls_mean`。
+   2.  **回归损失**：`L_reg_gated` 已经由数值掩码 `m` 处理过，我们只需对其求和，然后**只除以批次中有效数值位置的总数 `m.sum()`**，得到 `L_reg_eff`。这确保了我们计算的是每个数值位置的平均损失。
+   3.  **最终合并**：最终的总损失是这两个标量的加权和： `L_total = L_cls_mean + λ * L_reg_eff`。
 
 
 

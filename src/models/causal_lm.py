@@ -455,6 +455,7 @@ class CausalLanguageModel(nn.Module):
             'loss': loss_dict['total'],       # 向后兼容
             'cls_loss': loss_dict['cls'],     # 向后兼容
             'reg_loss': loss_dict['reg'],     # 向后兼容
+            'effective_reg_loss': loss_dict['effective_reg_loss'], # 新增：更有意义的回归损失
             'gate_weights_mean': loss_dict['avg_gate_weight'],
             'num_positions': loss_dict['num_positions'].item(),
             'num_prob_mean': loss_dict['avg_gate_weight']  # 平均门控权重反映了平均概率
