@@ -444,7 +444,8 @@ class CausalLanguageModel(nn.Module):
             num_mask=num_mask,
             cls_weight=1.0,
             reg_weight=self.config.reg_loss_weight,
-            gating_alpha=self.config.reg_loss_gating_alpha
+            gating_alpha=self.config.reg_loss_gating_alpha,
+            attention_mask=active_mask
         )
         
         # 返回格式化的结果 - 保持与测试一致的键名

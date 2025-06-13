@@ -186,7 +186,7 @@ def compute_total_loss(cls_probs: torch.Tensor, cls_targets: torch.Tensor,
                       reg_loc: torch.Tensor, reg_scale: torch.Tensor, reg_targets: torch.Tensor,
                       num_probs: torch.Tensor, num_mask: torch.Tensor,
                       cls_weight: float = 1.0, reg_weight: float = 1.0,
-                      gating_alpha: float = 1.0) -> dict:
+                      gating_alpha: float = 1.0, attention_mask: Optional[torch.Tensor] = None) -> dict:
     """
     计算总损失函数（支持混合门控策略）。
     
@@ -201,6 +201,7 @@ def compute_total_loss(cls_probs: torch.Tensor, cls_targets: torch.Tensor,
         cls_weight: 分类损失权重
         reg_weight: 回归损失权重
         gating_alpha: 门控系数 (1.0 = 无门控, 0.0 = 完全门控)
+        attention_mask: 注意力掩码 [batch_size, seq_len]
         
     Returns:
         Dict containing total loss and component losses
@@ -225,22 +226,29 @@ def compute_total_loss(cls_probs: torch.Tensor, cls_targets: torch.Tensor,
         gate_weights = num_mask.float() * (gating_alpha + (1 - gating_alpha) * num_probs)
     
     # 4. 聚合损失
-    cls_loss_mean = cls_loss.mean()
-    reg_loss_mean = reg_loss.mean()
+    # 修正：分类损失只应在 attention_mask 的有效位置上求平均
+    if attention_mask is not None:
+        cls_loss_mean = (cls_loss * attention_mask).sum() / attention_mask.sum().clamp(min=1e-8)
+    else:
+        cls_loss_mean = cls_loss.mean()
+
+    # 有效回归损失（只在有数值的位置上求平均）
+    effective_reg_loss = reg_loss.sum() / (num_mask.sum() + 1e-8)
     
     # 5. 总损失
-    total_loss = cls_weight * cls_loss_mean + reg_weight * reg_loss_mean
+    # 修正：总损失应该使用 effective_reg_loss，而不是被稀释的 reg_loss.mean()
+    total_loss = cls_weight * cls_loss_mean + reg_weight * effective_reg_loss
     
     return {
         'total': total_loss,
         'cls': cls_loss_mean,
-        'reg': reg_loss_mean,
+        'reg': reg_loss.mean(), # 保留被稀释的损失以供观察
         # 提供更详细的统计信息
         'cls_per_position': cls_loss,  # [batch_size, seq_len]
         'reg_per_position': reg_loss,  # [batch_size, seq_len]
         'gate_weights': gate_weights,  # [batch_size, seq_len]
         'num_positions': num_mask.sum(),  # 实际的数值位置数量
-        'effective_reg_loss': reg_loss.sum() / (num_mask.sum() + 1e-8),  # 每个数值位置的平均损失
+        'effective_reg_loss': effective_reg_loss,  # 每个数值位置的平均损失
         'avg_gate_weight': gate_weights.sum() / (num_mask.sum() + 1e-8),  # 平均门控权重
         'gating_alpha': gating_alpha  # 记录使用的门控系数
     }
