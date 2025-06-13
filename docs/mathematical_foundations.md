@@ -33,7 +33,7 @@
 
 -   **输出**: 
     - `input_ids` $[x_1, ..., x_S]$: `['价格', '是', '<NUM>', '元']` → `[12345, 67890, <NUM_ID>, 11111]` (形状: `[B, S]`)
-    - `numerical_values` $[v_1, ..., v_S]$: `[0.0, 0.0, 99.9, 0.0]` (形状: `[B, S]`)
+    - `numeric_values` $[v_1, ..., v_S]$: `[0.0, 0.0, 99.9, 0.0]` (形状: `[B, S]`)
 
 #### 2.词元嵌入
 将词元ID序列转换为基础嵌入向量：
@@ -48,7 +48,7 @@
 
 -   **输入**: 
     - `base_embeddings` (形状: `[B, S, H]`)
-    - `numerical_values` (形状: `[B, S]`)
+    - `numeric_values` (形状: `[B, S]`)
 -   **处理**: 对每个位置 $i$，计算增强嵌入：
     $$e_i = \text{base\_embed}_i + \phi(v_i)$$
     数值编码函数：
@@ -67,11 +67,11 @@
 原始文本: "价格是99.9元"
      ↓ (分词器)
 input_ids: [12345, 67890, <NUM_ID>, 11111]
-numerical_values: [0.0, 0.0, 99.9, 0.0]
+numeric_values: [0.0, 0.0, 99.9, 0.0]
      ↓ (嵌入层)
 base_embeddings: [[e1], [e2], [e3], [e4]]  # 每个ei是H维向量
      ↓ (数值编码)
-φ(numerical_values): [[0], [0], [φ(99.9)], [0]]  # φ(99.9) = ln(100.9) * ê
+φ(numeric_values): [[0], [0], [φ(99.9)], [0]]  # φ(99.9) = ln(100.9) * ê
      ↓ (融合)
 enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 ```
@@ -141,7 +141,7 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 
 -   **输入**: 
     - 回归决策分布参数: `loc_Y`, `scale_Y` (形状: `[B, S]`)
-    - 真实数值: `true_numerical_values` (形状: `[B, S]`)
+    - 真实数值: `true_numeric_values` (形状: `[B, S]`)
     - `<NUM>`词元的预测概率: $P_{\text{<NUM>},i}$
 -   **处理**: 基于分类概率加权的柯西负对数似然损失， 计算序列的位置 `i` 处回归总损失：
     $$
@@ -322,7 +322,7 @@ graph TD
 graph TD
     A["原始输入<br><i>'价格是99.9元'</i>"] --> B{"分词器"};
     B --> C["词元 ID 序列<br>input_ids"];
-    B --> D["对齐的数值<br>numerical_values"];
+    B --> D["对齐的数值<br>numeric_values"];
     
     C --> E["词元嵌入层"];
     E --> F["基础嵌入<br>base_embeddings"];
@@ -359,10 +359,12 @@ graph TD
 
 ---
 
-### 图 4：详解步骤 4 - 三种推理模式
+### 图 4：详解步骤 4 
+
+
+#### 4.1 CausalQwen 三种推理模式
 
 这张图从决策分布 `S` 和 `Y` 出发，清晰地展示了三种不同的预测生成方式。
-
 ```mermaid
 graph TD
     A["<b>个体因果表征 U</b><br>Uᵢ ~ Cauchy(loc, scale)"];
@@ -373,17 +375,17 @@ graph TD
     end
 
     subgraph "模式三：确定性推理 (默认)"
-        B -- "计算 OvR 概率" --> D["<b>分类预测</b><br>argmax_k P(S_{k,i} > C_k)"];
-        C -- "取位置参数" --> E["<b>回归预测</b><br>ŷ_reg = loc_{Y_i}"];
+        B -- "计算 OvR 概率" --> D["<b>分类预测 ŷ_cls </b><br> argmax_k P(S_{k,i} > C_k)"];
+        C -- "取位置参数" --> E["<b>回归预测 ŷ_reg </b><br> loc_{Y_i}"];
     end
     subgraph "模式二：兼容传统采样"
         B -- "取 loc_S 作为 logits" --> H["Softmax(loc_S)"];
-        H --> I["<b>Top-k / Top-p 采样预测</b>"];
+        H --> I["<b>Top-k / Top-p 采样预测</b> <br> ŷ_cls"];
     end
 
     subgraph "模式一：因果采样"
         A -- "（阈值）采样**原因**" --> F["得到具体个体 uᵢ"];
-        F -- "传入'行动网络'" --> G["<b>确定性的分类/回归预测</b>"];
+        F -- "传入'行动网络'" --> G["<b>确定性的分类/回归预测</b> <br> ŷ_cls, ŷ_reg"];
     end
 
 
@@ -394,6 +396,43 @@ graph TD
     style G fill:#fce4ec,stroke:#880e4f
     style I fill:#fce4ec,stroke:#880e4f
 ```
+
+#### 4.2 CausalQwen 自回归生成流程图
+
+```mermaid
+graph TD
+    A["<b>开始：初始输入 (Prompt)</b>"] --> B{"Tokenize"};
+    B --> C["<b>生成初始序列对</br>词元序列: [x_1, ..., x_T]<br> 数值序列: [v_1, ..., v_T]"];
+    C --> D["<b>进入循环</b>"] --> Loop;
+
+    subgraph "自回归循环 (t = T, T+1, ...)"
+        Loop["<b>1.将当前<u>序列对</u>送入模型</b><br> input_ids, numeric_values"];
+        Loop --> E["<b>2.模型前向传播</b>"];
+        E --> F["<b>3.获取下一词元(t+1)的预测</b><br>ŷ_cls (预测词元ID)<br>ŷ_reg (预测回归值)"];
+        
+        F --> G{"预测词元ŷ_cls是NUM词元？"};
+
+        G -- "<b>是 (Yes)</b>" --> H["<b>更新序列对:</b><br>input_ids.append(&lt;NUM_ID&gt;)<br>numeric_values.append(<b>ŷ_reg</b>)"];
+        H --> I["(同时，将数值 ŷ_reg 转为文本追加到生成结果)"];
+
+        G -- "<b>否 (No)</b>" --> J["<b>更新序列对:</b><br>input_ids.append(ŷ_cls)<br>numeric_values.append(<b>0.0</b>)"];
+        J --> I["(同时，将词元ŷ_cls转为文本追加到生成结果)"];
+        
+        I --> K{"是EOS词元或<br>已达最大长度？"};
+        
+        K -- "否 (No), 继续循环" --> L["t = t + 1"];
+        L --> Loop;
+    end
+    
+    K -- "是 (Yes), 结束循环" --> M["<b>结束：输出完整生成文本</b>"];
+
+    style C fill:#e8f5e9,stroke:#1b5e20
+    style H fill:#fff3e0,stroke:#e65100
+    style J fill:#e3f2fd,stroke:#1b5e20
+    style M fill:#e8f5e9,stroke:#1b5e20
+
+``` 
+
 
 
 ### 图 5：损失流程图
