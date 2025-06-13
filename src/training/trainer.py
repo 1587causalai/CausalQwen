@@ -105,7 +105,9 @@ class Trainer:
         labels[:, -1] = -100  # Last position has no next token to predict
         
         # Target values: numerical values for positions where label is <NUM>
-        target_values = torch.full_like(numerical_values, float('nan'))
+        # 用 0.0 填充，而不是 'nan'，以避免不必要的 nan 值在计算中传播。
+        # 门控机制会确保这些 0.0 不会影响最终的回归损失。
+        target_values = torch.zeros_like(numerical_values, dtype=torch.float)
         shifted_numerical_values = numerical_values.clone()
         shifted_numerical_values[:, :-1] = numerical_values[:, 1:].clone()  # Shift left 
         shifted_numerical_values[:, -1] = 0.0  # Last position default
