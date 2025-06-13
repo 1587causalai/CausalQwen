@@ -8,9 +8,13 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 import numpy as np
+import wandb
 
 from ..data.synthetic import TextWithNumbersGenerator
 from ..utils.losses import CausalLMLoss, compute_ovr_probabilities
+from ..models.causal_lm import CausalLMConfig
+from ..data.tokenizer import QwenTokenizerWrapper
+from ..data.synthetic_data_generator import SyntheticDataGenerator
 
 class Trainer:
     """Handles the training loop, optimizer, and data loading for fine-tuning."""
@@ -49,46 +53,26 @@ class Trainer:
         
         print(f"   - 回归损失门控策略: {gating_strategy}")
         
-        # Calculate data statistics for initialization
-        print("Pre-calculating data statistics for initialization...")
-        temp_dataloader = self._create_training_data(1000, shuffle=False)
-        all_target_values = []
-        for batch in temp_dataloader:
-            # batch is now: [input_ids, attention_mask, numerical_values, labels, target_values]
-            # target_values is [B, S] with NaN for non-numerical positions
-            batch_target_values = batch[4]  # [B, S]
-            # Only collect non-NaN values  
-            valid_values = batch_target_values[~torch.isnan(batch_target_values)]
-            if valid_values.size(0) > 0:
-                all_target_values.append(valid_values)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.learning_rate)
         
-        if all_target_values:
-            all_target_values = torch.cat(all_target_values)
-            # 对于柯西分布，使用中位数估计位置参数，使用 IQR/2 估计尺度参数
-            self.num_target_median = torch.median(all_target_values).item()
-            # 计算四分位数
-            q1 = torch.quantile(all_target_values, 0.25).item()
-            q3 = torch.quantile(all_target_values, 0.75).item()
-            # 柯西分布的尺度参数估计：IQR / 2 (因为柯西分布的IQR ≈ 2 * scale)
+        # 获取数据集的统计数据，用于初始化和采样
+        if hasattr(self.model.config, 'use_real_qwen') and self.model.config.use_real_qwen:
+            print("Pre-calculating data statistics for initialization...")
+            # 使用 TextWithNumbersGenerator 生成样本并计算统计数据
+            stats_generator = TextWithNumbersGenerator(seed=42)
+            _, values = stats_generator.generate_text(num_samples=1000)
+            all_values = torch.tensor(values)
+
+            self.num_target_median = torch.median(all_values).item()
+            q1 = torch.quantile(all_values, 0.25).item()
+            q3 = torch.quantile(all_values, 0.75).item()
             self.num_target_scale = (q3 - q1) / 2.0
+
             print(f"  - Calculated Median (location): {self.num_target_median:.2f}")
             print(f"  - Calculated IQR/2 (scale): {self.num_target_scale:.2f}")
-        else:
-            self.num_target_median = 0.0
-            self.num_target_scale = 1.0
-            print("  - No numerical targets found. Using default stats (Median=0, Scale=1).")
-        
-        # Initialize model weights using the new strategy
-        if hasattr(self.model, 'init_weights'):
-            self.model.init_weights(self.num_target_median, self.num_target_scale)
-        
-        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
-        self.loss_fn = CausalLMLoss(
-            num_classes=self.tokenizer.vocab_size,
-            num_token_id=self.tokenizer.num_token_id,
-            regression_weight=self.config.reg_loss_weight,
-            ovr_threshold=self.config.ovr_threshold
-        )
+
+        # 设置损失函数
+        self.criterion = self._get_loss_function()
         
     @staticmethod
     def weights_init(m):
@@ -167,23 +151,24 @@ class Trainer:
                 outputs = self.model(batch_input_ids, batch_numerical_values, batch_attention_mask)
 
                 # Compute loss
-                loss_dict = self.loss_fn(
-                    outputs["cls_loc"], outputs["cls_scale"],
-                    outputs["reg_loc"], outputs["reg_scale"],
-                    batch_labels, batch_target_values
+                loss_dict = self.criterion(
+                    outputs,
+                    batch_labels,
+                    batch_target_values, # target_values are numerical values for <NUM>
+                    attention_mask=batch_attention_mask
                 )
-                loss = loss_dict["loss"]
                 
                 # Backward pass and optimization
                 self.optimizer.zero_grad()
+                loss = loss_dict["total"]
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
                 
                 # --- METRICS LOGGING ---
                 total_loss += loss.item()
-                total_cls_loss += loss_dict["cls_loss"].item()
-                total_reg_loss += loss_dict["gated_reg_loss"].item()
+                total_cls_loss += loss_dict["cls"].item()
+                total_reg_loss += loss_dict["reg"].item()
                 
                 # Classification metrics - compute predictions from model outputs
                 cls_loc = outputs["cls_loc"]  # [B, S, C]
@@ -231,8 +216,8 @@ class Trainer:
 
                     log_data = {
                         "total_loss": loss.item(),
-                        "cls_loss": loss_dict["cls_loss"].item(),
-                        "gated_reg_loss": loss_dict["gated_reg_loss"].item(),
+                        "cls_loss": loss_dict["cls"].item(),
+                        "gated_reg_loss": loss_dict["reg"].item(),
                         "reg_mae": reg_mae,
                         "units_mean_loc": outputs['causal_loc'].mean().item(),
                         "units_mean_scale": outputs['causal_scale'].mean().item(),
@@ -322,3 +307,12 @@ class Trainer:
             })
         
         return metrics
+
+    def _get_loss_function(self):
+        """
+        Returns the loss function based on the model's configuration.
+        """
+        if hasattr(self.model, 'compute_loss'):
+            return self.model.compute_loss
+        else:
+            raise ValueError("No loss function found in the model.")

@@ -32,10 +32,14 @@ class QwenTokenizerWrapper:
             raise NotImplementedError("MockTokenizer is no longer supported. Please use the real tokenizer.")
 
         self.tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        self.num_token = "<NUM>"
         
         # --- Vocab Size Calculation ---
-        # 1. Get the base Qwen vocabulary size before any additions.
+        # 0. Capture the full, configured vocabulary size of the base Qwen model. This includes all reserved slots.
+        self._qwen_config_vocab_size = self.tokenizer.vocab_size
+
+        self.num_token = "<NUM>"
+        
+        # 1. Get the base Qwen vocabulary size before any additions. This might be different from capacity.
         self._qwen_base_vocab_size = len(self.tokenizer)
 
         # 2. Add the <NUM> token.
@@ -46,6 +50,7 @@ class QwenTokenizerWrapper:
         self._causalqwen_vocab_size = len(self.tokenizer)
         
         self.num_token_id = self.tokenizer.convert_tokens_to_ids(self.num_token)
+        self.pad_token_id = self.tokenizer.pad_token_id or self.tokenizer.eos_token_id
         
         # Regex to find numbers (integers, floats, negative numbers)
         self.number_pattern = re.compile(r'(?<![a-zA-Z0-9_])(-?\d+(\.\d+)?)(?![a-zA-Z0-9_])')
@@ -162,11 +167,13 @@ class QwenTokenizerWrapper:
         
         - qwen_base_vocab: The original vocabulary size of the Qwen model.
         - causalqwen_vocab: The base size + 1 (for the <NUM> token). This is the official model vocab size.
+        - config_capacity: The full capacity of the original Qwen model
         - tokenizer_internal_len: The CausalQwen size + 1 (for the internal placeholder). Used by the tokenizer only.
         """
         return {
             "qwen_base_vocab": self._qwen_base_vocab_size,
             "causalqwen_vocab": self._causalqwen_vocab_size,
+            "config_capacity": self._qwen_config_vocab_size, # The full capacity of the original Qwen model
             "tokenizer_internal_len": self._tokenizer_internal_len,
             "num_token_id": self.num_token_id,
         }

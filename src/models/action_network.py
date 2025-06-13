@@ -8,6 +8,7 @@ which transforms the latent causal state into classification and regression outp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional, Dict
 
 from ..utils.distributions import CauchyLinear
 
@@ -167,35 +168,35 @@ class ActionNetwork(nn.Module):
     (classification scores and regression values).
     """
     
-    def __init__(self, causal_dim, vocab_size, num_token_id, ovr_threshold=0.0):
+    def __init__(self, input_dim: int, hidden_size: int, num_token_id: int, vocab_size: Optional[int] = None):
         """
         Initialize the Action Network.
         
         Args:
-            causal_dim (int): Dimensionality of the individual causal representation
-            vocab_size (int): Size of the vocabulary
+            input_dim (int): Dimensionality of the individual causal representation
+            hidden_size (int): Qwen 模型的隐藏维度
             num_token_id (int): The token ID for the <NUM> token.
-            ovr_threshold (float): Decision threshold for OvR classification
+            vocab_size (Optional[int]): Size of the vocabulary. If None, the classification head will not be initialized.
         """
         super().__init__()
-        self.causal_dim = causal_dim
-        self.vocab_size = vocab_size
+        self.input_dim = input_dim
+        self.hidden_size = hidden_size
         self.num_token_id = num_token_id
-        self.ovr_threshold = ovr_threshold
         
-        # Classification head for token prediction
-        # 重要：设置 bias=False 以匹配 Qwen 的设计
-        self.classification_head = ClassificationHead(
-            causal_dim, 
-            vocab_size, 
-            threshold=ovr_threshold,
-            bias=False  # Qwen lm_head 没有偏置
-        )
-        
-        # Regression head for numerical prediction
-        self.regression_head = RegressionHead(causal_dim)
+        # 分类头 - loc 和 scale
+        # 注意：现在分类头可能不会在这里被初始化
+        if vocab_size is not None:
+            self.classification_head = nn.Linear(input_dim, vocab_size, bias=False)
+            self.scale_S_head = nn.Linear(input_dim, vocab_size, bias=True)
+        else:
+            self.classification_head = None
+            self.scale_S_head = None
 
-    def init_weights(self, qwen_lm_head=None, num_target_median=None, num_target_scale=None, num_token_id=None):
+        # 回归头 - loc 和 scale
+        self.regression_head = nn.Linear(input_dim, 1, bias=True)
+        self.scale_Y_head = nn.Linear(input_dim, 1, bias=True)
+
+    def init_weights(self, qwen_lm_head: Optional[nn.Parameter] = None):
         """
         Initialize the weights of the action network.
         
@@ -205,97 +206,99 @@ class ActionNetwork(nn.Module):
         
         Args:
             qwen_lm_head: Qwen's language model head (nn.Linear)
-            num_target_median: Deprecated, no longer used
-            num_target_scale: Deprecated, no longer used
-            num_token_id: The token ID for <NUM> (should be 151665)
         """
         print("🔧 初始化 ActionNetwork...")
         
-        if qwen_lm_head is not None and num_token_id is not None:
-            print("📚 从 Qwen lm_head 进行知识传输...")
-            
-            # 获取维度信息
+        # --- 1. 初始化/创建分类头 ---
+        if qwen_lm_head is not None:
             qwen_vocab_size, qwen_hidden_size = qwen_lm_head.weight.shape
-            our_vocab_size, our_causal_dim = self.classification_head.causal_linear.weight.shape
             
-            print(f"   Qwen lm_head: [{qwen_vocab_size}, {qwen_hidden_size}]")
-            print(f"   CausalQwen 分类头: [{our_vocab_size}, {our_causal_dim}]")
-            
-            # 1. 分类头：知识迁移
-            with torch.no_grad():
-                if our_vocab_size == qwen_vocab_size:
-                    # 完整复制：保持与 Qwen 的完全兼容性
-                    self.classification_head.causal_linear.weight.copy_(
-                        qwen_lm_head.weight
-                    )
-                    print(f"   ✅ 完整复制了所有 {qwen_vocab_size} 个权重")
-                    print(f"      - Qwen 已用词汇: 151,665 个")
-                    print(f"      - 预留位置: 271 个（均已初始化）")
-                    print(f"      - <NUM> token (ID: {num_token_id}): 使用第一个预留位置")
-                elif our_vocab_size < qwen_vocab_size:
-                    # 部分复制（不推荐，但支持）
-                    self.classification_head.causal_linear.weight.copy_(
-                        qwen_lm_head.weight[:our_vocab_size, :]
-                    )
-                    print(f"   ⚠️  部分复制了 {our_vocab_size} 个权重（建议使用完整容量 151936）")
-                else:
-                    raise ValueError(f"CausalQwen vocab size ({our_vocab_size}) > Qwen vocab size ({qwen_vocab_size})")
-                
-                # 检查 Qwen 是否有偏置
-                if hasattr(qwen_lm_head, 'bias') and qwen_lm_head.bias is not None:
-                    print("   ⚠️  Qwen lm_head 有偏置项，但 CausalQwen 设计为无偏置")
-                else:
-                    print("   ✅ Qwen lm_head 无偏置项（符合预期）")
-                
-                # 确保我们的分类头也没有偏置
-                if self.classification_head.causal_linear.bias is not None:
-                    print("   ⚠️  警告：CausalQwen 分类头有偏置，将其置零")
-                    self.classification_head.causal_linear.bias.zero_()
-                
-                # 2. 回归头：小随机初始化
-                print(f"\n🔧 初始化回归头（小随机初始化）...")
-                # 使用小的 Xavier 初始化
-                torch.nn.init.xavier_uniform_(self.regression_head.causal_linear.weight, gain=0.01)
-                if self.regression_head.causal_linear.bias is not None:
-                    self.regression_head.causal_linear.bias.zero_()
-                print(f"   ✅ 使用 Xavier 初始化 (gain=0.01) 实现均匀先验")
+            # 如果分类头还未创建，现在根据 qwen_lm_head 的尺寸创建它
+            if self.classification_head is None:
+                print(f"   创建分类头，尺寸: [{qwen_vocab_size}, {self.input_dim}]")
+                self.classification_head = nn.Linear(self.input_dim, qwen_vocab_size, bias=False).to(qwen_lm_head.weight.device)
+                self.scale_S_head = nn.Linear(self.input_dim, qwen_vocab_size, bias=True).to(qwen_lm_head.weight.device)
 
-            print("   ✅ 知识传输完成")
-            
+            print("📚 从 Qwen lm_head 进行知识传输...")
+            print(f"   Qwen lm_head: {list(qwen_lm_head.weight.shape)}")
+            print(f"   CausalQwen 分类头: {list(self.classification_head.weight.shape)}")
+
+            # 验证尺寸是否匹配
+            if self.classification_head.weight.shape != qwen_lm_head.weight.shape:
+                 raise ValueError(
+                    f"尺寸不匹配! CausalQwen head ({self.classification_head.weight.shape}) "
+                    f"vs Qwen lm_head ({qwen_lm_head.weight.shape})."
+                )
+
+            # 完整复制权重
+            self.classification_head.weight.data.copy_(qwen_lm_head.weight.data)
+            print("   ✅ 权重完全迁移")
+
+            # 验证 Qwen lm_head 是否有偏置项
+            if hasattr(qwen_lm_head, 'bias') and qwen_lm_head.bias is not None:
+                print("   - 警告: Qwen lm_head 包含偏置项，但当前模型未使用。")
+            else:
+                print("   ✅ Qwen lm_head 无偏置项（符合预期）")
+
         else:
-            print("⚠️  未提供 Qwen lm_head 或 num_token_id，使用随机初始化")
-            # 分类头：Xavier 初始化（无偏置）
-            torch.nn.init.xavier_uniform_(self.classification_head.causal_linear.weight)
-            
-            # 回归头：小的 Xavier 初始化
-            torch.nn.init.xavier_uniform_(self.regression_head.causal_linear.weight, gain=0.01)
-            if self.regression_head.causal_linear.bias is not None:
-                self.regression_head.causal_linear.bias.zero_()
+            # 如果没有 qwen_lm_head，则必须在 __init__ 中提供 vocab_size
+            if self.classification_head is None:
+                raise ValueError("没有提供 qwen_lm_head，无法创建分类头。请在初始化时提供 vocab_size。")
+            print("   - 未提供 Qwen lm_head，使用随机初始化分类头。")
+            # 这里可以添加随机初始化逻辑，如果需要的话
+            pass
 
-    def forward(self, causal_loc, causal_scale):
+        # --- 2. 初始化回归头 ---
+        print("\n🔧 初始化回归头（小随机初始化）...")
+        # 使用小的随机权重初始化回归头，避免在训练初期产生过大的输出
+        nn.init.xavier_uniform_(self.regression_head.weight, gain=0.01)
+        nn.init.zeros_(self.regression_head.bias)
+        print("   ✅ 使用 Xavier 初始化 (gain=0.01) 实现均匀先验")
+        
+        # --- 3. 初始化尺度头 ---
+        # scale_S 的偏置项初始化为一个较大的正数，确保初始不确定性高
+        # scale_Y 的偏置项初始化为一个较小的正数
+        if self.scale_S_head is not None:
+            nn.init.zeros_(self.scale_S_head.weight)
+            nn.init.constant_(self.scale_S_head.bias, 2.3)  # exp(2.3) ≈ 10
+
+        nn.init.zeros_(self.scale_Y_head.weight)
+        nn.init.constant_(self.scale_Y_head.bias, 1.0) # exp(1.0) ~ 2.7
+
+        print("   ✅ 知识传输完成")
+
+    def forward(self, U_loc: torch.Tensor, U_scale: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
         Defines the forward pass for the Action Network.
-
+        
         Args:
-            causal_loc (torch.Tensor): Location parameter of causal state distribution.
-            causal_scale (torch.Tensor): Scale parameter of causal state distribution.
-
+            U_loc (torch.Tensor): Location parameter of causal state distribution.
+            U_scale (torch.Tensor): Scale parameter of causal state distribution.
+        
         Returns:
-            dict: A dictionary containing the parameters of the output distributions.
-                  - 'loc_S', 'scale_S': Parameters for classification scores.
-                  - 'loc_Y', 'scale_Y': Parameters for regression values.
+            Dict[str, torch.Tensor]: A dictionary containing the parameters of the output distributions.
         """
-        # 1. Get classification score distribution parameters
-        loc_S, scale_S = self.classification_head(causal_loc, causal_scale)
-
-        # 2. Get regression value distribution parameters
-        loc_Y, scale_Y = self.regression_head(causal_loc, causal_scale)
+        # 从 U 中采样一个实例，或直接使用其均值
+        # 当前实现：直接使用均值 U_loc 作为下一层的输入
+        z_prime = U_loc
+        
+        # 计算分类和回归的 loc
+        loc_S = self.classification_head(z_prime)
+        loc_Y = self.regression_head(z_prime).squeeze(-1)  # [B, S, 1] -> [B, S]
+        
+        # 计算分类和回归的 scale
+        # 基础尺度来源于 U_scale，然后通过各自的头进行变换
+        # U_scale -> log(U_scale) -> linear -> exp -> scale
+        log_U_scale = torch.log(U_scale)
+        
+        scale_S = torch.exp(self.scale_S_head(log_U_scale))
+        scale_Y = torch.exp(self.scale_Y_head(log_U_scale)).squeeze(-1) # [B, S, 1] -> [B, S]
 
         return {
-            'loc_S': loc_S,
-            'scale_S': scale_S,
-            'loc_Y': loc_Y,
-            'scale_Y': scale_Y,
+            "loc_S": loc_S,
+            "scale_S": scale_S,
+            "loc_Y": loc_Y,
+            "scale_Y": scale_Y,
         }
     
     def predict(self, causal_loc, causal_scale=None):

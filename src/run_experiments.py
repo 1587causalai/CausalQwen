@@ -29,6 +29,7 @@ from src.data.tokenizer import QwenTokenizerWrapper
 from src.data.evaluation_data import get_all_evaluation_datasets
 from src.training.trainer import Trainer
 from src.evaluation.evaluator import Evaluator
+from src.utils.model_utils import get_qwen_model_info
 
 def convert_numpy_types(obj):
     """
@@ -143,7 +144,7 @@ def get_model_configs(base_config, experiment_type='ablation'):
         
     return configs
 
-def print_experiment_header(experiment_type, timestamp, device):
+def print_experiment_header(experiment_type, timestamp, device, qwen_model_path):
     """Print a formatted experiment header with key information."""
     print("\n" + "="*80)
     print(f"🚀 CausalQwen 实验运行器")
@@ -151,6 +152,7 @@ def print_experiment_header(experiment_type, timestamp, device):
     print(f"📅 时间戳: {timestamp}")
     print(f"🧪 实验类型: {experiment_type}")
     print(f"💻 设备: {device}")
+    print(f"📖 模型路径: {qwen_model_path}")
     print(f"🏗️  架构版本: 推断-行动范式 v3")
     print("="*80 + "\n")
 
@@ -200,30 +202,38 @@ def main(args):
     
     # Print experiment header
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print_experiment_header(args.experiment, timestamp, device)
+    print_experiment_header(args.experiment, timestamp, device, args.qwen_model_path)
     
     # --- 1. Setup ---
-    print("📚 初始化分词器...")
+    # 首先，从模型路径动态获取参数
+    print(f"🔍 从 '{args.qwen_model_path}' 动态获取模型参数...")
+    model_info = get_qwen_model_info(args.qwen_model_path)
+    if model_info is None:
+        sys.exit(1) # 如果无法获取模型信息，则退出
+    
+    qwen_vocab_size = model_info['vocab_size']
+    qwen_hidden_size = model_info['hidden_size']
+    print(f"✅ 参数获取成功: Vocab Size={qwen_vocab_size}, Hidden Size={qwen_hidden_size}")
+
+    print("\n📚 初始化分词器...")
     tokenizer = QwenTokenizerWrapper(model_path=args.qwen_model_path, use_real_tokenizer=True)
     print(f"✅ 分词器加载完成")
     
     # 获取详细的词汇表信息
     vocab_info = tokenizer.vocab_size_info()
-    print(f"   - Qwen 配置容量: {vocab_info['config_capacity']:,}")
-    print(f"   - Qwen 实际使用: {vocab_info['qwen_used']:,}")
-    print(f"   - CausalQwen 词汇表: {vocab_info['causalqwen_vocab']:,}")
-    print(f"   - <NUM> token ID: {vocab_info['num_token_id']}")
-    print(f"   - 预留槽位: {vocab_info['reserved_slots']} (已用 {vocab_info['reserved_used']}, 剩余 {vocab_info['reserved_remaining']})")
+    print(f"   - Qwen 配置容量: {vocab_info.get('config_capacity', 'N/A'):,}")
+    print(f"   - CausalQwen 词汇表: {vocab_info.get('causalqwen_vocab', 'N/A'):,}")
+    print(f"   - <NUM> token ID: {vocab_info.get('num_token_id', 'N/A')}")
     
-    # Create base configuration - 使用完整的词汇表大小
+    # Create base configuration - 使用从模型动态获取的参数
     base_config = CausalLMConfig(
-        vocab_size=vocab_info['causalqwen_vocab'],  # 使用 151936 而非 151666
+        vocab_size=qwen_vocab_size,  # 动态获取
         num_token_id=tokenizer.num_token_id,
-        hidden_size=args.hidden_size,
-        # Force causal_dim = hidden_size for identity mapping by default
-        causal_dim=args.hidden_size,
+        hidden_size=qwen_hidden_size, # 动态获取
+        causal_dim=qwen_hidden_size,  # 默认恒等映射
         use_real_qwen=True,
-        use_mock_feature_network=False,  # 明确设置
+        use_mock_feature_network=False,
+        use_numerical_features=True,
         qwen_model_path=args.qwen_model_path,
         ovr_threshold=args.ovr_threshold,
         reg_loss_weight=args.reg_loss_weight,
@@ -418,14 +428,13 @@ def main(args):
         f.write(f"**实验类型:** {args.experiment}\n")
         f.write(f"**时间戳:** {timestamp}\n")
         f.write(f"**设备:** {device}\n")
+        f.write(f"**模型路径:** {args.qwen_model_path}\n")
         f.write(f"**架构:** 推断-行动范式 v3\n\n")
         
         f.write("## 配置总览\n\n")
-        f.write(f"- **基础模型:** Qwen-{args.hidden_size/1000:.1f}B\n")
-        f.write(f"- **Qwen 已用词汇:** 151,665\n")
-        f.write(f"- **CausalQwen 词汇表:** {base_config.vocab_size} (151,665 + 1)\n")
-        f.write(f"- **Qwen 配置容量:** 151,936 (含 271 个预留)\n")
-        f.write(f"- **隐藏维度:** {base_config.hidden_size}\n")
+        f.write(f"- **基础模型:** {os.path.basename(args.qwen_model_path)}\n")
+        f.write(f"- **Qwen 词汇表容量:** {qwen_vocab_size}\n")
+        f.write(f"- **隐藏维度:** {qwen_hidden_size}\n")
         f.write(f"- **因果维度:** {base_config.causal_dim}\n")
         f.write(f"- **恒等映射:** {'启用' if base_config.causal_dim == base_config.hidden_size else '禁用'}\n\n")
         
@@ -509,7 +518,7 @@ if __name__ == '__main__':
     )
     
     # Model architecture args
-    parser.add_argument('--hidden_size', type=int, default=896, help='Hidden size of the model (for Qwen-0.5B).')
+    parser.add_argument('--hidden_size', type=int, default=None, help='(已弃用) 模型隐藏维度，将从模型配置自动获取。')
     parser.add_argument('--ovr_threshold', type=float, default=10.0, help='OvR decision threshold.')
     parser.add_argument('--reg_loss_weight', type=float, default=1.0, help='Weight for regression loss in total loss.')
     parser.add_argument('--initial_scale_bias', type=float, default=2.3, help='Initial bias for scale parameter (log scale).')

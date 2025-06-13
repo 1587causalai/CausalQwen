@@ -44,8 +44,8 @@ def main():
 
         # 步骤1: 基本导入测试
         print_step(1, "测试基本导入")
-        from src.models.causal_lm import CausalLMConfig, CausalLanguageModel
-        from src.data.tokenizer import QwenTokenizerWrapper
+            from src.models.causal_lm import CausalLMConfig, CausalLanguageModel
+            from src.data.tokenizer import QwenTokenizerWrapper
         print("✅ 导入成功")
 
         # 步骤2: 环境和路径检查
@@ -55,45 +55,45 @@ def main():
         print(f"设备: {device}")
         print(f"Qwen路径: {qwen_model_path}")
         assert os.path.exists(qwen_model_path), "Qwen模型路径不存在"
-        print(f"✅ Qwen模型路径存在")
+            print(f"✅ Qwen模型路径存在")
 
         # 步骤3: 分词器初始化
         print_step(3, "分词器初始化")
         tokenizer = QwenTokenizerWrapper(model_path=qwen_model_path, use_real_tokenizer=True)
-        print(f"✅ 分词器初始化成功")
+            print(f"✅ 分词器初始化成功")
         vocab_info = tokenizer.vocab_size_info()
         print(f"   - CausalQwen 词汇表大小: {vocab_info['causalqwen_vocab']}")
         print(f"   - <NUM> token ID: {tokenizer.num_token_id}")
 
         # 步骤4: 模型配置
         print_step(4, "模型配置创建")
-        config = CausalLMConfig(
+            config = CausalLMConfig(
             vocab_size=vocab_info['causalqwen_vocab'],
-            num_token_id=tokenizer.num_token_id,
-            hidden_size=896,
-            causal_dim=896,
-            use_real_qwen=True,
+                num_token_id=tokenizer.num_token_id,
+                hidden_size=896,
+                causal_dim=896,
+                use_real_qwen=True,
             qwen_model_path=qwen_model_path
-        )
-        print(f"✅ 配置创建成功")
+            )
+            print(f"✅ 配置创建成功")
 
         # 步骤5: 模型创建与初始化
         print_step(5, "模型创建与初始化")
-        model = CausalLanguageModel(config).to(device)
+            model = CausalLanguageModel(config).to(device)
         model.init_weights()
         print(f"✅ 模型创建与初始化成功")
-        total_params = sum(p.numel() for p in model.parameters())
+            total_params = sum(p.numel() for p in model.parameters())
         print(f"   - 总参数数量: {total_params:,}")
 
         # 步骤6: 测试数据准备
         print_step(6, "准备测试数据")
-        test_texts = [
+            test_texts = [
             "The price of the book is 99.99 dollars and the temperature is -10.5 degrees.",
             "Hello world! This is a test without numbers."
-        ]
-        inputs = tokenizer.batch_encode_plus(
+            ]
+            inputs = tokenizer.batch_encode_plus(
             test_texts, padding=True, truncation=True, return_tensors='pt'
-        )
+            )
         input_ids = inputs['input_ids'].to(device)
         numerical_values = inputs['numerical_values'].to(device)
         attention_mask = inputs['attention_mask'].to(device)
@@ -102,7 +102,7 @@ def main():
         # 步骤7: 分步前向传播与验证
         print_step(7, "分步前向传播与验证")
         model.eval()
-        with torch.no_grad():
+            with torch.no_grad():
             
             # 7.1 特征提取网络
             print("\n--- 7.1. 特征提取 (Feature Extraction) ---")

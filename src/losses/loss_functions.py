@@ -65,33 +65,41 @@ def ovr_classification_loss(probs: torch.Tensor, targets: torch.Tensor,
     Returns:
         OvR分类损失
     """
-    batch_size, seq_len, num_classes = probs.shape
+    num_classes = probs.shape[-1]
     
-    # 创建one-hot目标
+    # Flatten inputs to handle arbitrary dimensions
+    probs_flat = probs.view(-1, num_classes)
     targets_flat = targets.view(-1)
-    targets_onehot = F.one_hot(targets_flat, num_classes).float()
-    targets_onehot = targets_onehot.view(batch_size, seq_len, num_classes)
     
-    # 二元交叉熵损失
-    # 对于真实类别，我们希望P(S_k > C_k)接近1
-    # 对于其他类别，我们希望P(S_k > C_k)接近0
-    eps = 1e-9
-    bce_loss = -(
-        targets_onehot * torch.log(probs + eps) +
-        (1 - targets_onehot) * torch.log(1 - probs + eps)
-    )
+    # Filter out ignored indices (-100)
+    valid_mask = targets_flat != -100
+    if not valid_mask.any():
+        return torch.tensor(0.0, device=probs.device) # No valid targets
+        
+    probs_filtered = probs_flat[valid_mask]
+    targets_filtered = targets_flat[valid_mask]
+
+    # Convert targets to one-hot encoding
+    targets_onehot = F.one_hot(targets_filtered, num_classes).float()
     
-    # 对类别维度求和（每个位置的总损失）
-    loss_per_position = bce_loss.sum(dim=-1)  # [batch_size, seq_len]
-    
-    if reduction == 'none':
-        return loss_per_position
-    elif reduction == 'mean':
-        return loss_per_position.mean()
+    # Compute binary cross entropy loss for each class independently
+    bce_loss = F.binary_cross_entropy_with_logits(
+        torch.log(probs_filtered / (1 - probs_filtered + 1e-8) + 1e-8),  # Convert probs to logits
+        targets_onehot,
+        reduction='none'
+    ).sum(dim=-1) # Sum loss over all classes for each sample
+
+    if reduction == 'mean':
+        return bce_loss.mean()
     elif reduction == 'sum':
-        return loss_per_position.sum()
-    else:
-        raise ValueError(f"Invalid reduction: {reduction}")
+        return bce_loss.sum()
+    else: # 'none'
+        # To return a loss of the same shape as the original targets, we need to scatter it back.
+        # This is complex, for 'none', we will just return the filtered loss for now.
+        # A more robust implementation might be needed if per-sample loss is critical.
+        loss = torch.zeros_like(targets_flat, dtype=torch.float)
+        loss[valid_mask] = bce_loss
+        return loss.view(targets.shape)
 
 
 def regression_loss(loc: torch.Tensor, scale: torch.Tensor, y_true: torch.Tensor,

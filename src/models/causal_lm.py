@@ -11,7 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .feature_network import QwenFeatureNetwork, NumAwareFeatureNetwork
+from .feature_network import QwenFeatureNetwork, MockFeatureNetwork
+from .numerical_aware_embedding import NumericalAwareEmbedding
 from .abduction_network import AbductionNetwork
 from .action_network import ActionNetwork
 
@@ -29,7 +30,7 @@ class CausalLMConfig:
     use_real_qwen: bool = True
     use_mock_feature_network: bool = False  # 补全缺失的属性
     qwen_model_path: str = "~/models/Qwen2.5-0.5B"
-    use_numerical_features: bool = True  # 添加数值感知功能控制
+    use_numerical_features: bool = True  # 控制是否启用数值嵌入
     
     # OvR classification settings
     use_ovr_classifier: bool = True
@@ -65,132 +66,78 @@ class CausalLanguageModel(nn.Module):
         
         if config.use_real_qwen and not use_mock_feature_network:
             print("Initializing with real Qwen model...")
-            # 使用数值感知特征网络包装QwenFeatureNetwork
-            base_qwen_network = QwenFeatureNetwork(
+            self.feature_network = QwenFeatureNetwork(
                 model_path=config.qwen_model_path,
                 hidden_size=config.hidden_size
             )
             
             # 检查是否需要数值感知功能
             if hasattr(config, 'use_numerical_features') and config.use_numerical_features:
-                self.feature_network = NumAwareFeatureNetwork(
-                    base_network=base_qwen_network,
+                self.numerical_aware_embedding = NumericalAwareEmbedding(
+                    base_embedding_layer=self.feature_network.qwen_model.model.embed_tokens,
                     num_token_id=config.num_token_id,
                     hidden_size=config.hidden_size
                 )
             else:
-                # 直接使用QwenFeatureNetwork，但需要确保接口兼容
-                self.feature_network = base_qwen_network
+                self.numerical_aware_embedding = None
         else:
             print("Initializing with mock feature network...")
             # 需要导入MockFeatureNetwork
-            from .feature_network import MockFeatureNetwork
             self.feature_network = MockFeatureNetwork(
                 vocab_size=config.vocab_size,
                 hidden_size=config.hidden_size
             )
+            self.numerical_aware_embedding = None # Mock network handles this internally for now
         
         # Abduction network - 推断个体因果表征分布
         self.abduction_network = AbductionNetwork(self.hidden_size, self.causal_dim)
         
         # Action network - 基于因果表征生成输出
+        # vocab_size 在此为 None，因为分类头将在 init_weights 中根据 lm_head 动态创建
         self.action_network = ActionNetwork(
-            causal_dim=self.causal_dim,
-            vocab_size=self.vocab_size,
+            input_dim=self.causal_dim,
+            hidden_size=self.hidden_size,
             num_token_id=self.num_token_id,
-            ovr_threshold=config.ovr_threshold
+            vocab_size=None 
         )
 
-        # 数值编码器 - 根据配置决定是否使用
-        if config.use_numerical_features:
-            # 可以从 feature_network 模块导入，如果存在的话
-            try:
-                from .feature_network import NumericalEncoder
-                self.numerical_encoder = NumericalEncoder(
-                    embedding_dim=config.hidden_size
-                )
-            except ImportError:
-                print("Warning: NumericalEncoder not found, numerical features will be handled by feature network")
-                self.numerical_encoder = None
-        else:
-            self.numerical_encoder = None
-
-    def init_weights(self, num_target_median=None, num_target_scale=None):
+    def init_weights(self):
         """
         Initialize the weights of abduction and action networks using the
         updated knowledge transfer strategy.
         
         知识传输策略：
-        - 分类头：完全复用 Qwen 的 lm_head（包括我们添加的 <NUM> token）
-        - 回归头：使用 <NUM> token 的权重初始化（利用保留词汇）
-        - 保留词汇：Qwen 已经为这些位置分配了权重，我们直接使用
-        
-        Args:
-            num_target_median (float, optional): Deprecated, no longer used
-            num_target_scale (float, optional): Deprecated, no longer used
+        - 分类头：完全复用 Qwen 的 lm_head
+        - 回归头：使用小的随机值初始化
         """
         print("应用知识传输初始化...")
         
         # 1. Initialize Abduction Network
         # This assumes hidden_size and causal_dim are the same
         if self.hidden_size == self.causal_dim:
-            # Get initial_scale_bias from config if available
-            initial_scale_bias = getattr(self, 'config', None)
-            if initial_scale_bias is not None and hasattr(initial_scale_bias, 'initial_scale_bias'):
-                initial_scale_bias = initial_scale_bias.initial_scale_bias
-            else:
-                initial_scale_bias = 2.3  # Default value
-            
-            self.abduction_network.initialize_for_identity_mapping(scale_bias=initial_scale_bias)
-            print(f"  - Abduction network initialized for identity mapping (scale_bias={initial_scale_bias}).")
+            self.abduction_network.initialize_for_identity_mapping(
+                scale_bias=self.config.initial_scale_bias
+            )
         else:
-            print("  - WARNING: Abduction network not initialized (hidden_size != causal_dim).")
+            print("  - WARNING: Abduction network not initialized for identity mapping (hidden_size != causal_dim).")
+            # Here you might want a different initialization for the non-identity case
+            # For now, we do nothing and rely on the default nn.Linear init.
 
-        # 2. Initialize Action Network
+        # 2. Initialize Action Network by transferring knowledge from Qwen's lm_head
         qwen_lm_head = None
-        
-        # 获取 lm_head 的逻辑需要更加健壮
         try:
-            if isinstance(self.feature_network, NumAwareFeatureNetwork):
-                # 如果是数值感知特征网络，获取其基础网络的lm_head
-                if hasattr(self.feature_network, 'base_network'):
-                    base_network = self.feature_network.base_network
-                    if hasattr(base_network, 'get_lm_head'):
-                        qwen_lm_head = base_network.get_lm_head()
-                        print("Found language model head: lm_head (from NumAwareFeatureNetwork.base_network)")
-            elif hasattr(self.feature_network, 'get_lm_head'):
-                # 直接从特征网络获取lm_head
+            if hasattr(self.feature_network, 'get_lm_head'):
                 qwen_lm_head = self.feature_network.get_lm_head()
                 if qwen_lm_head is not None:
                     print("Found language model head: lm_head")
                 else:
                     print("Feature network returned None for lm_head (likely MockFeatureNetwork)")
-            else:
-                print("Feature network does not have get_lm_head method")
-                
         except Exception as e:
             print(f"Error getting lm_head: {e}")
-            qwen_lm_head = None
 
-        if qwen_lm_head is not None:
-            self.action_network.init_weights(
-                qwen_lm_head=qwen_lm_head,
-                num_target_median=0.0,  # No longer used, passing dummy value
-                num_target_scale=1.0,   # No longer used, passing dummy value
-                num_token_id=self.num_token_id
-            )
-            print("  - Action network initialized from Qwen's lm_head (no data dependency).")
-        else:
-            print("  - WARNING: Action network not initialized (Qwen lm_head not available).")
-            print("  - Using random initialization for ActionNetwork")
-            # 如果没有Qwen的lm_head，使用随机初始化
-            self.action_network.init_weights(
-                qwen_lm_head=None,
-                num_target_median=0.0,
-                num_target_scale=1.0,
-                num_token_id=self.num_token_id
-            )
-
+        # 将 lm_head 传递给 Action Network 以完成其权重的初始化
+        self.action_network.init_weights(qwen_lm_head=qwen_lm_head)
+            
     def forward(self, input_ids, numerical_values=None, attention_mask=None):
         """
         Forward pass of the causal language model.
@@ -210,35 +157,31 @@ class CausalLanguageModel(nn.Module):
         if numerical_values is None:
             numerical_values = torch.zeros_like(input_ids, dtype=torch.float)
         
-        # Extract features
-        features = self.feature_network(input_ids, numerical_values, attention_mask)
+        # 步骤 1: 数值感知嵌入 e
+        enhanced_embeddings = self.numerical_aware_embedding(input_ids, numerical_values)
         
-        # Infer individual causal representation distribution
+        # 步骤 2: 特征提取 z
+        features = self.feature_network(inputs_embeds=enhanced_embeddings, attention_mask=attention_mask)
+        
+        # 步骤 3: 归因推断 U
         causal_loc, causal_scale = self.abduction_network(features)
         
-        # Transform individual causal representation to outputs
+        # 步骤 4: 行动决策 S, Y
         action_outputs = self.action_network(causal_loc, causal_scale)
         
-        # 计算OvR概率
-        from ..utils.distributions import cauchy_cdf
-        
-        cls_loc = action_outputs['cls_loc']
-        cls_scale = action_outputs['cls_scale']
-        
-        # 计算每个类别的概率：P(S_k > C_k)
-        thresholds = self.action_network.classification_head.thresholds
-        cls_probs = 0.5 + (1 / torch.pi) * torch.atan((cls_loc - thresholds) / cls_scale)
+        cls_loc = action_outputs['loc_S']
+        cls_scale = action_outputs['scale_S']
         
         # 组织输出
         outputs = {
             'features': features,
+            'enhanced_embeddings': enhanced_embeddings,
             'causal_loc': causal_loc,
             'causal_scale': causal_scale,
             'cls_loc': cls_loc,
             'cls_scale': cls_scale,
-            'cls_probs': cls_probs,
-            'reg_loc': action_outputs['reg_loc'],
-            'reg_scale': action_outputs['reg_scale']
+            'reg_loc': action_outputs['loc_Y'],
+            'reg_scale': action_outputs['scale_Y']
         }
         
         return outputs
@@ -465,13 +408,18 @@ class CausalLanguageModel(nn.Module):
         Returns:
             Dictionary containing total loss and component losses
         """
-        # 导入损失函数
+        # 导入损失函数和概率计算工具
         from ..losses.loss_functions import compute_total_loss
+        from ..utils.losses import compute_ovr_probabilities
         
         # 获取模型输出
-        cls_probs = outputs['cls_probs']  # [batch_size, seq_len, vocab_size]
-        reg_loc = outputs['reg_loc']      # [batch_size, seq_len]
-        reg_scale = outputs['reg_scale']  # [batch_size, seq_len]
+        cls_loc = outputs['cls_loc']
+        cls_scale = outputs['cls_scale']
+        reg_loc = outputs['reg_loc']
+        reg_scale = outputs['reg_scale']
+        
+        # 根据loc和scale计算分类概率
+        cls_probs = compute_ovr_probabilities(cls_loc, cls_scale, self.config.ovr_threshold)
         
         # 创建数值掩码
         num_mask = (targets == self.num_token_id).float()

@@ -85,25 +85,30 @@ class QwenFeatureNetwork(FeatureNetworkBase):
         else:
             raise AttributeError("Qwen model does not have 'lm_head' attribute")
     
-    def forward(self, input_ids: torch.Tensor, 
-                numerical_values: Optional[torch.Tensor] = None,
-                attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, 
+                input_ids: Optional[torch.Tensor] = None, 
+                attention_mask: Optional[torch.Tensor] = None,
+                inputs_embeds: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         前向传播，提取序列特征。
         
         Args:
             input_ids: 输入token IDs [batch_size, seq_len]
-            numerical_values: 数值信息（暂时忽略，保持接口一致性）
             attention_mask: 注意力掩码 [batch_size, seq_len]
+            inputs_embeds: 增强嵌入 [batch_size, seq_len, hidden_size]
             
         Returns:
             features: 序列特征 [batch_size, seq_len, hidden_size]
         """
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        
         # 使用Qwen模型提取特征
         # 如果需要梯度（训练时），则不使用no_grad
         if self.qwen_model.training:
             outputs = self.qwen_model(
                 input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 output_hidden_states=True
             )
@@ -111,6 +116,7 @@ class QwenFeatureNetwork(FeatureNetworkBase):
             with torch.no_grad():
                 outputs = self.qwen_model(
                     input_ids=input_ids,
+                    inputs_embeds=inputs_embeds,
                     attention_mask=attention_mask,
                     output_hidden_states=True
                 )
@@ -188,112 +194,4 @@ class MockFeatureNetwork(FeatureNetworkBase):
             None: Mock模型不支持lm_head
         """
         return None
-
-
-class NumAwareFeatureNetwork(FeatureNetworkBase):
-    """
-    数值感知特征网络，在基础特征上融合数值信息。
-    """
-    
-    def __init__(self, base_network: FeatureNetworkBase, num_token_id: int, hidden_size: int):
-        super().__init__()  # 调用基类的无参数初始化
-        self.base_network = base_network
-        self.num_token_id = num_token_id
-        self.hidden_size = hidden_size
-        
-        # 数值方向向量（可学习参数）
-        self.numerical_direction = nn.Parameter(
-            torch.randn(hidden_size) / math.sqrt(hidden_size)
-        )
-    
-    def forward(self, input_ids: torch.Tensor, 
-                numerical_values: torch.Tensor,
-                attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        前向传播，融合文本和数值特征。
-        
-        Args:
-            input_ids: 输入token IDs [batch_size, seq_len]
-            numerical_values: 数值信息 [batch_size, seq_len]
-            attention_mask: 注意力掩码 [batch_size, seq_len]
-            
-        Returns:
-            features: 融合特征 [batch_size, seq_len, hidden_size]
-        """
-        # 获取基础特征
-        base_features = self.base_network(input_ids, numerical_values, attention_mask)
-        
-        # 创建数值掩码
-        num_mask = (input_ids == self.num_token_id).float()
-        
-        # 仅对 <NUM> 位置创建数值嵌入
-        numerical_embeddings = self._create_numerical_embeddings(numerical_values, num_mask, base_features)
-        
-        # 特征融合：base_features + numerical_embeddings
-        # 对于非<NUM>位置，numerical_embeddings 应该为 0
-        output_features = base_features + numerical_embeddings
-        
-        return output_features
-    
-    def _create_numerical_embeddings(self, numerical_values: torch.Tensor, 
-                                   num_mask: torch.Tensor,
-                                   base_features: torch.Tensor) -> torch.Tensor:
-        """
-        创建数值嵌入，实现向量化计算
-        
-        Args:
-            numerical_values: [batch_size, seq_len] 数值向量（非数值位置为0）
-            num_mask: [batch_size, seq_len] 二元掩码
-            base_features: [batch_size, seq_len, hidden_size] 基础特征
-            
-        Returns:
-            numerical_embeddings: [batch_size, seq_len, hidden_size]
-        """
-        import math
-        
-        batch_size, seq_len, hidden_size = base_features.shape
-        
-        # 数值变换：φ(v) = sign(v) * ln(1 + |v|)
-        # 对于v=0，结果为0
-        transformed_values = torch.sign(numerical_values) * torch.log1p(torch.abs(numerical_values))
-        
-        # 扩展到特征维度 [batch_size, seq_len, 1]
-        transformed_values = transformed_values.unsqueeze(-1)
-        
-        # 归一化方向向量，确保其范数为1
-        normed_direction = self.numerical_direction / (torch.norm(self.numerical_direction) + 1e-9)
-        
-        # 计算数值嵌入 [batch_size, seq_len, hidden_size]
-        numerical_embeddings = transformed_values * normed_direction
-            
-        # 应用掩码，只在<NUM>位置保留数值嵌入
-        output = numerical_embeddings * num_mask.unsqueeze(-1)
-        
-        return output
-    
-    def get_numerical_aware_embedding(self, input_ids: torch.Tensor, numerical_values: torch.Tensor) -> torch.Tensor:
-        """
-        一个辅助方法，用于清晰地获取增强嵌入，方便测试。
-        这封装了"获取基础嵌入"和"融合数值编码"的逻辑。
-        """
-        # 1. 获取基础嵌入
-        # 注意：这里我们假设 base_network 是 Qwen-like 的，有一个可访问的 embedding 层
-        base_embeddings = self.base_network.qwen_model.model.embed_tokens(input_ids)
-
-        # 2. 创建数值编码
-        # 创建数值掩码
-        num_mask = (input_ids == self.num_token_id).float()
-        numerical_embeddings = self._create_numerical_embeddings(numerical_values, num_mask, base_embeddings)
-        
-        # 3. 融合
-        return base_embeddings + numerical_embeddings
-
-    def get_lm_head(self):
-        """
-        代理到基础网络的get_lm_head方法。
-        """
-        if hasattr(self.base_network, 'get_lm_head'):
-            return self.base_network.get_lm_head()
-        else:
-            return None
 
