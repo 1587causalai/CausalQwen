@@ -9,7 +9,7 @@
 1.  **个体选择变量 (Individual Selection Variable)**：一次具体的赋值 $U=u$ 代表着从所有可能的个体中"选中"了某一个特定个体 `u`。
 2.  **个体因果表征 (Individual Causal Representation)**：被选中的向量 $u$ 本身，就包含了该个体所有内在的、驱动其行为的潜在属性。
 
-**核心思想**：普适的因果律 ($Y=f(T;u)$) 应用于不同的个体 ($u$)，从而产生了不同的反事实结果 ($Y(t)$)。$U$ 是所有个体性差异的最终来源。
+**核心思想**：普适的因果律 ($Y=f(t;u)$) 应用于不同的个体 ($u$)，从而产生了不同的反事实结果 ($Y(t)$)。$U$ 是所有个体性差异的最终来源。
 
 > 深度解读请参见: [`design-docs/U_deep_dive.md`](design-docs/U_deep_dive.md)
 
@@ -19,22 +19,6 @@
 
 > 我们用 B 代表批次大小, S 代表序列长度, H 代表模型核心维度 (即词嵌入和隐藏层维度), C 代表因果表征维度, K 代表基座模型 Qwen 的已用词汇表大小, V_full代表总词汇表大小, CausalQwen 的已用词汇表大小为 K+1 (K+1 包含基座模型 Qwen 的已用词汇表大小 K 和 CausalQwen 的额外词汇 `<NUM>`) 
 
-
-新架构完美实现了位置独立的推断-行动范式：
-
-```mermaid
-graph TB
-    A["输入字符串序列"] -- 字符串处理 --> B["序列输入<br> token sequence [B,S] <br> numerical values [B,S]"]
-    B -- 数值感知嵌入 --> C["数值感知嵌入 [B,S,H]"]
-    C -- "QwenFeatureNetwork" --> D["序列特征 [B,S,H]"]
-    D -- "AbductionNetwork" --> F["个体因果表征参数 [B,S,C*2]"]
-    F -- "ActionNetwork" --> G["序列输出 <br> cls[B,S, V_full], reg[B,S]"]
-    
-    
-    style C fill:#e8f5e8,stroke:#4caf50
-    style E fill:#e8f5e8,stroke:#4caf50
-    style G fill:#e8f5e8,stroke:#4caf50
-```
 
 
 ### 2.1 模块一：数值感知嵌入 (Numerical-aware Embedding)
@@ -308,7 +292,203 @@ $$C_k = C_{\text{OvR}}, \quad \forall k \in \{0, 1, \ldots, V_{\text{full}}-1\}$
 -   **阈值设置**: 所有类别共享相同的初始阈值 $C_k = C_{\text{OvR}}$，这提供了一个适度稀疏且数值稳定的初始概率分布。
 
 
-## 5. 核心洞察与总结
+## 5. 使用流程图理解 CausalQwen
+
+
+### 图 1：CausalQwen 总体架构概览
+
+这张图展示了模型最高层级的四大核心步骤，从输入到输出的完整流程。
+
+```mermaid
+graph TD
+    A["<b>步骤 1: 数值感知嵌入</b><br>处理文本与数值输入"] --> B;
+    B["<b>步骤 2: 特征提取</b><br>使用 Qwen 主干网络理解上下文"];
+    B --> C["<b>步骤 3: 因果推断与决策</b><br>推断个体表征 U 并决定行动"];
+    C --> D["<b>步骤 4: 输出预测</b><br>生成分类与回归结果"];
+
+    style A fill:#e3f2fd
+    style B fill:#e8f5e9
+    style C fill:#fff3e0
+    style D fill:#fce4ec
+```
+
+---
+
+### 图 2：详解步骤 1 - 数值感知嵌入
+
+这张图详细描绘了第一个模块如何将混合了文本和数值的原始输入，转化为统一的向量表示 `e`。
+
+```mermaid
+graph TD
+    A["原始输入<br><i>'价格是99.9元'</i>"] --> B{"分词器"};
+    B --> C["词元 ID 序列<br>input_ids"];
+    B --> D["对齐的数值<br>numerical_values"];
+    
+    C --> E["词元嵌入层"];
+    E --> F["基础嵌入<br>base_embeddings"];
+    
+    D --> G["数值编码函数<br>φ(v)"];
+    
+    F & G --> H["融合"];
+    H --> I["<b>增强嵌入 e</b><br>[B, S, H]"];
+
+    style I fill:#e3f2fd,stroke:#1b5e20,stroke-width:2px
+```
+
+---
+
+### 图 3：详解步骤 2 & 3 - 因果核心流程
+
+这张图展示了模型的核心机制：如何从上下文特征 `z` 推断出代表个体的因果分布 `U`，并基于 `U` 产生决策分布 `S` 和 `Y`。
+
+```mermaid
+graph TD
+    A["增强嵌入 e<br>[B, S, H]"] --> B["<b>Qwen 特征网络</b>"];
+    B --> C["上下文特征 z<br>[B, S, H]"];
+    C --> D["<b>归因网络 (Abduction)</b>"];
+    D --> E["<b>个体因果表征 U<br>Uᵢ ~ Cauchy(loc, scale)</b>"];
+    
+    E --> F{"<b>行动网络 (Action)</b>"};
+    F --> G["分类决策分布 S<br>S_{k,i} ~ Cauchy(...)"];
+    F --> H["回归决策分布 Y<br>Y_i ~ Cauchy(...)"];
+
+    style E fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style G fill:#fbe9e7
+    style H fill:#fbe9e7
+```
+
+---
+
+### 图 4：详解步骤 4 - 三种推理模式
+
+这张图从决策分布 `S` 和 `Y` 出发，清晰地展示了三种不同的预测生成方式。
+
+```mermaid
+graph TD
+    A["<b>个体因果表征 U</b><br>Uᵢ ~ Cauchy(loc, scale)"];
+
+    subgraph "行动网络 (Action Network)"
+        A -- "分类行动决策" --> B["分类分布 S"];
+        A -- "回归行动决策" --> C["回归分布 Y"];
+    end
+
+    subgraph "模式三：确定性推理 (默认)"
+        B -- "计算 OvR 概率" --> D["<b>分类预测</b><br>argmax_k P(S_{k,i} > C_k)"];
+        C -- "取位置参数" --> E["<b>回归预测</b><br>ŷ_reg = loc_{Y_i}"];
+    end
+    subgraph "模式二：兼容传统采样"
+        B -- "取 loc_S 作为 logits" --> H["Softmax(loc_S)"];
+        H --> I["<b>Top-k / Top-p 采样预测</b>"];
+    end
+
+    subgraph "模式一：因果采样"
+        A -- "（阈值）采样**原因**" --> F["得到具体个体 uᵢ"];
+        F -- "传入'行动网络'" --> G["<b>确定性的分类/回归预测</b>"];
+    end
+
+
+
+    style A fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style D fill:#fce4ec,stroke:#880e4f
+    style E fill:#fce4ec,stroke:#880e4f
+    style G fill:#fce4ec,stroke:#880e4f
+    style I fill:#fce4ec,stroke:#880e4f
+```
+
+
+### 图 5：损失流程图
+
+
+
+#### 图 5.1：分类损失 (`L_cls`) 的计算
+
+这张图展示了如何从模型对全部词汇的预测分布，计算出每个位置的分类总损失。
+
+```mermaid
+graph TD
+    subgraph "输入"
+        A["<b>loc_S</b><br>形状: [B, S, V_full]"]
+        B["<b>scale_S</b><br>形状: [B, S, V_full]"]
+        C["<b>真实类别标签 (y)</b><br>形状: [B, S, V_full]"]
+    end
+
+    D[计算 OvR 概率 P]
+    A & B --> D
+    
+    subgraph "计算过程"
+        direction LR
+        D --> E["<b>概率张量 P</b><br>形状: [B, S, V_full]"]
+        E & C --> F["计算 OvR 二元交叉熵"]
+        F -- "对词汇表维度(V_full)求和" --> G
+    end
+
+    G["<b>分类损失 L_cls</b><br>形状: [B, S]"]
+    
+    style G fill:#e3f2fd,stroke:#1b5e20,stroke-width:2px
+```
+* **解读**：模型输出的 `loc_S` 和 `scale_S` 首先被用来计算词汇表中每个词的 OvR 概率，得到一个形状为 `[B, S, V_full]` 的概率张量 `P`。然后，这个概率张量与同样形状的真实标签 `y` 一起计算交叉熵损失。最后，将每个位置上所有词汇的损失相加（在 `V_full` 维度上求和），最终得到一个形状为 `[B, S]` 的张量 `L_cls`，代表了批次中每个序列在每个位置的分类损失。
+
+---
+
+#### 图 5.2：门控回归损失 (`L_reg_gated`) 的计算
+
+这张图是整个损失计算中最精巧的部分，详细解释了门控机制的数据流。
+
+```mermaid
+graph TD
+    subgraph "输入"
+        A["<b>loc_Y</b><br>形状: [B, S]"]
+        B["<b>scale_Y</b><br>形状: [B, S]"]
+        C["<b>真实数值</b><br>形状: [B, S]"]
+        D["<b>P_&lt;NUM&gt; 概率</b><br>(来自 L_cls 计算过程)<br>形状: [B, S]"]
+        E["<b>数值位置掩码 (m)</b><br>形状: [B, S]"]
+    end
+
+    subgraph "路径 A：计算基础回归损失"
+        A & B & C --> F["计算柯西负对数似然"]
+        F --> G["<b>基础回归损失 L_nll</b><br>形状: [B, S]"]
+    end
+
+    subgraph "路径 B：计算门控权重"
+        D & E --> H["计算门控权重<br>Gate = m * (α + (1-α)P_&lt;NUM&gt;)"]
+        H --> I["<b>门控权重 Gate</b><br>形状: [B, S]"]
+    end
+
+    J[逐元素相乘]
+    G & I --> J
+    J --> K["<b>门控回归损失 L_reg_gated</b><br>形状: [B, S]"]
+
+
+    style K fill:#fff3e0,stroke:#e65100,stroke-width:2px
+```
+* **解读**：此流程有两个并行的路径。**路径 A** 使用回归分布参数和真实数值计算出一个基础的回归损失张量 `L_nll`。**路径 B** 利用分类任务中得到的 `<NUM>` 词元概率，结合一个指示真实标签是否为数值的掩码 `m`，计算出一个同样形状的 `Gate` 张量。最后，将 `L_nll` 和 `Gate` **逐元素相乘**，得到最终的门控回归损失 `L_reg_gated`。这种设计（默认 $\alpha=0$）确保了只有在真实标签是数值 `(m=1)` 且模型有一定把握认为是数值 `(P_<NUM> > 0)` 的位置，回归损失才会被有效计算。
+
+---
+
+#### 图 5.3：总损失 (`L_total`) 的合并
+
+这张最终的图展示了如何将前两步计算出的损失张量合并，并得到最终用于反向传播的标量损失值。
+
+```mermaid
+graph TD
+    A["<b>分类损失 L_cls</b><br>形状: [B, S]"]
+    B["<b>门控回归损失 L_reg_gated</b><br>形状: [B, S]"]
+
+    C[逐元素加权求和<br>L_token = L_cls + λ * L_reg_gated]
+    A & B --> C
+    
+    C --> D["<b>逐词元总损失 L_token</b><br>形状: [B, S]"]
+    D -- "在批次(B)和序列(S)维度上<br>求和或求平均" --> E
+
+    E["<b>最终总损失 L_total</b><br>(标量)"]
+
+    style E fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+```
+* **解读**：将形状为 `[B, S]` 的 `L_cls` 和 `L_reg_gated` 逐元素地加权求和，得到一个同样形状的 `L_token` 张量。这个张量代表了批次中每个位置的最终损失。最后，对这个张量中的所有元素求和或求平均，将其“ réduction (降维)”为一个**标量（Scalar）**，这个标量就是驱动整个模型参数更新的最终 `L_total`。
+
+
+
+## 6. 核心洞察与总结
 
 CausalQwen 的数学框架三个特色：
 
