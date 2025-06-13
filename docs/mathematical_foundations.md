@@ -29,9 +29,7 @@
     - `input_ids` (形状: `[B, S]`), 经过分词器处理的词元ID序列。
     - `numerical_values` (形状: `[B, S]`), 与词元序列对齐的数值序列。
 -   **处理**: 通过结合词元的基础嵌入和数值的对数编码，计算出增强嵌入：
-    \[
-    e_i = \text{embed}(x_i) + \phi(v_i) \quad \text{,其中 } \phi(v) = \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e}
-    \]
+    $$e_i = \text{embed}(x_i) + \phi(v_i) \quad \text{,其中 } \phi(v) = \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e}$$
 -   **输出**: 
     - `e`: 增强嵌入张量 (形状: `[B, S, H]`)
 
@@ -43,9 +41,7 @@
 -   **输入**: 
     - `e`: 增强嵌入张量 (形状: `[B, S, H]`)
 -   **处理**: 增强嵌入序列 `e` 被送入Qwen的Transformer主干网络中。通过多层自注意力机制，网络为每个位置的词元计算出融合了全局上下文信息的深层特征：
-    \[
-    z = \text{FeatureNetwork}(e)
-    \]
+    $$z = \text{FeatureNetwork}(e)$$
 -   **输出**: 
     - `z`: 上下文特征张量 (形状: `[B, S, H]`)
 
@@ -55,9 +51,7 @@
 -   **输入**: 
     - `z`: 上下文特征张量 (形状: `[B, S, H]`)
 -   **处理**: 一个线性层（或一个小型MLP）作为归因网络，为每个位置独立地计算出因果表征 $U_i$ 所服从的柯西分布的参数：
-    \[
-    (\text{loc}_{U_i}, \log(\text{scale}_{U_i})) = \text{AbductionNetwork}(z_i)
-    \]
+    $$(\text{loc}_{U_i}, \log(\text{scale}_{U_i})) = \text{AbductionNetwork}(z_i)$$
 -   **输出**: 
     - `loc_U`: 因果表征分布的位置参数 (形状: `[B, S, C]`)
     - `scale_U`: 因果表征分布的尺度参数 (形状: `[B, S, C]`)
@@ -68,12 +62,8 @@
 -   **输入**: 
     - `loc_U` (形状: `[B, S, C]`) 和 `scale_U` (形状: `[B, S, C]`)
 -   **处理**: 通过两个独立的线性变换，将因果表征分布映射到分类和回归的决策空间。
-    \[
-    \begin{aligned}
-    (\text{loc}_{S_k}, \text{scale}_{S_k}) &= \text{Action}_{\text{cls}}(\text{loc}_U, \text{scale}_U) \\
-    (\text{loc}_Y, \text{scale}_Y) &= \text{Action}_{\text{reg}}(\text{loc}_U, \text{scale}_U)
-    \end{aligned}
-    \]
+    $$(\text{loc}_{S_k}, \text{scale}_{S_k}) = \text{Action}_{\text{cls}}(\text{loc}_U, \text{scale}_U)$$
+    $$(\text{loc}_Y, \text{scale}_Y) = \text{Action}_{\text{reg}}(\text{loc}_U, \text{scale}_U)$$
 -   **输出**:
     - 分类决策分布参数: `loc_S` (形状: `[B, S, V_full]`), `scale_S` (形状: `[B, S, V_full]`)
     - 回归决策分布参数: `loc_Y` (形状: `[B, S]`), `scale_Y` (形状: `[B, S]`)
@@ -92,9 +82,7 @@
     - 分类决策分布参数: `loc_S`, `scale_S` (形状: `[B, S, V_full]`)
 -   **处理**: 
     1.  利用柯西分布的累积分布函数（CDF）计算每个类别的概率：
-        \[
-        P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)
-        \]
+        $$P_{k,i} = P(S_{k,i} > C_k)
     2.  基于此概率计算标准的二元交叉熵损失。
 -   **输出**: 
     - `L_cls`: 序列的分类总损失。
@@ -107,9 +95,9 @@
     - 真实数值: `true_numerical_values` (形状: `[B, S]`)
     - `<NUM>`词元的预测概率: `P_<NUM>,i`
 -   **处理**: 计算由分类概率加权的柯西负对数似然损失：
-    \[
+    $$
     \mathcal{L}_{\text{reg\_gated},i} = m_i \cdot \left(\alpha + (1-\alpha) \cdot P_{\text{<NUM>},i}\right) \cdot \mathcal{L}_{\text{cauchy\_nll},i}
-    \]
+    $$
     其中 $m_i$ 是指示真实标签是否为`<NUM>`的掩码, $\alpha$ 是一个可调的门控系数。
 -   **输出**: 
     - `L_reg`: 序列的回归总损失。
@@ -123,13 +111,13 @@
 ### 3.1 确定性推理 (Deterministic Inference)
 这是默认的、最高效的推理模式。它完全基于解析计算，不涉及任何随机采样。
 - **分类预测**: 直接使用前向传播计算出的各类 OvR 概率，并选择概率最高的类别。
-    \[
+    $$
     \hat{y}_{\text{cls},i} = \arg\max_k P_{k,i}
-    \]
+    $$
 - **回归预测**: 直接使用回归值分布的位置参数（中位数），这是对柯西分布最稳健的点估计。
-    \[
+    $$
     \hat{y}_{\text{reg},i} = \text{loc}_{Y_i}
-    \]
+    $$
 
 ### 3.2 因果采样 (Causal Sampling)
 这是一种新颖的随机推理范式，它不直接对不确定的"结果"进行采样，而是对不确定的"原因"（即个体因果表征 U）进行采样。这是一种比`top-k`/`top-p`更符合因果直觉的采样方法。
@@ -145,9 +133,9 @@
 除了独有的因果采样，CausalQwen 在设计上完全兼容传统语言模型（如Qwen）的 `top-k`/`top-p` 采样方法。
 
 行动网络输出的决策位置参数 `loc_S` (形状: `[B, S, V_full]`) 可以被直接视作标准语言模型输出的 logits。通过对 `loc_S` 应用 `Softmax` 函数，我们可以得到一个归一化的词汇表概率分布：
-\[
+$$
 P_{\text{softmax}}(y_i=k|x) = \frac{\exp(\text{loc}_{S_{k,i}})}{\sum_{j=1}^{V_{\text{full}}} \exp(\text{loc}_{S_{j,i}})}
-\]
+$$
 随后，便可在这组概率上执行标准的 `top-k`/`top-p` 采样。这保证了 CausalQwen 可以作为 Qwen 的一个直接替代和功能超集来使用。
 ### 3.4 (可选)共享随机性：因果采样的高级模式
 
@@ -156,9 +144,9 @@ P_{\text{softmax}}(y_i=k|x) = \frac{\exp(\text{loc}_{S_{k,i}})}{\sum_{j=1}^{V_{\
 为了从推断出的因果表征分布 $\text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$ 中采样，我们不直接进行随机抽取，而是执行一个确定性变换：
 1.  首先，从标准均匀分布中采样一个**固定的**随机向量 $\vec{\epsilon} \sim U(0, 1)^C$。
 2.  然后，使用此 $\vec{\epsilon}$ 为序列中的**每一个**位置 $i$ 计算其因果表征 $u_i$：
-    \[
+    $$
     u_i = \text{loc}_{U_i} + \text{scale}_{U_i} \odot \tan\left(\pi \left(\vec{\epsilon} - 0.5\right)\right)
-    \]
+    $$
     其中 $\odot$ 表示逐元素相乘。
 
 **深刻的含义：分离与共享**
@@ -183,7 +171,7 @@ P_{\text{softmax}}(y_i=k|x) = \frac{\exp(\text{loc}_{S_{k,i}})}{\sum_{j=1}^{V_{\
 
 数值感知嵌入层的初始化需要确保数值编码不会对原有的词元嵌入造成过大干扰。
 
-- **`<NUM>` 词元嵌入处理**：因为我们将 `<NUM>` 设置成在 Qwen 词汇表中的第一个保留词元，直接继承 Qwen 的 `<NUM>` 嵌入,无需额外初始化：$$\text{embed}(\text{<NUM>}) \leftarrow \text{embed}_{\text{Qwen}}(\text{<NUM>})$$
+- **`<NUM>` 词元嵌入处理**：因为我们将 `<NUM>` 设置成在 Qwen 词汇表中的第一个保留词元(Qwen2.5-0.5B有271个保留词元)，直接继承 Qwen 的 `<NUM>` 嵌入,无需额外初始化：$$\text{embed}(\text{<NUM>}) \leftarrow \text{embed}_{\text{Qwen}}(\text{<NUM>})$$
 
 - **方向向量初始化**(后续可以考虑让他是可学习参数)：
 $$\vec{e} \sim \mathcal{N}(0, \sigma_e^2 I), \quad \text{然后归一化: } \vec{e} \leftarrow \frac{\vec{e}}{\|\vec{e}\|}$$
@@ -199,7 +187,7 @@ $$\text{loc}_{U_i} = z_i, \quad \text{scale}_{U_i} = \gamma \text{ (大常数)}$
 
 **数学实现**：
 - 位置参数：$W_{\text{loc}} = I$（恒等矩阵），$b_{\text{loc}} = 0$
-- 尺度参数：$W_{\text{scale}} = 0$，$b_{\text{scale}} = \log(\gamma)$，其中 $\gamma$ 是大常数（如 $\gamma = 100$）
+- 尺度参数：$W_{\text{scale}} = 0$，$b_{\text{scale}} = \log(\gamma)$，其中 $\gamma$ 是大常数（如 $\gamma = 10$）
 
 **效果**：因果表征 $U_i$ 的分布为宽泛分布 $U_i \sim \text{Cauchy}(z_i, \gamma)$，当 $\gamma$ 很大时，柯西分布近似**均匀先验**，归因网络在保持恒等映射的同时提供了高不确定性的表征。
 
