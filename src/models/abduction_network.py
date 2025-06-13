@@ -40,78 +40,59 @@ class AbductionNetwork(nn.Module):
         self.hidden_size = hidden_size
         self.causal_dim = causal_dim
         
-        # 单一线性层映射到柯西分布的两个参数
-        self.fc = nn.Linear(hidden_size, causal_dim * 2)
+        # 分离的线性层，使逻辑更清晰
+        self.loc_net = nn.Linear(hidden_size, causal_dim)
+        self.scale_net = nn.Linear(hidden_size, causal_dim)
         
     def forward(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         执行归因推断的前向传播。
 
         Args:
-            features (torch.Tensor): 形状为 `[B, S, H]` 的输入特征。
+            features (torch.Tensor): 形状为 `[B, S, H]` 或 `[B, H]` 的输入特征。
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor]:
                 - loc: 形状为 `[B, S, C]` 的位置参数。
                 - scale: 形状为 `[B, S, C]` 的尺度参数。
         """
-        if features.dim() == 3:
-            # 序列输入: [batch_size, seq_len, hidden_size]
-            batch_size, seq_len, hidden_size = features.shape
-            features_flat = features.view(-1, hidden_size)
-            output_flat = self.fc(features_flat)
-            output = output_flat.view(batch_size, seq_len, -1)
-        else:
-            # 单一输入: [batch_size, hidden_size]
-            output = self.fc(features)
-            
-        # 分离位置参数和尺度参数
-        loc, log_scale = torch.chunk(output, 2, dim=-1)
-        scale = torch.exp(log_scale)  # 确保尺度为正
+        loc = self.loc_net(features)
+        
+        # 使用 softplus 替代 exp 来计算 scale，以增强数值稳定性
+        # softplus(x) = log(1 + exp(x))
+        # 添加一个小的 epsilon 防止 scale 为零
+        scale = F.softplus(self.scale_net(features)) + 1e-6
         
         return loc, scale
 
-    def initialize_for_identity_mapping(self, scale_bias: float = 2.3):
+    def initialize_for_identity_mapping(self, scale_bias: float = 10.0):
         """
-        初始化网络以实现恒等映射的归因推断
+        初始化网络以实现恒等映射的归因推断。
         
         目标: 
-            - loc = I * z + 0 (恒等映射，保持特征信息)
-            - scale = exp(scale_bias) (高初始不确定性)
-            
-        重要：当输入是纯文本（无数值）时，这种初始化应该保证
-        输出与原始 Qwen 一致。
+            - loc_net -> 恒等映射 (loc = I * z + 0)
+            - scale_net -> 常量输出 (scale = softplus(scale_bias) ≈ 10)
             
         Args:
-            scale_bias (float): 尺度参数的对数偏置，控制初始不确定性水平
-                              默认值 2.3 对应 scale = exp(2.3) ≈ 10
+            scale_bias (float): 尺度参数的偏置。 softplus(10.0) ≈ 10.
         """
         with torch.no_grad():
-            # 权重矩阵设置
-            weight = self.fc.weight.data  # [causal_dim * 2, hidden_size]
-            
-            # 前半部分(loc)设为恒等矩阵的子集或扩展
-            loc_weight = weight[:self.causal_dim, :]
+            # 初始化 loc_net
             if self.hidden_size == self.causal_dim:
                 # C=H: 精确恒等映射
-                loc_weight.copy_(torch.eye(self.causal_dim))
-                print(f"  - AbductionNetwork initialized for identity mapping (scale_bias={scale_bias}).")
+                self.loc_net.weight.copy_(torch.eye(self.causal_dim))
+                nn.init.zeros_(self.loc_net.bias)
+                print(f"  - AbductionNetwork.loc_net initialized for identity mapping.")
             else:
                 # C≠H: 使用更小的增益来减少初始差异
-                nn.init.xavier_uniform_(loc_weight, gain=0.1)  # 减小增益
-                print(f"  - AbductionNetwork initialized with small Xavier gain=0.1 (hidden_size={self.hidden_size} != causal_dim={self.causal_dim})")
+                nn.init.xavier_uniform_(self.loc_net.weight, gain=0.1)
+                nn.init.zeros_(self.loc_net.bias)
+                print(f"  - AbductionNetwork.loc_net initialized with small Xavier gain=0.1 (H={self.hidden_size}!=C={self.causal_dim})")
             
-            # 后半部分(scale)设为零矩阵（配合偏置实现常数输出）
-            scale_weight = weight[self.causal_dim:, :]
-            scale_weight.zero_()
-            
-            # 偏置设置
-            bias = self.fc.bias.data  # [causal_dim * 2]
-            bias[:self.causal_dim].zero_()  # loc偏置为0
-            bias[self.causal_dim:].fill_(scale_bias)  # scale偏置为scale_bias
-            
-        if self.hidden_size == self.causal_dim:
-            print(f"  - AbductionNetwork (归因推断网络) initialized for identity mapping (scale_bias={scale_bias}).")
+            # 初始化 scale_net 以输出一个常量
+            nn.init.zeros_(self.scale_net.weight)
+            nn.init.constant_(self.scale_net.bias, scale_bias)
+            print(f"  - AbductionNetwork.scale_net initialized for constant output (bias={scale_bias}).")
 
 
 class DeepAbductionNetwork(nn.Module):

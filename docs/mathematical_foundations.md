@@ -354,7 +354,7 @@ graph TD
 graph TD
     A["增强嵌入 e<br>[B, S, H]"] --> B["<b>Qwen 特征网络</b>"];
     B --> C["上下文特征 z<br>[B, S, H]"];
-    C --> D["<b>归因网络 (Abduction)</b>"];
+    C --> D["<b>归因推断网络 (Abduction)</b>"];
     D --> E["<b>个体因果表征 U<br>Uᵢ ~ Cauchy(loc, scale)</b>"];
     
     E --> F{"<b>行动网络 (Action)</b>"};

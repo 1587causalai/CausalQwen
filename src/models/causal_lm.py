@@ -42,7 +42,7 @@ class CausalLMConfig:
     
     # Distribution settings
     use_cauchy_distribution: bool = True
-    initial_scale_bias: float = 2.3  # log(10) ≈ 2.3
+    initial_scale_bias: float = 10.0  # softplus(10.0) ≈ 10.0
 
 class CausalLanguageModel(nn.Module):
     """
