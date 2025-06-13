@@ -8,7 +8,7 @@ with special handling for the <NUM> token.
 import torch
 import re
 from typing import List, Tuple, Dict, Optional, Union
-from transformers import AutoTokenizer, PreTrainedTokenizerFast
+from transformers import AutoTokenizer, PreTrainedTokenizerFast, AutoConfig
 
 
 class QwenTokenizerWrapper:
@@ -50,8 +50,15 @@ class QwenTokenizerWrapper:
         self._causalqwen_vocab_size = len(self.tokenizer)
         
         self.num_token_id = self.tokenizer.convert_tokens_to_ids(self.num_token)
+        
         self.pad_token_id = self.tokenizer.pad_token_id or self.tokenizer.eos_token_id
         
+        # 4. A regex to find floats, supporting scientific notation.
+        self.float_pattern = re.compile(r"[-+]?\d*\.\d+|\d+\.?\d*e[-+]?\d+|[-+]?\d+")
+        
+        # 5. The final length of the tokenizer object, for internal use.
+        self._tokenizer_internal_len = len(self.tokenizer)
+
         # Regex to find numbers (integers, floats, negative numbers)
         self.number_pattern = re.compile(r'(?<![a-zA-Z0-9_])(-?\d+(\.\d+)?)(?![a-zA-Z0-9_])')
         
@@ -59,9 +66,6 @@ class QwenTokenizerWrapper:
         self.placeholder = "_NUM_HOLDER_"
         self.tokenizer.add_tokens([self.placeholder], special_tokens=True)
         self.placeholder_id = self.tokenizer.convert_tokens_to_ids(self.placeholder)
-        
-        # 5. The final length of the tokenizer object, for internal use.
-        self._tokenizer_internal_len = len(self.tokenizer)
 
 
     def __call__(self, *args, **kwargs):
@@ -177,4 +181,8 @@ class QwenTokenizerWrapper:
             "tokenizer_internal_len": self._tokenizer_internal_len,
             "num_token_id": self.num_token_id,
         }
+
+    @property
+    def vocab_size(self) -> int:
+        return self._causalqwen_vocab_size
 

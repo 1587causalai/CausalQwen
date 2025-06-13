@@ -93,12 +93,11 @@ class CausalLanguageModel(nn.Module):
         self.abduction_network = AbductionNetwork(self.hidden_size, self.causal_dim)
         
         # Action network - 基于因果表征生成输出
-        # vocab_size 在此为 None，因为分类头将在 init_weights 中根据 lm_head 动态创建
         self.action_network = ActionNetwork(
             input_dim=self.causal_dim,
             hidden_size=self.hidden_size,
             num_token_id=self.num_token_id,
-            vocab_size=None 
+            vocab_size=self.vocab_size
         )
 
     def init_weights(self):

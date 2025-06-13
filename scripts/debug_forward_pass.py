@@ -44,8 +44,8 @@ def main():
 
         # 步骤1: 基本导入测试
         print_step(1, "测试基本导入")
-            from src.models.causal_lm import CausalLMConfig, CausalLanguageModel
-            from src.data.tokenizer import QwenTokenizerWrapper
+        from src.models.causal_lm import CausalLMConfig, CausalLanguageModel
+        from src.data.tokenizer import QwenTokenizerWrapper
         print("✅ 导入成功")
 
         # 步骤2: 环境和路径检查
@@ -55,45 +55,50 @@ def main():
         print(f"设备: {device}")
         print(f"Qwen路径: {qwen_model_path}")
         assert os.path.exists(qwen_model_path), "Qwen模型路径不存在"
-            print(f"✅ Qwen模型路径存在")
+        print(f"✅ Qwen模型路径存在")
 
-        # 步骤3: 分词器初始化
-        print_step(3, "分词器初始化")
+        # 步骤3: 分词器和模型信息
+        print_step(3, "分词器和模型信息初始化")
         tokenizer = QwenTokenizerWrapper(model_path=qwen_model_path, use_real_tokenizer=True)
-            print(f"✅ 分词器初始化成功")
-        vocab_info = tokenizer.vocab_size_info()
-        print(f"   - CausalQwen 词汇表大小: {vocab_info['causalqwen_vocab']}")
+        print(f"✅ 分词器初始化成功")
+        
+        from src.utils.model_utils import get_qwen_model_info
+        model_info = get_qwen_model_info(qwen_model_path)
+        assert model_info is not None, "无法获取Qwen模型信息"
+        print("✅ 成功从模型配置获取信息")
+        print(f"   - 模型配置词汇表大小: {model_info['vocab_size']}")
         print(f"   - <NUM> token ID: {tokenizer.num_token_id}")
 
         # 步骤4: 模型配置
         print_step(4, "模型配置创建")
-            config = CausalLMConfig(
-            vocab_size=vocab_info['causalqwen_vocab'],
-                num_token_id=tokenizer.num_token_id,
-                hidden_size=896,
-                causal_dim=896,
-                use_real_qwen=True,
-            qwen_model_path=qwen_model_path
-            )
-            print(f"✅ 配置创建成功")
+        config = CausalLMConfig(
+            vocab_size=model_info['vocab_size'], # 使用从配置中读取的权威词汇表大小
+            num_token_id=tokenizer.num_token_id,
+            hidden_size=model_info['hidden_size'],
+            causal_dim=model_info['hidden_size'],
+            use_real_qwen=True,
+            qwen_model_path=qwen_model_path,
+            use_numerical_features=True # 确保数值功能开启
+        )
+        print(f"✅ 配置创建成功")
 
         # 步骤5: 模型创建与初始化
         print_step(5, "模型创建与初始化")
-            model = CausalLanguageModel(config).to(device)
+        model = CausalLanguageModel(config).to(device)
         model.init_weights()
         print(f"✅ 模型创建与初始化成功")
-            total_params = sum(p.numel() for p in model.parameters())
+        total_params = sum(p.numel() for p in model.parameters())
         print(f"   - 总参数数量: {total_params:,}")
 
         # 步骤6: 测试数据准备
         print_step(6, "准备测试数据")
-            test_texts = [
-            "The price of the book is 99.99 dollars and the temperature is -10.5 degrees.",
-            "Hello world! This is a test without numbers."
-            ]
-            inputs = tokenizer.batch_encode_plus(
-            test_texts, padding=True, truncation=True, return_tensors='pt'
-            )
+        test_texts = [
+        "The price of the book is 99.99 dollars and the temperature is -10.5 degrees.",
+        "Hello world! This is a test without numbers."
+        ]
+        inputs = tokenizer.batch_encode_plus(
+        test_texts, padding=True, truncation=True, return_tensors='pt'
+        )
         input_ids = inputs['input_ids'].to(device)
         numerical_values = inputs['numerical_values'].to(device)
         attention_mask = inputs['attention_mask'].to(device)
@@ -102,18 +107,24 @@ def main():
         # 步骤7: 分步前向传播与验证
         print_step(7, "分步前向传播与验证")
         model.eval()
-            with torch.no_grad():
+        with torch.no_grad():
             
-            # 7.1 特征提取网络
-            print("\n--- 7.1. 特征提取 (Feature Extraction) ---")
+            # 7.1 特征提取网络 (修正数据流)
+            print("\n--- 7.1. 增强嵌入与特征提取 ---")
             print("输入: input_ids, numerical_values")
             print("输出: 上下文特征 z")
-            print("理论: z = FeatureNetwork(NumericalEmbedding(input))")
+            print("理论: e = NumericalAwareEmbedding(input); z = FeatureNetwork(inputs_embeds=e)")
             
-            # 注意：在我们的模型中，特征提取网络包含了数值嵌入的逻辑
-            z = model.feature_network(
+            # 步骤 7.1a: 获取数值感知嵌入 e
+            enhanced_embeddings = model.numerical_aware_embedding(
                 input_ids=input_ids,
-                numerical_values=numerical_values,
+                numerical_values=numerical_values
+            )
+            print_tensor_stats("增强嵌入 e", enhanced_embeddings)
+
+            # 步骤 7.1b: 使用增强嵌入进行特征提取 z
+            z = model.feature_network(
+                inputs_embeds=enhanced_embeddings,
                 attention_mask=attention_mask
             )
             print_tensor_stats("上下文特征 z", z)
