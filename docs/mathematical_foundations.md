@@ -19,6 +19,24 @@
 
 > 我们用 B 代表批次大小, S 代表序列长度, H 代表模型核心维度 (即词嵌入和隐藏层维度), C 代表因果表征维度, K 代表基座模型 Qwen 的已用词汇表大小, V_full代表总词汇表大小, CausalQwen 的已用词汇表大小为 K+1 (K+1 包含基座模型 Qwen 的已用词汇表大小 K 和 CausalQwen 的额外词汇 `<NUM>`) 
 
+
+新架构完美实现了位置独立的推断-行动范式：
+
+```mermaid
+graph TB
+    A["输入字符串序列"] -- 字符串处理 --> B["序列输入<br> token sequence [B,S] <br> numerical values [B,S]"]
+    B -- 数值感知嵌入 --> C["数值感知嵌入 [B,S,H]"]
+    C -- "QwenFeatureNetwork" --> D["序列特征 [B,S,H]"]
+    D -- "AbductionNetwork" --> F["个体因果表征参数 [B,S,C*2]"]
+    F -- "ActionNetwork" --> G["序列输出 <br> cls[B,S, V_full], reg[B,S]"]
+    
+    
+    style C fill:#e8f5e8,stroke:#4caf50
+    style E fill:#e8f5e8,stroke:#4caf50
+    style G fill:#e8f5e8,stroke:#4caf50
+```
+
+
 ### 2.1 模块一：数值感知嵌入 (Numerical-aware Embedding)
 这一模块的目标是将混合了文本和数值的原始输入，转化为一个统一的、数值感知的特征向量序列。这个过程包含三个关键步骤, *输入示例**: 原始字符串文本 `"价格是99.9元"`:
 

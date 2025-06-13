@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-因果推断阶段的数学验证测试
+归因推断阶段的数学验证测试
 
 验证关键数学性质：
 1. U_i | z_i ~ Cauchy(loc(z_i), scale(z_i))

@@ -1,6 +1,6 @@
 ## 项目核心文档
 
-design-docs/math/mathematical_foundations.md 是整个项目详细数学原理的文档. docs/math/mathematical_foundations.md 是数学文档的简化版本. 请优先使用简化版本.
+design-docs/math/mathematical_foundations.md 是整个项目详细数学原理的文档. docs/mathematical_foundations.md 是数学文档的简化版本. 请优先使用简化版本.
 
 design-docs/core-design.md 是严格依照数学内核设计的架构文档.
 
