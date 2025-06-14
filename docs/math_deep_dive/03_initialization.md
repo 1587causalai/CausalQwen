@@ -35,11 +35,20 @@ $$\text{loc}_{U_i} = z_i, \quad \text{scale}_{U_i} = \gamma_i \text{ (大数值)
 
 **数学实现**：
 - 初始化位置参数：$W_{\text{loc}} = I$（恒等矩阵），$b_{\text{loc}} = 0$
-- 初始化尺度参数：$W_{\text{scale}} = 0$，$b_{\text{scale}} = \log(\gamma)$，其中 $\gamma$ 是大常数（如 $\gamma = 10$）
+- 初始化尺度参数：$W_{\text{scale}} = 0$，$b_{\text{scale}} = \text{softplus}^{-1}(\gamma)$，其中 $\gamma$ 是大常数（如 $\gamma = 10$）
+
+**softplus 逆函数**：
+$$\text{softplus}^{-1}(y) = \log(\exp(y) - 1)$$
+
+当 $y$ 较大时（如 $\gamma = 10$），有近似：
+$$\text{softplus}^{-1}(\gamma) \approx \gamma - \log(2) \approx \gamma - 0.693$$
 
 **效果**：因果表征 $U_i$ 的分布为宽泛分布 $U_i \sim \text{Cauchy}(z_i, \gamma_i)$，当 $\gamma_i$ 很大时，柯西分布近似**均匀先验**，归因网络在保持恒等映射的同时提供了高不确定性的表征。
 
-**数学直觉**：大尺度的柯西分布 $\text{Cauchy}(\mu, \gamma)$ 当 $\gamma \gg 1$ 时，在较大范围内近似均匀分布，这为模型提供了"无知先验"——模型开始时对个体差异保持最大的不确定性。
+**数值稳定性保证**：使用 softplus 而非 exp 确保了：
+1. 尺度参数始终为正且数值稳定
+2. 梯度传播更加平滑（softplus 的导数是 sigmoid 函数）
+3. 避免了 exp 在大输入时的数值上溢问题
 
 ### 步骤3：行动网络(分类) → 复制 Qwen 权重
 

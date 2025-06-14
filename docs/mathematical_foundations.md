@@ -94,7 +94,9 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 -   **输入**: 上下文特征 `z` (形状: `[B, S, H]`)
 -   **处理**: 通过线性层计算因果表征的分布参数：
     $$\text{loc}_{U_i} = W_{\text{loc}} \cdot z_i + b_{\text{loc}}$$
-    $$\text{scale}_{U_i} = \exp(W_{\text{scale}} \cdot z_i + b_{\text{scale}})$$
+    $$\text{scale}_{U_i} = \text{softplus}(W_{\text{scale}} \cdot z_i + b_{\text{scale}})$$
+    
+    其中 $\text{softplus}(x) = \log(1 + \exp(x))$，保证尺度参数严格为正。
     
     **初始化后**：$\text{loc}_{U_i} = z_i$，$\text{scale}_{U_i} = \gamma$
 -   **输出**: 
@@ -232,9 +234,11 @@ $$\text{loc}_{U_i} = z_i, \quad \text{scale}_{U_i} = \gamma$$
 
 **实现**：
 - 位置网络：$W_{\text{loc}} = I$（单位矩阵），$b_{\text{loc}} = 0$
-- 尺度网络：$W_{\text{scale}} = 0$，$b_{\text{scale}} = \log(\gamma)$
+- 尺度网络：$W_{\text{scale}} = 0$，$b_{\text{scale}} = \text{softplus}^{-1}(\gamma) = \log(\exp(\gamma) - 1)$
 
 其中 $\gamma$ 是大常数（如 10），提供宽泛的初始分布。
+
+> **注意**：当 $\gamma$ 较大时，$\text{softplus}^{-1}(\gamma) \approx \gamma - \log(2)$
 
 #### 步骤3：行动网络(分类) → 复制 Qwen 权重
 

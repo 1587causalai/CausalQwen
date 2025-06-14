@@ -138,21 +138,27 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
     **位置参数**：
     $$\text{loc}_{U_i} = W_{\text{loc}} \cdot z_i + b_{\text{loc}}$$
     
-    **尺度参数**（对数空间）：
-    $$\log(\text{scale}_{U_i}) = W_{\text{scale}} \cdot z_i + b_{\text{scale}}$$
-    $$\text{scale}_{U_i} = \exp(W_{\text{scale}} \cdot z_i + b_{\text{scale}})$$
+    **尺度参数**（使用 softplus 保证正值）：
+    $$\text{scale}_{U_i} = \text{softplus}(W_{\text{scale}} \cdot z_i + b_{\text{scale}})$$
+    
+    其中 $\text{softplus}(x) = \log(1 + \exp(x))$ 是一个平滑的 ReLU 近似，具有以下性质：
+    - 当 $x \to -\infty$ 时，$\text{softplus}(x) \to 0$
+    - 当 $x \to +\infty$ 时，$\text{softplus}(x) \to x$
+    - 导数：$\text{softplus}'(x) = \sigma(x) = \frac{1}{1 + \exp(-x)}$
     
 -   **输出**: 
     - `loc_U`: 因果表征分布的位置参数 (形状: `[B, S, C]`)
     - `scale_U`: 因果表征分布的尺度参数 (形状: `[B, S, C]`)
 
-**初始化后的具体计算**：根据初始化策略（$W_{\text{loc}} = I$, $b_{\text{loc}} = 0$, $W_{\text{scale}} = 0$, $b_{\text{scale}} = \log(\gamma)$）：
+**初始化后的具体计算**：根据初始化策略（$W_{\text{loc}} = I$, $b_{\text{loc}} = 0$, $W_{\text{scale}} = 0$, $b_{\text{scale}} = \text{softplus}^{-1}(\gamma)$）：
 
 $$\text{loc}_{U_i} = I \cdot z_i + 0 = z_i$$
-$$\text{scale}_{U_i} = \exp(0 \cdot z_i + \log(\gamma)) = \exp(\log(\gamma)) = \gamma$$
+$$\text{scale}_{U_i} = \text{softplus}(0 \cdot z_i + \text{softplus}^{-1}(\gamma)) = \text{softplus}(\text{softplus}^{-1}(\gamma)) = \gamma$$
 
 因此，初始化后每个位置的因果表征服从：
 $$U_i \sim \text{Cauchy}(z_i, \gamma)$$
+
+> **数值稳定性优势**：相比 exp 函数，softplus 在输入为负数时不会产生极小的正数（可能导致数值下溢），在输入为正数时增长速度更缓慢（避免数值上溢）。
 
 ## 4. 模块四：行动决策网络 (Action Network)
 
