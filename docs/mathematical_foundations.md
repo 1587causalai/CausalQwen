@@ -9,7 +9,7 @@
 1.  **个体选择变量 (Individual Selection Variable)**：一次具体的赋值 $U=u$ 代表着从所有可能的个体中"选中"了某一个特定个体 `u`。
 2.  **个体因果表征 (Individual Causal Representation)**：被选中的向量 $u$ 本身，就包含了该个体所有内在的、驱动其行为的潜在属性。
 
-**核心思想**：普适的因果律 ($Y=f(t;u)$) 应用于不同的个体 ($u$)，从而产生了不同的反事实结果 ($Y(t)$)。$U$ 是所有个体性差异的最终来源。
+**核心思想**：普适的因果律 ($Y=f(t;u, \text{noise})$) 应用于不同的个体 ($u$) 与外生噪声 ($\text{noise}$)，从而产生了不同的反事实结果 ($Y(t)$)。$U$ 是所有个体性系统性差异的最终来源，而 $\text{noise}$ 则代表了不可控的、非系统性的随机扰动。
 
 > 深度解读请参见: [`design-docs/U_deep_dive.md`](design-docs/U_deep_dive.md)
 
@@ -104,19 +104,27 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
     - `scale_U`: 因果表征分布的尺度参数 (形状: `[B, S, C]`)
 
 ### 2.4 模块四：行动决策网络 (Action Network)
-该模块基于推断出的因果表征分布，进行并行的分类和回归决策。
 
--   **输入**: `loc_U` 和 `scale_U`
+该模块是模型的核心决策单元。其内部包含一个可学习的噪声参数 $b_{noise}$，并且其工作流程分为两步：
+
+1.  **噪声注入 (Noise Infusion)**：首先，网络将上游推断出的个体表征分布 $U_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$ 与内部的、代表不可控随机性的外生噪声分布 $\epsilon_i \sim \text{Cauchy}(0, |b_{noise}|)$ 进行叠加，形成一个"有效输入分布"：
+    $$U'_{\text{effective}, i} \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i} + |b_\text{noise}|)$$
+2.  **并行决策 (Decision Making)**：然后，网络基于这个包含了两种不确定性来源的有效分布，进行并行的分类和回归决策。
+
+从数学上看，由于噪声注入和决策本身都是线性变换，整个行动网络可以被视为一个单一的、作用于增广输入 $[U_i, \epsilon_i]$ 上的线性变换，这保证了我们可以持续利用柯西分布的线性稳定性进行解析计算。
+
+
+-   **输入**: `loc_U`, `scale_U` (来自归因网络), $b_{noise}$ (内部可学习参数)
 -   **处理**: 
-    - **分类**：每个词汇 $k$ 有独立的线性变换
+    - **分类**：每个词汇 $k$ 有独立的线性变换。该变换作用于有效输入分布 $U'_{\text{effective}, i}$ 上：
       $$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k}$$
-      $$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot \text{scale}_{U_i}$$
+      $$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot(\text{scale}_{U_i} + |b_\text{noise}|)$$
       
       **初始化后**：$\text{loc}_{S_{k,i}} = W_{\text{Qwen},k} \cdot z_i$（与 Qwen 相同的 logits）
       
-    - **回归**：单一的线性变换
+    - **回归**：单一的线性变换，同样作用于有效输入分布 $U'_{\text{effective}, i}$：
       $$\text{loc}_{Y_i} = W_{\text{reg}} \cdot \text{loc}_{U_i} + b_{\text{reg}}$$
-      $$\text{scale}_{Y_i} = \|W_{\text{reg}}\|_1 \cdot \text{scale}_{U_i}$$
+      $$\text{scale}_{Y_i} = \|W_{\text{reg}}\|_1 \cdot (\text{scale}_{U_i} + |b_{noise}|)$$
       
       **初始化后**：$Y_i \sim \text{Cauchy}(0, \epsilon\gamma)$（近似无偏先验）
       
@@ -152,10 +160,10 @@ $$\mathcal{L}_{\text{total}} = \underbrace{\frac{\sum_i L_{\text{cls}, i} \cdot 
 
 ## 3.推理阶段：生成预测 (Inference)
 
-在模型训练完成后，我们使用它来生成预测。CausalQwen 提供两种推理模式。
+在模型训练完成后，我们使用它来生成预测。CausalQwen 提供了一个层次化的推理方法体系，从最高效的标准预测，到能体现因果性的生成式采样，再到用于深度反事实分析的高级模式，允许用户根据不同需求选择合适的工具。
 
 ### 3.1 确定性推理 (Deterministic Inference)
-这是默认的、最高效的推理模式。它完全基于解析计算，不涉及任何随机采样。
+这是默认的、最高效的推理模式。它完全基于解析计算，不涉及任何随机采样。其目标是给出在综合考虑了所有不确定性（个体 `U` 和噪声 `noise`）之后，最稳健（robust）的点估计。
 - **分类预测**: 直接使用前向传播计算出的各类 OvR 概率，并选择概率最高的类别。
     $$
     \hat{y}_{\text{cls},i} = \arg\max_k P_{k,i}
@@ -166,12 +174,16 @@ $$\mathcal{L}_{\text{total}} = \underbrace{\frac{\sum_i L_{\text{cls}, i} \cdot 
     $$
 
 ### 3.2 因果采样 (Causal Sampling)
-这是一种新颖的随机推理范式，它不直接对不确定的"结果"进行采样，而是对不确定的"原因"（即个体因果表征 U）进行采样。这是一种比`top-k`/`top-p`更符合因果直觉的采样方法。
+这是一种混合了随机性与确定性的高级推理模式，它深刻地体现了模型的因果哲学：分离可控的个体因素与不可控的随机噪声。其过程分为三步：
 
-1.  **采样"原因"**: 根据上下文推断出的因果表征分布 `Cauchy(loc_U, scale_U)`，从中采样一个**具体的**表征向量 $u_i$。
-2.  **观察"结果"**: 将这个确定的 $u_i$ 传入**行动网络**，得到**确定性的**分类分数和回归值，并据此做出最终预测。
+1.  **第一步：采样"个体" (Sample the Individual)**: 首先，我们对代表"个体性"的变量 $U$ 进行一次随机采样，从其后验分布 `Cauchy(loc_U, scale_U)` 中得到一个**具体的**个体因果表征向量 $u_i$。
 
-传统大模型需要 Top-P 和 Top-K 采样，是因为它们提供了一种在保真度（fidelity）和多样性（diversity）之间进行权衡的有效手段。我们类似可以使用似然截断来来实现对应的功能， 也就是说概率密度 $p_{U_i}(u_i)$ 需要大于某个数值或者等于$\frac{1}{\pi \text{scale}_{U_i}}$(Cauchy密度最大值)的 $u_i$ 才被保留。
+2.  **第二步：构建"情境"分布 (Construct the Situational Distribution)**: 接下来，我们将这个确定的个体 $u_i$ 与模型中固有的、不可控的**外生噪声分布** `Cauchy(0, |b_noise|)` 相结合。其结果是一个新的、代表了"特定个体在随机情境中"的柯西分布：
+    $$ U'_{\text{situational}, i} \sim \text{Cauchy}(u_i, |b_{noise}|) $$
+
+3.  **第三步：执行"确定性"决策 (Perform Deterministic Decision)**: 最后，我们将这个新的"情境分布" $U'_{\text{situational}, i}$ 作为输入，传入行动网络的决策层（即线性变换部分）。由于柯西分布的线性稳定性，我们可以**解析地**计算出最终的分类和回归决策分布，并像在标准确定性推理中一样，通过取分布的中位数（`loc`参数）来得到最终的预测值。
+
+**核心思想**: 这种方法的精妙之处在于，它只在代表"个体选择"的步骤引入随机性，而将"环境噪声"保持为一种不确定性（一个分布）。这使得我们能够在探索不同个体（不同的采样 $u_i$）可能产生的结果的同时，仍然对每种结果做出最稳健（确定性）的预测。
 
 ### 3.3 兼容传统采样 (Compatibility with Traditional Sampling)
 除了独有的因果采样，CausalQwen 在设计上完全兼容传统语言模型（如Qwen）的 `top-k`/`top-p` 采样方法。
@@ -180,27 +192,47 @@ $$\mathcal{L}_{\text{total}} = \underbrace{\frac{\sum_i L_{\text{cls}, i} \cdot 
 $$
 P_{\text{softmax}}(y_i=k|x) = \frac{\exp(\text{loc}_{S_{k,i}})}{\sum_{j=1}^{V_{\text{full}}} \exp(\text{loc}_{S_{j,i}})}
 $$
-随后，便可在这组概率上执行标准的 `top-k`/`top-p` 采样。另一种可选的归一化方法是直接对所有类别的 OvR 概率进行求和，并以此为分母进行归一化，这为评估模型提供了不同的视角。这保证了 CausalQwen 可以作为 Qwen 的一个直接替代和功能超集来使用。
+随后，便可在这组概率上执行标准的 `top-k`/`top-p` 采样, 这保证了 CausalQwen 可以作为 Qwen 的一个直接替代和功能超集来使用。
 
-### 3.4 (可选)共享随机性：因果采样的高级模式
+另一种可选的归一化方法是直接对所有类别的 OvR 概率进行求和，并以此为分母进行归一化，这为评估模型提供了不同的视角
 
-因果采样的一个核心优势，在于通过**重参数化技巧 (Reparameterization Trick)**，实现了对生成过程随机性的精细控制。
+### 3.4 高级因果采样：分解并固定随机性来源
 
-为了从推断出的因果表征分布 $\text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$ 中采样，我们不直接进行随机抽取，而是执行一个确定性变换：
-1.  首先，从标准均匀分布中采样一个**固定的**随机向量 $\vec{\epsilon} \sim U(0, 1)^C$。
-2.  然后，使用此 $\vec{\epsilon}$ 为序列中的**每一个**位置 $i$ 计算其因果表征 $u_i$：
-    $$
-    u_i = \text{loc}_{U_i} + \text{scale}_{U_i} \odot \tan\left(\pi \left(\vec{\epsilon} - 0.5\right)\right)
-    $$
-    其中 $\odot$ 表示逐元素相乘。
+CausalQwen 的设计允许我们对生成过程中的“随机性”进行前所未有的精细控制。传统的采样（如 top-k）在每一步都从一个临时的概率分布中抽取结果，导致随机性是无记忆、逐词元独立的。
 
-**深刻的含义：分离与共享**
+高级因果采样模式则基于一个核心思想：**在一次完整的生成任务中，将模型两大不确定性来源（个体 `U` 或噪声 `noise`）之一的随机实例固定下来，并观察其在整个生成过程中如何持续地与另一不确定性来源相互作用。** 这使得我们能进行两种深刻的反事实探究。
 
-这个技巧的巧妙之处在于它将模型的内在逻辑（由上下文决定的 $\text{loc}_{U_i}$ 和 $\text{scale}_{U_i}$）与外在的随机性（由 $\vec{\epsilon}$ 代表）完全分离。更重要的是，它允许我们在一次完整的生成任务（如生成一段回复）中，**只采样一次 $\vec{\epsilon}$ 并持续使用它**。这意味着：
-- **随机性来源是统一的**：整个序列的所有词元共享同一个"随机种子"或"灵感来源" $\vec{\epsilon}$。
-- **上下文驱动多样性**：词元间的差异完全由模型根据上下文动态计算出的 $\text{loc}_{U_i}$ 和 $\text{scale}_{U_i}$ 决定。
 
-这与传统 `top-k`/`top-p` 采样在每一步都独立进行随机抽样的方式形成了鲜明对比。CausalQwen 的方法更贴近人类的表达方式：一旦确定了某种"谈话风格"或"核心意图"（由 $\vec{\epsilon}$ 固化），整个句子都会围绕它连贯地展开，而不是每个词都随机地偏离主题。这为生成更具一致性和个性化风格的文本提供了坚实的数学基础。
+#### 3.4.1 模式一：共享“个体选择因子” (Fixing the Individual, Observing its Interaction with Noise)
+
+* **研究目标**：此模式旨在回答：“如果我们预先选定**一个确切的个体**，然后观察这个个体在面对一系列**不可预测的、逐-词元-独立的随机噪声**时，其行为会如何展开？”
+* **实现机制**:
+
+  1. **采样个体**: 在生成任务开始时，采样一个固定的“个体选择因子” $\vec{\epsilon}_{\text{seed}} \sim U(0, 1)^C$。在第 $i$ 步，我们用它计算出该上下文中的**具体个体表征** $u_i$：
+     $$
+     u_i = \text{loc}_{U_i} + \text{scale}_{U_i} \odot \tan\left(\pi \left(\vec{\epsilon}_{\text{seed}} - 0.5\right)\right)
+     $$
+  2. **构建情境分布**: 这个确定的个体 $u_i$ 随即进入一个充满不确定性的“决策情境”。其有效的输入心智状态不再是一个确定的向量，而是一个**包含了外生随机噪声的分布**：
+     $$
+     U'_{\text{effective}, i} \sim \text{Cauchy}(u_i, |b_{noise}|)
+     $$
+  3. **解析决策**: 我们将这个**有效输入分布** $U'_{\text{effective}, i}$ 传入行动网络。由于柯西分布的线性稳定性，我们可以**解析地**计算出最终的分类和回归决策分布，并取其位置参数（中位数）作为该步骤的最终预测。
+* 随机性的来源被分解：代表“个体选择”的随机性（来自 $U$）在任务开始时被一次性固定。而代表“不可控扰动”的随机性（来自 `noise`）则在**每一步的决策中都保持其分布形态**，代表了每一次决策时都会遇到的、全新的、不可预测的微小扰动。
+
+
+#### 3.4.2 模式二：共享"系统性噪声实例" (Fixing the Noise, Observing the Uncertain Individual)
+
+* **研究目标**：此模式旨在回答：“如果一个系统存在一种**持续不变的、系统性的随机影响**，那么一个本身具有内在不确定性的**个体（一个分布，而非一个实体）** 在这种影响下，其行为会如何展开？”
+* **实现机制**:
+
+  1. **采样噪声**: 在生成任务开始时，采样一个固定的“系统性噪声实例” $\vec{\epsilon}_{\text{noise}} \sim \text{Cauchy}(0, I)$。
+  2. **构建受扰动的心智分布**: 在第 $i$ 步，我们不选定具体个体，而是取其完整的**个体因果表征分布** $U_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$。然后，我们将固定的噪声实例作用于这个分布的定位上。根据柯西分布的加法稳定性，我们得到一个新的、被系统性偏移的有效输入分布：
+     $$
+     U'_{\text{effective}, i} \sim \text{Cauchy}(\text{loc}_{U_i} + |b_{noise}| \cdot \vec{\epsilon}_{\text{noise}}, \text{scale}_{U_i})
+     $$
+  3. **解析决策**: 同样，我们将这个新的**有效输入分布** $U'_{\text{effective}, i}$ 传入行动网络，解析地计算出最终决策分布，并取其位置参数作为预测。
+* 随机性的来源被再次分解：代表“不可控扰动”的随机性被一次性采样并固定下来，成为一种贯穿始终的“风格”或“偏差”。而代表“个体选择”的随机性则在**每一步都保持其完整的分布形态**（由变化的 `loc_U` 和 `scale_U` 定义），代表了个体在不同上下文下自身固有的不确定性。
+
 
 ## 4.初始化策略：知识迁移
 
@@ -253,13 +285,18 @@ $$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot z_i = W_{\text{Qwen},k} \cdot z_
 
 将回归行动网络使用标准的小权重初始化，如 Xavier 或 Kaiming 初始化。
 
-**数学效果**：由于 $\|W_{\text{reg}}\|$ 很小，结合大尺度的因果表征分布 $U_i \sim \text{Cauchy}(z_i, \gamma_i)$，位置 $i$ 的回归预测分布为：
+**数学效果**：由于 $\|W_{\text{reg}}\|_1$ 很小，结合大尺度的因果表征分布 $U_i \sim \text{Cauchy}(z_i, \gamma_i)$，位置 $i$ 的回归预测分布为：
 $$Y_i \sim \text{Cauchy}(\mu_{\text{reg},i}, \gamma_{\text{reg},i}),  \\
-\mu_{\text{reg},i} = W_{\text{reg}} \cdot z_i + b_{\text{reg}},  \gamma_{\text{reg},i} = |W_{\text{reg}}| \cdot \gamma_i$$
+\mu_{\text{reg},i} = W_{\text{reg}} \cdot z_i + b_{\text{reg}},  \gamma_{\text{reg},i} = \|W_{\text{reg}}\|_1 \cdot (\gamma_i + |b_{noise}|)$$
 
-其中 $|W_{\text{reg}}|$ 是该向量每个元素都取绝对值，回归输出近似为以 $0$ 为中心的宽泛分布，提供了**无偏的回归先验** ($\mu_{\text{reg}}$ 和 $\gamma_{\text{reg}}$ 的张量形状都是 [B, S]) 。
+其中 $\|W_{\text{reg}}\|_1$ 是 $W_{\text{reg}}$ 权重的 L1 范数。在初始化阶段（由于 $b_{noise}$ 被初始化为 0），回归输出近似为以 $0$ 为中心的宽泛分布，提供了**无偏的回归先验** ($\mu_{\text{reg}}$ 和 $\gamma_{\text{reg}}$ 的张量形状都是 [B, S]) 。
 
-#### 步骤5：OvR 阈值 → 统一设置
+#### 步骤5：噪声参数初始化 → 零初始化
+为保证初始化的确定性，我们将噪声项的系数初始化为零：
+$$b_{noise} \leftarrow 0$$
+这确保了在训练开始时，模型行为与无噪声版本完全一致，噪声的影响力将在训练中被逐步学习。
+
+#### 步骤6：OvR 阈值 → 统一设置
 
 在 OvR 分类中，阈值 $C_k$ 决定了柯西分布决策分数超过阈值的概率计算：
 
@@ -291,7 +328,7 @@ $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\t
 
 -   **因果表征**: 对于每个位置 $i$，因果表征 $U_i$ 服从宽泛的柯西分布 $U_i \sim \text{Cauchy}(z_i, \gamma_i)$，其中 $\gamma_i$ 是大数。
 -   **分类决策**: 分类行动网络的输出与 Qwen 的原始输出完全一致，即 $\text{loc}_{S_{k,i}} = \mathbf{W}_{\text{Qwen}}[k, :] \cdot z_i$。
--   **回归决策**: 由于回归网络的标准初始化，回归预测的分布为 $Y_i \sim \text{Cauchy}(W_{\text{reg}} \cdot z_i + b_{\text{reg}},  |W_{\text{reg}}| \cdot \gamma_i)$，当 $\gamma_i$ 很大时，近似为以 0 为中心的宽泛分布。
+-   **回归决策**: 由于回归网络的标准初始化以及 $b_{noise}$ 初始化为 0，回归预测的分布为 $Y_i \sim \text{Cauchy}(W_{\text{reg}} \cdot z_i + b_{\text{reg}},  \|W_{\text{reg}}\|_1 \cdot \gamma_i)$，当 $\gamma_i$ 很大时，近似为以 0 为中心的宽泛分布。
 -   **阈值设置**: 所有类别共享相同的初始阈值 $C_k = C_{\text{OvR}}$，这提供了一个适度稀疏且数值稳定的初始概率分布。
 
 
@@ -381,7 +418,7 @@ graph TD
 
 ### 图 3：详解步骤 2 & 3 - 因果核心流程
 
-这张图展示了模型的核心机制：如何从上下文特征 `z` 推断出代表个体的因果分布 `U`，并基于 `U` 产生决策分布 `S` 和 `Y`。
+这张图展示了模型的核心机制：如何从上下文特征 `z` 推断出代表个体的因果分布 `U`，并基于 `U` 和内部噪声 `noise` 产生决策分布 `S` 和 `Y`。
 
 ```mermaid
 graph TD
@@ -390,7 +427,7 @@ graph TD
     C --> D["<b>归因推断网络 (Abduction)</b>"];
     D --> E["<b>个体因果表征 U<br>Uᵢ ~ Cauchy(loc, scale)</b>"];
     
-    E --> F{"<b>行动网络 (Action)</b>"};
+    E --> F{"<b>行动网络 (Action)</b><br>基于U与内部噪声<br>进行决策"};
     F --> G["分类决策分布 S<br>S_{k,i} ~ Cauchy(...)"];
     F --> H["回归决策分布 Y<br>Y_i ~ Cauchy(...)"];
 
@@ -598,10 +635,10 @@ CausalQwen 的数学框架三个特色：
 
 | 对比维度 (Dimension) | 标准 Qwen (Standard Qwen) | CausalQwen |
 | :--- | :--- | :--- |
-| **核心假设** | **关联性**：学习输入 $X$ 和输出 $Y$ 之间的条件概率分布 $P(Y\|X)$。 | **因果性**：学习一个普适的因果函数 $Y = f(t; u)$，其中 $u$ 是代表个体内在属性的变量。 |
+| **核心假设** | **关联性**：学习输入 $X$ 和输出 $Y$ 之间的条件概率分布 $P(Y\|X)$。 | **因果性**：学习一个普适的因果函数 $Y = f(t; u, \text{noise})$，其中 $u$ 是个体属性，$\text{noise}$ 是外生噪声。 |
 | **数值处理** 🔢<br>Numerical Handling | **视为纯文本 (As Plain Text)**<br>将数字（如 "99.9"）当作普通词元处理，缺乏内在的数值概念。 | **双通道处理 (Dual-Channel)**<br>文本部分走词元嵌入，数值部分走独立的**回归通道**，真正理解数值大小。 |
 | **输出架构** 🏛️<br>Output Architecture | **单一 Logits 输出 (Single Logits Output)**<br>输出一个维度为词汇表大小的 logits 向量，用于 Softmax。 | **双重分布输出 (Dual Distribution Output)**<br>输出独立的**分类 OvR 分布**和**回归柯西分布**，分别处理文本与数值。 |
 | **损失函数** 🧮<br>Loss Function | **Softmax 交叉熵 (Softmax Cross-Entropy)**<br>在整个词汇表上进行归一化，计算单一正确答案的损失。 | **OvR + 门控回归损失 (Gated Reg Loss)**<br>分类上进行独立二元判断，回归上由分类结果**智能门控**，实现多任务学习。 |
 | **采样范式** 🎲<br>Sampling Paradigm | **对"结果"采样 (Sampling the "Effect")**<br>在最终的 logits 分布上使用 `top-k`/`top-p` 进行随机采样。 | **对"原因"采样 (Sampling the "Cause")**<br>引入**因果采样**，直接对"个体" $U$ 进行采样，得到更多样且风格一致的生成结果。 |
-| **核心创新** ✨<br>Key Innovation | 强大的语言建模与上下文理解能力。 | 引入外生**个体选择变量 $U$**，并利用柯西分布的数学特性，构建了一个可高效训练的因果生成框架。 |
+| **核心创新** ✨<br>Key Innovation | 强大的语言建模与上下文理解能力。 | 引入外生**个体选择变量 $U$**，显式建模**外生噪声 $\text{noise}$**，并利用柯西分布的数学特性，构建了一个可高效训练的因果生成框架。 |
 
