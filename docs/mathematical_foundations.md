@@ -81,94 +81,72 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 ### 2.2 模块二：特征提取网络 (Feature Extraction Network)
 该模块使用一个标准的 Transformer 网络（如Qwen）作为主干，来深度理解序列的上下文信息。
 
--   **输入**: 
-    - `e`: 增强嵌入张量 (形状: `[B, S, H]`)
--   **处理**: 增强嵌入序列 `e` 被送入Qwen的Transformer主干网络中。通过多层自注意力机制，网络为每个位置的词元计算出融合了全局上下文信息的深层特征：
-    $$z = \text{FeatureNetwork}(e) = [z_1, z_2, ..., z_S]$$
--   **输出**: 
-    - `z`: 上下文特征张量 (形状: `[B, S, H]`)
+-   **输入**: `e`: 增强嵌入张量 (形状: `[B, S, H]`)
+-   **处理**: 通过 $L$ 层 Transformer 进行特征提取：
+    $$z = \text{QwenTransformer}(e)$$
+    
+    由于完全继承 Qwen 权重，当 $e \approx e_{\text{Qwen}}$ 时，$z \approx z_{\text{Qwen}}$。
+-   **输出**: `z`: 上下文特征张量 (形状: `[B, S, H]`)
 
 ### 2.3 模块三：归因推断网络 (Abduction Network)
-该模块从上下文特征中推断出每个位置的、更深层次的个体因果表征。这对应着"你是谁？"的归因过程。
+该模块从上下文特征中推断出每个位置的个体因果表征分布。
 
--   **输入**: 
-    - `z`: 上下文特征张量 (形状: `[B, S, H]`)
--   **处理**: 一个线性层（或一个小型MLP）作为归因网络，为每个位置独立地计算出因果表征 $U_i$ 所服从的柯西分布的参数：
-    $$(\text{loc}_{U_i}, \log(\text{scale}_{U_i})) = \text{AbductionNetwork}(z_i), \quad i = 1, 2, ..., S$$
+-   **输入**: 上下文特征 `z` (形状: `[B, S, H]`)
+-   **处理**: 通过线性层计算因果表征的分布参数：
+    $$\text{loc}_{U_i} = W_{\text{loc}} \cdot z_i + b_{\text{loc}}$$
+    $$\text{scale}_{U_i} = \exp(W_{\text{scale}} \cdot z_i + b_{\text{scale}})$$
+    
+    **初始化后**：$\text{loc}_{U_i} = z_i$，$\text{scale}_{U_i} = \gamma$
 -   **输出**: 
     - `loc_U`: 因果表征分布的位置参数 (形状: `[B, S, C]`)
     - `scale_U`: 因果表征分布的尺度参数 (形状: `[B, S, C]`)
 
-> **注意**: 此处的因果表征维度 `C` 与模型隐藏层维度 `H` 相同，即 `C=H`。
-
-后续我们可以看到位置和尺度参数分别是不同的线性变化（或者小MLP）计算的。
-
 ### 2.4 模块四：行动决策网络 (Action Network)
-该模块基于推断出的因果表征分布，进行并行的分类和回归决策。这对应着"你会做什么？"的行动过程。
+该模块基于推断出的因果表征分布，进行并行的分类和回归决策。
 
--   **输入**: 
-    - `loc_U` (形状: `[B, S, C]`) 和 `scale_U` (形状: `[B, S, C]`)
--   **处理**: 通过两个独立的线性变换，将因果表征分布映射到分类和回归的决策空间。
-    $$
-    (\text{loc}_{S_{k,i}}, \text{scale}_{S_{k,i}}) = \text{Action}_{\text{cls}}(\text{loc}_{U_i}, \text{scale}_{U_i}), \quad k = 0, 1, ..., V_{\text{full}} \\
-    (\text{loc}_{Y_i}, \text{scale}_{Y_i}) = \text{Action}_{\text{reg}}(\text{loc}_{U_i}, \text{scale}_{U_i})
-    $$
+-   **输入**: `loc_U` 和 `scale_U`
+-   **处理**: 
+    - **分类**：每个词汇 $k$ 有独立的线性变换
+      $$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k}$$
+      $$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot \text{scale}_{U_i}$$
+      
+      **初始化后**：$\text{loc}_{S_{k,i}} = W_{\text{Qwen},k} \cdot z_i$（与 Qwen 相同的 logits）
+      
+    - **回归**：单一的线性变换
+      $$\text{loc}_{Y_i} = W_{\text{reg}} \cdot \text{loc}_{U_i} + b_{\text{reg}}$$
+      $$\text{scale}_{Y_i} = \|W_{\text{reg}}\|_1 \cdot \text{scale}_{U_i}$$
+      
+      **初始化后**：$Y_i \sim \text{Cauchy}(0, \epsilon\gamma)$（近似无偏先验）
+      
 -   **输出**:
     - 分类决策分布参数: `loc_S` (形状: `[B, S, V_full]`), `scale_S` (形状: `[B, S, V_full]`)
     - 回归决策分布参数: `loc_Y` (形状: `[B, S]`), `scale_Y` (形状: `[B, S]`)
 
-尤其需要注意的是，不管分类还是回归线性变化，同时扮演了两个角色：
-1. 将因果表征 instance 映射到分类和回归的决策空间。
-2. 将因果表征 r.v. 映射到分类和回归的决策空间，是前者基于Cauchy分布假设的伴随映射。
-
 > **核心引擎：柯西分布的线性稳定性**
-> 整个归因-行动流程之所以能高效运作，完全得益于柯西分布的**线性稳定性**。如果一个随机变量 $U \sim \text{Cauchy}(\mu, \gamma)$，那么它的任何线性变换 $Y = aU + b$ 之后，依然服从柯西分布 $Y \sim \text{Cauchy}(a\mu + b, |a|\gamma)$。这意味着，行动网络中的线性变换可以直接作用于分布的参数（`loc` 和 `scale`），而无需进行任何耗时的随机采样。这是模型能够被高效训练的关键。
+> 如果 $U \sim \text{Cauchy}(\mu, \gamma)$，那么 $aU + b \sim \text{Cauchy}(a\mu + b, |a|\gamma)$。这让我们无需采样就能计算变换后的分布。
 
 ### 2.5 模块五：损失计算 (Loss Calculation)
-此模块计算模型预测与真实标签之间的差异，为反向传播提供依据。它由两部分组成：
 
 #### 1. OvR 分类损失
-我们不使用标准的 Softmax，而是对每个类别进行独立的"一对多"（One-vs-Rest, OvR）判断。
+对每个类别计算独立的二元分类概率：
+$$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
 
--   **输入**: 
-    - 分类决策分布参数: `loc_S`, `scale_S` (形状: `[B, S, V_full]`)
--   **处理**: 
-    1.  利用柯西分布的累积分布函数（CDF）计算每个类别的概率：
-        $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
-    2.  基于此概率使用二元交叉熵损失, 计算标准的序列的位置 `i` 处分类总损失。
-        $$L_{\text{cls}, i} = \sum_{k=1}^{V_{\text{full}}} (y_{k,i} \log P_{k,i} + (1-y_{k, i}) \log (1 - P_{k, i}))$$
+然后计算所有类别的二元交叉熵之和：
+$$L_{\text{cls}, i} = -\sum_{k=0}^{V_{\text{full}}-1} [y_{k,i} \log P_{k,i} + (1-y_{k,i}) \log (1 - P_{k,i})]$$
 
-> **注记：** 与传统的 Softmax 交叉熵只针对一个正确类别计算损失不同，这里的 $L_{\text{cls}, i}$ 是对词汇表中**所有** $V_{\text{full}}$ 个类别进行的独立二元判断损失的**总和**。因此，在单个词元位置 `i` 上的分类损失值本身会很大（例如，在训练初期，其量级约等于 $V_{\text{full}} \times \log(2)$），这是符合预期的设计。
+其中 $y_{k,i}$ 是 one-hot 编码的真实标签。
 
 #### 2. 门控回归损失
-我们只在目标为 `<NUM>` 的位置计算回归损失（其他位置的回归损失使用默认填充数值进行并行计算，可填充为0，但是因为使用掩码损失，所以不会对模型产生任何影响）。
+柯西分布的负对数似然：
+$$\mathcal{L}_{\text{nll},i} = \log(\pi \cdot \text{scale}_{Y_i}) + \log\left(1 + \left(\frac{y_{\text{true},i} - \text{loc}_{Y_i}}{\text{scale}_{Y_i}}\right)^2\right)$$
 
--   **输入**: 
-    - 回归决策分布参数: `loc_Y`, `scale_Y` (形状: `[B, S]`)
-    - 真实数值: `true_numeric_values` (形状: `[B, S]`)
-    - `<NUM>`词元的预测概率: $P_{\text{<NUM>},i}$
--   **处理**: 基于分类概率加权的柯西负对数似然损失， 计算序列的位置 `i` 处回归总损失：
-    $$
-    \mathcal{L}_{\text{cauchy\_nll},i} = \log(\pi \cdot \text{scale}_{Y_i}) + \log\left(1 + \left(\frac{y_{\text{true},i} - \text{loc}_{Y_i}}{\text{scale}_{Y_i}}\right)^2\right) \\
-    \mathcal{L}_{\text{reg\_gated},i} = m_i \cdot \left(\alpha + (1-\alpha) \cdot P_{\text{<NUM>},i}\right) \cdot \mathcal{L}_{\text{cauchy\_nll},i}
-    $$
-    其中 $m_i$ 是指示真实标签是否为`<NUM>`的掩码, $\alpha$ 是一个可调的门控系数(默认选择0, 方便模型先学会分类再学回归)。
+门控权重（$\alpha=0$ 时）：
+$$\mathcal{L}_{\text{reg\_gated},i} = m_i \cdot P_{\text{<NUM>},i} \cdot \mathcal{L}_{\text{nll},i}$$
 
-#### 3. 总损失的合并 (Corrected)
+其中 $m_i$ 指示位置 $i$ 的真实标签是否为 `<NUM>`。
 
-最终的总损失由平均分类损失和有效的平均回归损失加权构成。关键在于，这两种损失在求平均时使用了不同的基数（分母），以确保回归信号的强度，避免其因数值词元的稀疏性而被"稀释"。
-
-1.  **平均分类损失 ($\mathcal{L}_{\text{cls\_mean}}$)**: 对所有真实词元（排除填充词元）的分类损失求平均。
-    $$ \mathcal{L}_{\text{cls\_mean}} = \frac{\sum_{b,i} (\mathcal{L}_{\text{cls}, b,i} \cdot \text{attention\_mask}_{b,i})}{\sum_{b,i} \text{attention\_mask}_{b,i}} $$
-
-2.  **有效回归损失 ($\mathcal{L}_{\text{reg\_eff}}$)**: 只对真实标签为 `<NUM>` 的词元（这些词元也必然是真实词元）的回归损失求平均。
-    $$ \mathcal{L}_{\text{reg\_eff}} = \frac{\sum_{b,i} \mathcal{L}_{\text{reg\_gated},b,i}}{\sum_{b,i} m_{b,i}} $$
-    其中分母 $\sum m_{b,i}$ 是批次中所有数值词元的总数。
-
-3.  **最终总损失 ($\mathcal{L}_{\text{total}}$)**:
-    $$ \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls\_mean}} + \lambda \cdot \mathcal{L}_{\text{reg\_eff}} $$
-
-这种分离求平均的方式是模型能够同时有效学习分类和回归任务的关键。
+#### 3. 总损失
+$$\mathcal{L}_{\text{total}} = \underbrace{\frac{\sum_i L_{\text{cls}, i} \cdot \text{mask}_i}{\sum_i \text{mask}_i}}_{\text{平均分类损失}} + \lambda \cdot \underbrace{\frac{\sum_i \mathcal{L}_{\text{reg\_gated},i}}{\sum_i m_i}}_{\text{有效回归损失}}$$
 
 ## 3.推理阶段：生成预测 (Inference)
 
@@ -249,33 +227,23 @@ $$e_i = \text{embed}(x_i) + \phi(v_i), \quad \text{where }  \phi(v) = \text{sign
 
 #### 步骤2：归因推断网络 → 恒等映射
 
-设定归因网络的权重和偏置，其位置网络和尺度网络的输入输出维度都分别是 [B, S, H] 和 [B, S, C] (默认 C=H), 使得：
-$$\text{loc}_{U_i} = z_i, \quad \text{scale}_{U_i} = \gamma_i \text{ (大数值)}$$
+设定权重使得：
+$$\text{loc}_{U_i} = z_i, \quad \text{scale}_{U_i} = \gamma$$
 
-**数学实现**：
-- 初始化位置参数：$W_{\text{loc}} = I$（恒等矩阵），$b_{\text{loc}} = 0$
-- 初始化尺度参数：$W_{\text{scale}} = 0$，$b_{\text{scale}} = \log(\gamma)$，其中 $\gamma$ 是大常数（如 $\gamma = 10$）
+**实现**：
+- 位置网络：$W_{\text{loc}} = I$（单位矩阵），$b_{\text{loc}} = 0$
+- 尺度网络：$W_{\text{scale}} = 0$，$b_{\text{scale}} = \log(\gamma)$
 
-**效果**：因果表征 $U_i$ 的分布为宽泛分布 $U_i \sim \text{Cauchy}(z_i, \gamma_i)$，当 $\gamma_i$ 很大时，柯西分布近似**均匀先验**，归因网络在保持恒等映射的同时提供了高不确定性的表征。
-
-**数学直觉**：大尺度的柯西分布 $\text{Cauchy}(\mu, \gamma)$ 当 $\gamma \gg 1$ 时，在较大范围内近似均匀分布，这为模型提供了"无知先验"——模型开始时对个体差异保持最大的不确定性。
+其中 $\gamma$ 是大常数（如 10），提供宽泛的初始分布。
 
 #### 步骤3：行动网络(分类) → 复制 Qwen 权重
 
-直接将 Qwen 的词汇表预测头权重复制到分类行动网络：
-$$\mathbf{W}_{\text{cls}} \leftarrow \mathbf{W}_{\text{Qwen\_lm\_head}}, \quad \mathbf{b}_{\text{cls}} = 0$$
+$$W_{\text{cls}} \leftarrow W_{\text{Qwen\_lm\_head}}, \quad b_{\text{cls}} = 0$$
 
-**数学保证**：由于 $\text{loc}_{U_i} = z_i$，我们的分类 logits 与 Qwen 的原始 logits **完全相等**：
-$$
-S_{k,i} \sim \text{Cauchy}(\text{loc}_{S_{k,i}}, \text{scale}_{S_{k,i}}) \\
-\text{loc}_{S_{k,i}} = \mathbf{W}_{\text{cls}}[k, :] \cdot z_i + \mathbf{b}_{\text{cls}}[k] = \mathbf{W}_{\text{Qwen}}[k, :] \cdot z_i = s_{k,i}^{\text{Qwen}} \\
-\text{scale}_{S_{k,i}} = |\mathbf{W}_{\text{scale}}[k, :]| \cdot \gamma_i
-$$
+由于 $\text{loc}_{U_i} = z_i$，所以：
+$$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot z_i = W_{\text{Qwen},k} \cdot z_i$$
 
-**关键结论**：在兼容传统采样模式下，CausalQwen 使用位置参数 $\text{loc}_{S_{k,i}}$ ( $\text{loc}_{S}$ 和 $\text{scale}_{S}$ 形状都是 [B, S, V_full]) 作为 logits 的 Softmax 概率分布与 Qwen 的输出**数学上完全一致**：
-$$P_{\text{CausalQwen}}^{\text{softmax}}(y_i=k|\mathbf{x}) = P_{\text{Qwen}}(y_i=k|\mathbf{x})$$
-
-这确保了 CausalQwen 在初始化时不仅行为类似 Qwen，而是**精确地复制了 Qwen 的语言建模能力**。
+这确保了初始分类输出与 Qwen 完全一致。
 
 #### 步骤4：行动网络(回归) → 常规初始化
 
@@ -293,19 +261,27 @@ $$Y_i \sim \text{Cauchy}(\mu_{\text{reg},i}, \gamma_{\text{reg},i}),  \\
 
 $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
 
- 得一个形状是 [B, S, V_full] 的概率张量 $\mathbf{P}$。
+得一个形状是 [B, S, V_full] 的概率张量 $\mathbf{P}$。
 
-**阈值初始化**：所有类别使用相同的常数阈值
-$$C_k = C_{\text{OvR}}, \quad \forall k \in \{0, 1, \ldots, V_{\text{full}}-1\}$$
+**阈值初始化**：
+- **标量形式**：所有类别使用相同的常数阈值
+  $$C_k = C_{\text{OvR}}, \quad \forall k \in \{0, 1, \ldots, V_{\text{full}}-1\}$$
+  
+- **向量形式**：为将来的可学习参数预留接口
+  $$\mathbf{C} = [C_0, C_1, ..., C_{V_{\text{full}}-1}]$$
+  
+  初始化时可设为：$C_k = C_{\text{OvR}} + \epsilon_k$，其中 $\epsilon_k$ 是小的随机扰动
 
-其中 $C_{\text{OvR}}$ 是预设常数（如 100.0）, 后续可以考虑让它是可学习参数。
+其中 $C_{\text{OvR}}$ 是预设常数（如 100.0）。
 
 **数学效果**：
 - $C_{\text{OvR}} = 0$: 初始概率接近 0.5，无明显偏好
 - $C_{\text{OvR}} = 10$: 初始概率普遍较低，创造稀疏激活
 - $C_{\text{OvR}} \geq 100$: 极度稀疏的初始概率分布
 
-**推荐设置**：$C_{\text{OvR}} = 100.0$，这提供了良好的起点.
+**推荐设置**：$C_{\text{OvR}} = 100.0$，这提供了良好的起点。
+
+> **未来扩展**：当 $\mathbf{C}$ 成为可学习参数后，模型可以自动调整每个词汇的"激活阈值"，为频繁词汇学习较低阈值，为罕见词汇保持较高阈值。
 
 通过上述初始化步骤，CausalQwen 在训练开始时具有以下性质：
 
@@ -600,9 +576,9 @@ graph TD
 ```
 * **关键修正与解读**：我们**不能**简单地将 `L_cls` 和 `L_reg_gated` 逐元素相加再求平均。由于数值 (`<NUM>`) 词元在文本中是**稀疏**的，`L_reg_gated` 张量中绝大部分元素为零。如果直接求平均，回归损失的信号会被严重"稀释"，无法有效指导模型优化。
 * **正确流程**：正确的做法是分别对两个损失进行归约，然后再合并：
-   1.  **分类损失**：对 `L_cls` 张量应用 `attention_mask` 来排除填充词元，然后求平均，得到一个标量 `
-
-
+   1.  **分类损失**：对 `L_cls` 张量应用 `attention_mask` 来排除填充词元，然后求平均，得到一个标量 `L_cls_mean`。
+   2.  **回归损失**：对 `L_reg_gated` 张量应用掩码 `m`，只对真实数值词元求和再求平均，得到一个标量 `L_reg_eff`。
+   3.  **总损失**：将 `L_cls_mean` 和 `L_reg_eff` 进行加权求和，得到最终的标量损失 `L_total`。
 
 ## 7. 核心洞察与总结
 

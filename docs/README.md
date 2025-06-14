@@ -177,3 +177,29 @@ python src/visualization/plotter.py results/comparison_20231208_143000/
 
 本项目采用MIT许可证。详见[LICENSE](https://github.com/yourusername/causal-lm-project/blob/main/LICENSE)文件。
 
+# CausalQwen 文档结构
+
+## 📚 核心文档
+
+### 数学框架（Hub-and-Spoke 架构）
+- **中心(Hub)**：[`mathematical_foundations.md`](./mathematical_foundations.md) - 核心数学概览
+- **辐射(Spokes)**：[`math_deep_dive/`](./math_deep_dive/) - 详细数学推导
+  - [`01_forward_pass.md`](./math_deep_dive/01_forward_pass.md) - 前向传播详解
+  - [`02_inference.md`](./math_deep_dive/02_inference.md) - 推理模式详解
+  - [`03_initialization.md`](./math_deep_dive/03_initialization.md) - 初始化策略详解
+
+## 🧪 实验与监控
+- [`experiments/wandb_monitoring_metrics.md`](./experiments/wandb_monitoring_metrics.md) - W&B 监控指标详解
+
+## 🎯 设计文档
+- [`design-docs/U_deep_dive.md`](./design-docs/U_deep_dive.md) - 个体选择变量 U 的深度解读
+
+## 📖 阅读指南
+
+1. **新读者**：从 `mathematical_foundations.md` 开始，它提供了完整的概念流程
+2. **深入学习**：根据兴趣选择 `math_deep_dive/` 中的特定主题
+3. **实践者**：关注实验监控文档，了解训练调试技巧
+4. **研究者**：阅读设计文档，理解理论创新
+
+这种 Hub-and-Spoke 架构既保持了知识的完整性，又避免了单一文档过于庞大的问题。
+
