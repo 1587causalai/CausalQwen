@@ -332,6 +332,7 @@ $$C_k = C_{\text{OvR}}, \quad \forall k \in \{0, 1, \ldots, V_{\text{full}}-1\}$
 ### 5.3. 模型性能指标 (`eval/*`)
 
 -   **词元预测准确率(`eval/accuracy`)** 
+    - Perplexity 也可以考虑计算，但是 OvR 非归一化多分类概率，所以需要特殊处理才能使用。
 -   **数值词元预测 (`eval/num_*`)**:
     -   **`num_precision`, `num_recall`, `num_f1`**: 全面评估模型在有效位置上辨别 `<NUM>` 词元的能力，是**门控机制性能的关键**。
 
