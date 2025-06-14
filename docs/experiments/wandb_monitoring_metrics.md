@@ -59,13 +59,25 @@
 
 ### 3.1. `eval/accuracy` (总体分类准确率)
 
--   **定义**: 在所有有效序列位置上的词元预测准确率。
+-   **定义**: 在所有有效序列位置上的**最高概率**词元预测准确率 (Top-1 Accuracy)。
 -   **公式**:
     $$ \text{Accuracy} = \frac{\sum_{(b,i) \in \mathcal{V}} \mathbb{I}(\hat{y}_{b,i} = y_{b,i})}{|\mathcal{V}|} $$
-    其中 $\hat{y}_{b,i} = \arg\max_k P_{k,i}$ 是预测的词元ID, $\mathcal{V}$ 是由 `attention_mask` 决定的有效位置集合。
--   **监控目的**: 评估模型总体的语言建模性能。
+    其中 $\hat{y}_{b,i} = \arg\max_k P_{k,i}$ 是基于 OvR 概率预测的词元ID, $\mathcal{V}$ 是由 `attention_mask` 决定的有效位置集合。
+-   **监控目的**: 评估模型总体的语言建模性能。这是一个直观的指标，但对模型的概率分布校准不敏感。
 
-### 3.2. 数值词元预测性能 (Numerical Token Prediction Performance)
+### 3.2. `eval/perplexity` (困惑度)
+
+-   **定义**: 衡量语言模型预测能力的标准指标，可以被理解为模型在预测下一个词元时不确定性的加权平均。**Perplexity 越低，模型性能越好。**
+-   **计算方式**: 为了与标准语言模型进行公平比较，我们基于 `mathematical_foundations.md` 中描述的**兼容模式**进行计算。具体步骤如下：
+    1.  将 OvR 分类的位置参数 `loc_S` 视作等价的 **logits**。
+    2.  对这些 logits 应用标准的 **Softmax** 函数，得到归一化的概率分布。
+    3.  基于此概率分布计算**交叉熵损失 (Cross-Entropy Loss)**。
+    4.  困惑度即为该交叉熵损失的**指数 (exponential)**。
+-   **公式**:
+    $$ \text{Perplexity} = \exp\left( \frac{1}{|\mathcal{V}|} \sum_{(b,i) \in \mathcal{V}} -\log\left( \frac{\exp(\text{loc}_{S, y_{b,i}})}{\sum_{k=1}^{V_{\text{full}}} \exp(\text{loc}_{S,k,b,i})} \right) \right) $$
+-   **监控目的**: 提供一个比准确率更细致的性能度量，它能反映模型对整个词汇表概率分布的置信度。这是评估模型语言建模核心能力的关键指标。
+
+### 3.3. 数值词元预测性能 (Numerical Token Prediction Performance)
 
 这一组指标专门用于评估一个关键的二元分类子任务：在每个有效位置上，模型判断下一个词元**是否**为 `<NUM>` 的能力。这提供了比单一指标更深入的洞察。
 
@@ -84,7 +96,7 @@
     -   **公式**: $$F_1 = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}$$
     -   **监控目的**: 提供一个平衡的视角。只看召回率可能会导致模型倾向于在任何地方都预测 `<NUM>`，而只看精确率则可能导致模型非常保守。F1分数要求两者都表现良好。
 
-### 3.3. 回归性能评估 (Regression Performance Evaluation)
+### 3.4. 回归性能评估 (Regression Performance Evaluation)
 
 这组指标衡量模型在正确识别出数值位置后，预测数值的精准度。
 
@@ -141,6 +153,7 @@
 
 | 症状 (Symptom) | 可能原因 (Potential Cause) | 建议对策 (Suggested Action) |
 | :--- | :--- | :--- |
+| **`eval/perplexity` 持续很高或不下降** | 模型的基础语言建模能力差，无法有效学习文本序列的概率分布。 | 检查特征提取网络（如 Qwen 主干）的配置和梯度流；可能需要更长的训练、更好的数据或调整模型大小。 |
 | **`eval/num_f1` 持续很低** | 门控机制学习失败，模型无法平衡精确率和召回率。 | 检查 `<NUM>` 词元的处理；检查损失函数中 `reg_loss_effective` 的权重 $\lambda$；检查 OvR 阈值 $C_{\text{OvR}}$ 的设置。 |
 | **高 `num_recall` 但低 `num_precision`** | 模型过于激进，在很多非数值位置也预测了 `<NUM>` (高 FP)。 | 可能是 OvR 阈值 $C_{\text{OvR}}$ 设置得过低，或分类损失需要调整。 |
 | **低 `num_recall` 但高 `num_precision`** | 模型过于保守，只在非常有把握时才预测 `<NUM>`，漏掉了很多机会 (高 FN)。 | 可能是 OvR 阈值 $C_{\text{OvR}}$ 设置得过高，或需要增加数值样本在训练数据中的权重。 |
