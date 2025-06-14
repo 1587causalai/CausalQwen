@@ -1,184 +1,167 @@
-# Weights & Biases 监控指标详解 (序列到序列架构)
+# Weights & Biases 监控指标详解 (CausalQwen)
 
-本文档详细解释了在 `CausalQwen2` 项目**序列到序列架构重构**后，通过 Weights & Biases (wandb) 实时监控的各项关键指标。每个指标都附有其定义、数学公式和监控目的。
+本文档详细解释了在 CausalQwen 项目中，通过 Weights & Biases (wandb) 实时监控的各项关键指标。所有指标的计算都严格遵循核心数学文档 [`mathematical_foundations.md`](../mathematical_foundations.md) 中定义的序列到序列架构。
 
-> **重要提示**: 本文档反映的是V4架构（序列到序列模式）的指标计算逻辑，与之前的单一输出模式有本质区别。
-
----
-
-## 架构重构对指标的根本性影响
-
-### 关键变化概览
-
-| 维度 | 旧架构 (单一输出) | 新架构 (序列到序列) |
-|------|------------------|-------------------|
-| **模型输出** | `[B, C]` | `[B, S, C]` |
-| **因果表征** | 整个序列一个 U | 每个位置独立的 U_i |
-| **预测范围** | 只关心<NUM>位置 | 每个位置都预测下一个token |
-| **损失计算** | 基于单一预测 | 基于所有有效位置的平均 |
-| **数学意义** | 序列级因果推理 | 位置独立的因果推理 |
-
-### 核心数学框架
-
-在新架构中，对于长度为 $S$ 的序列，每个位置 $i \in \{1,2,\ldots,S\}$ 都进行独立的推断-行动过程：
-
-$$\forall i: \quad U_i | z_i \sim \text{Cauchy}(\mu_{U,i}, \gamma_{U,i})$$
-
-其中 $z_i$ 是到位置 $i$ 为止的累积上下文特征。
+> **重要提示**: 本文档旨在成为核心数学文档中监控章节的详细补充，确保所有指标的定义、公式和解读都与最新设计保持绝对一致。
 
 ---
 
-## 1. 核心损失与性能指标 (Core Loss & Performance Metrics)
+## 1. 前提：评估指标的推理模式 (Inference Mode for Evaluation)
 
-### 1.1. `total_loss` (总损失) - **新架构逻辑**
+**核心要点**: 本文档中详述的所有性能评估指标 (以 `eval/` 为前缀) **均基于确定性推理 (Deterministic Inference) 模式计算**。
 
--   **定义**: 所有**有效序列位置**上的分类损失和门控回归损失的加权平均。
--   **公式**:
-    $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls}}^{\text{seq}} + \lambda \cdot \mathcal{L}_{\text{reg\_gated}}^{\text{seq}}$$
-    
-    其中：
-    $$\mathcal{L}_{\text{cls}}^{\text{seq}} = \frac{1}{|\mathcal{V}|} \sum_{(b,i) \in \mathcal{V}} \sum_{k=1}^{K} -\left[ y_{b,i,k} \log(p_{b,i,k}) + (1 - y_{b,i,k}) \log(1 - p_{b,i,k}) \right]$$
-    
-    $$\mathcal{L}_{\text{reg\_gated}}^{\text{seq}} = \frac{1}{|\mathcal{N}|} \sum_{(b,i) \in \mathcal{N}} P(\text{<NUM>}_{b,i}) \cdot \mathcal{L}_{\text{Cauchy}}(v_{b,i}, \mu_{reg,b,i}, \gamma_{reg,b,i})$$
-    
-    - $\mathcal{V} = \{(b,i) : \text{labels}[b,i] \neq -100\}$ 是所有有效位置的集合
-    - $\mathcal{N} = \{(b,i) : \text{labels}[b,i] = \text{<NUM>}\}$ 是所有数值预测位置的集合
+-   **分类预测**: 选择 OvR 概率最高的类别。
+    $$ \hat{y}_{\text{cls}} = \arg\max_k P_{k,i} $$
+-   **回归预测**: 直接使用回归分布的位置参数（中位数）。
+    $$ \hat{y}_{\text{reg}} = \text{loc}_{Y_i} $$
 
--   **关键变化**: 
-    - **旧**: 基于单一预测的损失
-    - **新**: 基于所有有效序列位置的平均损失，体现了真正的序列到序列学习
+**选择该模式的理由**:
+1.  **可复现性 (Reproducibility)**: 确定性推理不含任何随机过程，确保了在相同模型和数据下，评估结果是唯一且可复现的。
+2.  **稳定性 (Stability)**: 为不同训练运行、不同超参数设置下的模型性能比较提供了一个稳定可靠的基准。
+3.  **效率 (Efficiency)**: 这是计算上最高效的推理方式，适合在训练过程中频繁执行。
 
-### 1.2. `cls_loss` (分类损失) - **序列化计算**
-
--   **定义**: 在所有有效序列位置上的 One-vs-Rest 分类损失的平均值。
--   **数学表达**: 
-    $$\mathcal{L}_{\text{cls}}^{\text{seq}} = \frac{1}{|\mathcal{V}|} \sum_{(b,i) \in \mathcal{V}} \mathcal{L}_{\text{OvR}}(y_{b,i}, \{\mu_{S,k,b,i}, \gamma_{S,k,b,i}\}_{k=1}^K)$$
-    
-    其中每个位置 $(b,i)$ 的 OvR 概率为：
-    $$p_{b,i,k} = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\mu_{S,k,b,i} - \theta}{\gamma_{S,k,b,i}}\right)$$
-
--   **物理意义**: 衡量模型在每个序列位置上预测下一个token的能力。这不再是"识别是否需要数值回归"，而是"在给定上下文下预测下一个token"。
-
-### 1.3. `gated_reg_loss` (门控回归损失) - **位置感知门控**
-
--   **定义**: 仅在标签为 `<NUM>` 的位置计算的门控回归损失。
--   **公式**:
-    $$\mathcal{L}_{\text{reg\_gated}}^{\text{seq}} = \frac{1}{|\mathcal{N}|} \sum_{(b,i) \in \mathcal{N}} P(\text{<NUM>}_{b,i}) \cdot \log\left(1 + \left(\frac{v_{b,i} - \mu_{reg,b,i}}{\gamma_{reg,b,i}}\right)^2\right)$$
-    
-    其中 $P(\text{<NUM>}_{b,i})$ 是位置 $(b,i)$ 预测 `<NUM>` token 的概率。
-
--   **关键洞察**: 每个位置都有自己的门控概率，模型学会在适当的位置"开启"数值预测模式。
-
-### 1.4. `reg_mae` (回归平均绝对误差) - **位置过滤计算**
-
--   **定义**: 仅在标签为 `<NUM>` 且目标值非 NaN 的位置计算的平均绝对误差。
--   **公式**:
-    $$\text{MAE}_{\text{reg}}^{\text{seq}} = \frac{1}{|\mathcal{N}_{\text{valid}}|} \sum_{(b,i) \in \mathcal{N}_{\text{valid}}} |v_{b,i} - \mu_{reg,b,i}|$$
-    
-    其中 $\mathcal{N}_{\text{valid}} = \{(b,i) : \text{labels}[b,i] = \text{<NUM>} \text{ and } \neg\text{isnan}(v_{b,i})\}$
-
--   **计算逻辑**: 
-    ```python
-    # 1. 筛选 <NUM> 位置
-    num_mask = (batch_labels == self.tokenizer.num_token_id)
-    # 2. 进一步筛选非 NaN 目标
-    valid_targets = batch_target_values[num_mask]
-    valid_targets = valid_targets[~torch.isnan(valid_targets)]
-    # 3. 计算 MAE
-    reg_mae = torch.abs(valid_preds - valid_targets).mean()
-    ```
+其他推理模式，如**因果采样 (Causal Sampling)**，虽然对于生成多样化和风格化的文本非常重要，但因其内在的随机性，不适用于在训练期间进行定量的、可比较的性能评估。它们的评估应侧重于定性分析或特定的下游任务。
 
 ---
 
-## 2. 个体因果表征指标 (Individual Causal Representation Metrics)
+## 2. 核心损失指标 (Core Loss Metrics)
 
-### 2.1. `units_mean_loc` - **序列平均的因果表征位置**
+这些指标直接反映了模型在训练集上的优化目标。它们的计算方式体现了对不同损失成分（分类与回归）的分别归约，以避免数值标签稀疏性带来的信号稀释问题。
 
--   **定义**: 所有序列位置上因果表征分布位置参数的全局平均。
+### 2.1. `train/total_loss` (总损失)
+
+-   **定义**: 这是反向传播所用的最终标量损失值，由平均分类损失和有效的平均回归损失加权构成。
 -   **公式**:
-    $$\overline{\mu_U}^{\text{seq}} = \frac{1}{B \times S} \sum_{b=1}^B \sum_{i=1}^S \mu_{U,b,i}$$
+    $$ \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls\_mean}} + \lambda \cdot \mathcal{L}_{\text{reg\_eff}} $$
+-   **监控目的**: 观察模型总体的学习进度。一个健康训练过程的标志是该值平稳下降。
 
--   **物理解释**: 反映了模型推断的"平均因果状态"。在序列到序列架构中，这代表所有位置的因果表征的中心趋势。
+### 2.2. `train/cls_loss_mean` (平均分类损失)
 
-### 2.2. `units_mean_scale` - **序列平均的因果不确定性**
-
--   **定义**: 所有序列位置上因果表征分布尺度参数的全局平均。
+-   **定义**: 在所有真实词元（即排除了 padding 的位置）上计算的 OvR (One-vs-Rest) 分类损失的平均值。
 -   **公式**:
-    $$\overline{\gamma_U}^{\text{seq}} = \frac{1}{B \times S} \sum_{b=1}^B \sum_{i=1}^S \exp(\log \gamma_{U,b,i})$$
+    $$ \mathcal{L}_{\text{cls\_mean}} = \frac{\sum_{b,i} (\mathcal{L}_{\text{cls}, b,i} \cdot \text{attention\_mask}_{b,i})}{\sum_{b,i} \text{attention\_mask}_{b,i}} $$
+    其中 $\mathcal{L}_{\text{cls}, b,i}$ 是在 `[b, i]` 位置上对整个词汇表求和的二元交叉熵损失。
+-   **监控目的**: 衡量模型在每个序列位置上预测下一个词元的基础语言能力。
 
--   **监控意义**: 
-    - **高值**: 模型对大部分位置的归因推断都不确定
-    - **低值**: 模型对归因推断很有信心
-    - **位置变化**: 理想情况下，困难位置（如数值预测前）应该有更高的不确定性
+### 2.3. `train/reg_loss_effective` (有效回归损失)
+
+-   **定义**: **仅在**真实标签为 `<NUM>` 的词元上计算的门控回归损失的平均值。
+-   **公式**:
+    $$ \mathcal{L}_{\text{reg\_eff}} = \frac{\sum_{b,i} \mathcal{L}_{\text{reg\_gated},b,i}}{\sum_{b,i} m_{b,i}} $$
+    其中 $m_{b,i}$ 是指示 `[b, i]` 位置真实标签是否为 `<NUM>` 的掩码，分母是批次中数值词元的总数。
+-   **监控目的**: 衡量模型预测数值的准确性。其与分类损失分离计算的设计，是整个模型的关键之一，确保了数值预测任务的梯度不会因其在文本中的稀疏性而被"稀释"。
 
 ---
 
-## 3. 序列化分类器诊断指标 (Sequence-level Classifier Diagnostics)
+## 3. 模型性能评估指标 (Model Performance Metrics)
 
-### 3.1. `ovr_prob_sum` - **位置平均的概率和**
+这些指标通常在验证集 (evaluation set) 上计算，使用 `eval/` 前缀，用于评估模型的泛化能力。
 
--   **定义**: 所有有效序列位置上，OvR 概率和的平均值。
+### 3.1. `eval/accuracy` (总体分类准确率)
+
+-   **定义**: 在所有有效序列位置上的词元预测准确率。
 -   **公式**:
-    $$\overline{\sum p_k}^{\text{seq}} = \frac{1}{|\mathcal{V}|} \sum_{(b,i) \in \mathcal{V}} \sum_{k=1}^{K} p_{b,i,k}$$
+    $$ \text{Accuracy} = \frac{\sum_{(b,i) \in \mathcal{V}} \mathbb{I}(\hat{y}_{b,i} = y_{b,i})}{|\mathcal{V}|} $$
+    其中 $\hat{y}_{b,i} = \arg\max_k P_{k,i}$ 是预测的词元ID, $\mathcal{V}$ 是由 `attention_mask` 决定的有效位置集合。
+-   **监控目的**: 评估模型总体的语言建模性能。
 
--   **序列化意义**: 不同序列位置可能有不同的"置信度模式"：
-    - **句首位置**: 可能概率和较低（不确定接下来说什么）
-    - **数值预测位置**: 可能概率和接近1（明确知道要输出<NUM>）
-    - **句末位置**: 可能概率和较高（多个合理的结束方式）
+### 3.2. 数值词元预测性能 (Numerical Token Prediction Performance)
 
-### 3.2. `accuracy` - **序列化准确率**
+这一组指标专门用于评估一个关键的二元分类子任务：在每个有效位置上，模型判断下一个词元**是否**为 `<NUM>` 的能力。这提供了比单一指标更深入的洞察。
 
--   **定义**: 所有有效序列位置上的平均预测准确率。
--   **公式**:
-    $$\text{Accuracy}^{\text{seq}} = \frac{1}{|\mathcal{V}|} \sum_{(b,i) \in \mathcal{V}} \mathbb{I}(\hat{y}_{b,i} = y_{b,i})$$
-    
-    其中 $\hat{y}_{b,i} = \arg\max_k p_{b,i,k}$
+-   **`eval/num_recall` (数值词元召回率, 原 `num_accuracy`)**:
+    -   **定义**: 在所有真实标签为 `<NUM>` 的位置中，模型正确预测为 `<NUM>` 的比例。
+    -   **公式**: $$\text{Recall} = \frac{\text{TP}}{\text{TP} + \text{FN}}$$
+    -   **监控目的**: 衡量模型**找出所有**真实数值位置的能力。高召回率意味着模型很少漏掉需要进行数值预测的地方 (低 FN)。
 
--   **解释**: 这不再是"是否正确识别需要数值回归"，而是"在每个位置是否正确预测下一个token"。
+-   **`eval/num_precision` (数值词元精确率)**:
+    -   **定义**: 在所有模型预测为 `<NUM>` 的位置中，真实标签也为 `<NUM>` 的比例。
+    -   **公式**: $$\text{Precision} = \frac{\text{TP}}{\text{TP} + \text{FP}}$$
+    -   **监控目的**: 衡量模型预测数值的**准确性**。高精确率意味着当模型预测一个数值时，它有很大的把握是对的 (低 FP)。
 
-### 3.3. `num_accuracy` - **数值位置专项准确率**
+-   **`eval/num_f1` (数值词元F1分数)**:
+    -   **定义**: 精确率和召回率的调和平均数，是评估该子任务综合性能的核心指标。
+    -   **公式**: $$F_1 = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}$$
+    -   **监控目的**: 提供一个平衡的视角。只看召回率可能会导致模型倾向于在任何地方都预测 `<NUM>`，而只看精确率则可能导致模型非常保守。F1分数要求两者都表现良好。
 
--   **定义**: 在所有标签为 `<NUM>` 的位置上，模型也正确预测为 `<NUM>` 的比例。
--   **公式**:
-    $$\text{Num Accuracy}^{\text{seq}} = \frac{1}{|\mathcal{N}|} \sum_{(b,i) \in \mathcal{N}} \mathbb{I}(\hat{y}_{b,i} = \text{<NUM>})$$
+### 3.3. 回归性能评估 (Regression Performance Evaluation)
 
--   **关键意义**: 这是**位置感知的门控性能**。模型需要学会在序列的特定位置（如"costs"之后）激活数值预测模式。
+这组指标衡量模型在正确识别出数值位置后，预测数值的精准度。
+
+-   **`eval/reg_mae` (回归平均绝对误差, Mean Absolute Error)**:
+    -   **定义**: 仅在真实标签为 `<NUM>` 的位置计算的预测值 (`loc_Y`) 与真实值 (`y_true`) 之间的**平均**绝对误差。
+    -   **公式**: $$ \text{MAE} = \frac{1}{|\mathcal{N}|} \sum_{(b,i) \in \mathcal{N}} |v_{b,i} - \text{loc}_{Y,b,i}| $$
+    -   **监控目的**: 传统且直观的误差指标。但它对极端异常值（very large errors）很敏感。
+
+-   **`eval/reg_mdae` (回归中位绝对误差, Median Absolute Error)**:
+    -   **定义**: 仅在真实标签为 `<NUM>` 的位置计算的预测值与真实值之间的**中位数**绝对误差。
+    -   **公式**: $$ \text{MdAE} = \text{median} \{ |v_{b,i} - \text{loc}_{Y,b,i}| \}_{(b,i) \in \mathcal{N}} $$
+    -   **监控目的**: 一个对异常值更**稳健**的误差度量。如果 `MdAE` 远小于 `MAE`，则表明模型在大多数情况下预测得相当好，但存在一些产生极大误差的异常预测。这对于诊断基于重尾柯西分布的模型尤为重要。
 
 ---
 
-## 4. 新架构的监控策略建议
+## 4. 内部状态与分布指标 (Internal State and Distribution Metrics)
 
-### 4.1. 健康训练的信号
+这些指标帮助我们窥探模型内部的"思考过程"，尤其是关于核心的因果表征 $U$ 的分布特性。
 
-1. **`total_loss`**: 应该平稳下降，不应出现剧烈波动
-2. **`num_accuracy`**: 应该快速上升并保持高水平（>0.8）
-3. **`reg_mae`**: 应该在`num_accuracy`提升后开始下降
-4. **`units_mean_scale`**: 应该保持在合理范围内，不应崩溃或爆炸
+### 4.1. 理解分布指标：稳健与非稳健统计量的对比
 
-### 4.2. 问题诊断指南
+为了深入理解模型行为，我们同时监控两类统计量：
+- **传统统计量 (对异常值敏感)**: `均值 (mean)` 和 `标准差 (std)`。
+- **稳健统计量 (对异常值不敏感)**: `中位数 (median)` 和 `四分位距 (iqr)`。
 
-| 症状 | 可能原因 | 解决方案 |
-|------|----------|----------|
-| `num_accuracy` 一直为0 | 门控机制失效 | 检查 `ovr_threshold` 设置 |
-| `reg_mae` 不下降但 `num_accuracy` 很高 | 回归头学习困难 | 调整 `regression_weight` |
-| `units_mean_scale` 趋于0 | 模型过于自信 | 检查正则化设置 |
-| `ovr_prob_sum` 远离1 | OvR校准问题 | 调整决策阈值 |
+**通过对比这两组指标，我们可以推断出分布的形状，如偏斜度和异常值的存在，这对于诊断至关重要。**
 
-### 4.3. 序列到序列特有的监控点
+| 对比分析 | 揭示的分布特性 | 对 CausalQwen 的潜在意义 |
+| :--- | :--- | :--- |
+| **`mean` vs `median`** | **偏斜度 (Skewness)** | `mean > median` (右偏) 表明存在少数**极大的异常值**。例如，模型可能对大多数词元的 `U_scale` (不确定性) 给出低值，但对少数困难词元给出了极高值。 |
+| **`std` vs `iqr`** | **尾部重量 / 异常值** | `std` 相对于 `iqr` 异常大，是分布**重尾**的强烈信号。这意味着大部分数据点紧密聚集，但少数极端值显著拉高了整体方差。 |
 
-1. **位置依赖性**: 观察不同序列位置的学习速度差异
-2. **上下文累积效应**: 长序列中后续位置的预测应该更准确
-3. **门控位置特异性**: 数值预测应该在语义合理的位置被激活
+### 4.2. 因果表征 `U` 的分布指标
+
+-   **`dist/U_loc_mean`, `dist/U_loc_median`, `dist/U_loc_std`, `dist/U_loc_iqr`**:
+    -   **定义**: 在一个批次的**所有有效词元位置 (即应用 `attention_mask` 后)** 上，推断出的因果表征分布**位置参数 `loc_U`** 的四项统计数据。
+    -   **监控目的**: 全面描述归因推断出的个体表征的中心趋势和离散程度。对比 `mean` 和 `median` 可以揭示模型是否对某些特定词元赋予了显著不同（更大或更小）的因果表征。
+
+-   **`dist/U_scale_mean`, `dist/U_scale_median`, `dist/U_scale_std`, `dist/U_scale_iqr`**:
+    -   **定义**: 在一个批次的**所有有效词元位置 (即应用 `attention_mask` 后)** 上，推断出的因果表征分布**尺度参数 `scale_U`** 的四项统计数据。
+    -   **监控目的**: 全面衡量模型对归因推断的**不确定性**。一个健康的模型可能会表现为 `median` 较低（对多数情况很自信），但 `mean` 和 `std` 较高（对少数困难情况给出了很高的不确定性）。
+
+### 4.3. `dist/ovr_prob_sum_median` (OvR概率和中位数)
+
+-   **定义**: 在所有有效序列位置上，对整个词汇表计算的 OvR 概率之和的中位数。
+-   **公式**: $$\text{MedianProbSum} = \text{median} \left\{ \sum_{k=1}^{V_{\text{full}}} P_{k,i} \right\}_{(b,i) \in \mathcal{V}}$$
+-   **监控目的与深刻解读**: 这个指标反映了模型是否隐式地学习到了"下一词元预测"任务的**内在互斥性**。尽管我们使用独立的OvR损失进行训练，但数据本身（每个位置只有一个正确答案）决定了理想的模型应该只为一个词元赋予高概率，而为所有其他词元赋予低概率。因此： 一个**理想的、充分校准的**模型，其概率和应**接近于 1**（对于因果采样也应该接近于 1）。
 
 ---
 
-## 5. 与旧架构的关键对比
+## 5. 训练诊断指南
 
-| 指标 | 旧架构意义 | 新架构意义 |
-|------|-----------|-----------|
-| `accuracy` | 识别数值预测任务的准确率 | 所有位置的token预测准确率 |
-| `num_accuracy` | 二元分类准确率 | 位置感知的门控准确率 |
-| `reg_mae` | 条件回归性能 | 序列感知的回归性能 |
-| `units_mean_*` | 全局因果状态 | 位置平均的因果表征 |
+通过组合分析上述指标，我们可以更精确地诊断训练中遇到的问题。
+
+| 症状 (Symptom) | 可能原因 (Potential Cause) | 建议对策 (Suggested Action) |
+| :--- | :--- | :--- |
+| **`eval/num_f1` 持续很低** | 门控机制学习失败，模型无法平衡精确率和召回率。 | 检查 `<NUM>` 词元的处理；检查损失函数中 `reg_loss_effective` 的权重 $\lambda$；检查 OvR 阈值 $C_{\text{OvR}}$ 的设置。 |
+| **高 `num_recall` 但低 `num_precision`** | 模型过于激进，在很多非数值位置也预测了 `<NUM>` (高 FP)。 | 可能是 OvR 阈值 $C_{\text{OvR}}$ 设置得过低，或分类损失需要调整。 |
+| **低 `num_recall` 但高 `num_precision`** | 模型过于保守，只在非常有把握时才预测 `<NUM>`，漏掉了很多机会 (高 FN)。 | 可能是 OvR 阈值 $C_{\text{OvR}}$ 设置得过高，或需要增加数值样本在训练数据中的权重。 |
+| **`num_f1` 高但 `reg_mdae` 居高不下** | 模型知道**何时**预测数值，但即使对于典型样本，其预测精度也不高。回归头学习困难。 | 增加回归损失的权重 $\lambda$；检查数值编码 $\phi(v)$ 的实现；分析数据集中的数值分布。 |
+| **`eval/reg_mae` 远大于 `eval/reg_mdae`** | 模型在大部分情况下预测良好，但存在少数极端错误的预测（异常值）。 | 检查导致巨大误差的特定样本，分析其特征。可能是数据清洗问题或模型在特定模式下的脆弱性。 |
+| **`dist/U_loc_mean` 与 `dist/U_loc_median` 差异显著** | `U_loc` 的分布是偏斜的，意味着模型对少数词元赋予了显著不同（更大或更小）的因果表征。 | 这是模型学习到特化表征的信号，值得深入分析是哪些词元导致了这种偏斜。 |
+| **`dist/U_scale_mean` 远大于 `dist/U_scale_median`** | 模型的不确定性分布是右偏的。这通常是**健康信号**：模型对大多数词元都很自信（低 `median`），但对少数困难词元给出了明智的高不确定性（拉高了 `mean`）。 | 持续监控，确保 `median` 保持在低位。如果两者同时变得非常大，则表明模型整体都很困惑。 |
+| **`dist/U_scale_median` 趋近于0** | 模型对因果表征的推断变得过于确定和自信，可能已陷入过拟合。 | 增加正则化强度；检查学习率；或提前终止训练。 |
+| **`dist/U_scale_median` 持续过大（且接近mean）** | 模型始终无法从上下文中学到有效的个体表征，对所有归因都持"不知道"态度，且没有区分度。 | 检查特征提取网络是否有效工作；可能需要更长的训练时间或更丰富的数据。 |
+| **`train/total_loss` 剧烈震荡** | 学习率可能过高；数据批次间的方差过大。 | 降低学习率；使用学习率预热；增大批次大小或使用梯度累积。 |
+| **`dist/ovr_prob_sum_median` 持续偏离 1** | OvR 分类器校准失败。若 > 1，模型对多类别过于自信（"混淆"）；若 < 1，模型整体不自信。 | 调整可学习的 OvR 阈值 $C_k$ 的学习率或初始化值；检查分类损失的计算。 |
+
+---
+
+## 6. 与旧架构的关键对比 (存档)
+
+| 指标 | 旧架构意义 | 新架构意义 (当前) |
+|:---|:---|:---|
+| `accuracy` | 识别数值预测任务的准确率 | 所有位置的**词元预测**准确率 (`eval/accuracy`) |
+| `num_accuracy` | 二元分类准确率 | **位置感知的门控准确率** (现由 `eval/num_precision`, `eval/num_recall`, `eval/num_f1` 替代) |
+| `reg_mae` | 条件回归性能 | **有效数值位置**的回归性能 (现由 `eval/reg_mae` 和 `eval/reg_mdae` 共同评估) |
+| `units_mean_*` | 全局因果状态的**均值** | 位置平均的因果表征**中位数/IQR** (`dist/*`) |
 
 这种架构重构使得我们的模型真正实现了**位置独立的因果推理**，每个序列位置都进行独立的"推断-行动"过程，这是因果语言模型的核心理念的完美体现。 

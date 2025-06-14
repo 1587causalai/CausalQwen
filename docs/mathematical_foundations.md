@@ -316,7 +316,44 @@ $$C_k = C_{\text{OvR}}, \quad \forall k \in \{0, 1, \ldots, V_{\text{full}}-1\}$
 -   **阈值设置**: 所有类别共享相同的初始阈值 $C_k = C_{\text{OvR}}$，这提供了一个适度稀疏且数值稳定的初始概率分布。
 
 
-## 5.使用流程图理解
+## 5. 训练监控指标 (Training Monitoring Metrics)
+
+为了有效评估和调试 CausalQwen 模型的训练过程，我们利用 Weights & Biases (wandb) 平台进行实时监控。本章提炼了 [`wandb_monitoring_metrics.md`](./experiments/wandb_monitoring_metrics.md) 中的核心指标，所有指标的计算都严格遵循本文档定义的数学原理。
+
+### 5.1. 前提：基于确定性推理的评估
+
+所有性能评估指标 (以 `eval/` 为前缀) **均基于确定性推理 (Deterministic Inference) 模式计算**。这保证了评估结果的**可复现性**和**稳定性**，为不同实验提供了可靠的基准。
+
+### 5.2. 核心损失指标 (`train/*`)
+
+-   **`train/total_loss`**: 由平均分类损失 (`cls_loss_mean`) 和有效回归损失 (`reg_loss_effective`) 加权构成，是最终的优化目标。
+-   **`train/cls_loss_mean`**: 在所有真实词元（应用 `attention_mask`）上计算的 OvR 分类损失的平均值，衡量基础语言能力。
+-   **`train/reg_loss_effective`**: 仅在真实数值词元（应用数值掩码 `m`）上计算的门控回归损失的平均值，确保回归信号不被稀释。
+
+### 5.3. 模型性能指标 (`eval/*`)
+
+-   **数值词元预测 (`eval/num_*`)**:
+    -   **`num_precision`, `num_recall`, `num_f1`**: 全面评估模型在有效位置上辨别 `<NUM>` 词元的能力，是**门控机制性能的关键**。
+
+-   **回归性能 (`eval/reg_*`)**:
+    -   **`reg_mae` (平均绝对误差)**: 传统的误差度量，对异常值敏感。
+    -   **`reg_mdae` (中位绝对误差)**: 对异常值稳健的误差度量。当 `mae` 远大于 `mdae` 时，表明存在少数极端错误的预测。
+
+### 5.4. 内部状态分布指标 (`dist/*`)
+
+这些指标的统计数据（`mean`, `median`, `std`, `iqr`）均在**有效词元位置（应用 `attention_mask`）**上计算。
+
+-   **因果表征 `U` (`dist/U_*`)**:
+    -   通过对比 `U_loc` 和 `U_scale` 的 `mean`/`std` 与 `median`/`iqr`，我们可以深入分析其分布的**偏斜度**和**尾部重量**，从而诊断模型是否对特定词元学习到了特化表征，或是否明智地在困难样本上表达了更高的不确定性。
+
+-   **OvR 校准 (`dist/ovr_prob_sum_median`)**:
+    -   监控所有词元的 OvR 概率之和的中位数。一个充分校准的模型，其概率和应**收敛于 1**，这反映了模型学习到了词元预测任务的内在互斥性。
+
+---
+*本章是对详细监控文档的概括。关于每个指标更深入的数学公式、解读和诊断指南，请参阅 [`docs/experiments/wandb_monitoring_metrics.md`](./experiments/wandb_monitoring_metrics.md)。*
+
+
+## 6. 使用流程图理解
 
 
 ### 图 1：CausalQwen 总体架构概览
@@ -568,7 +605,7 @@ graph TD
 
 
 
-## 6. 核心洞察与总结
+## 7. 核心洞察与总结
 是我们的核心数学文档。
 CausalQwen 的数学框架三个特色：
 
@@ -576,7 +613,7 @@ CausalQwen 的数学框架三个特色：
 2.  **分布计算**：利用柯西分布的线性性质，实现无采样训练
 3.  **统一架构**：设计为 Qwen 的子类，通过扩展而非重构增加数值处理能力
 
-### 6.1 ⚖️ CausalQwen vs. 标准 Qwen 对比清单
+### 7.1 ⚖️ CausalQwen vs. 标准 Qwen 对比清单
 
 为了清晰地展示 CausalQwen 的创新之处，我们将其与标准的 Qwen 模型在几个核心维度上进行直接比较。
 

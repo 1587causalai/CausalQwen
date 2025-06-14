@@ -15,6 +15,7 @@ from ..utils.losses import CausalLMLoss, compute_ovr_probabilities
 from ..models.causal_lm import CausalLMConfig
 from ..data.tokenizer import QwenTokenizerWrapper
 from ..data.synthetic_data_generator import SyntheticDataGenerator
+from ..evaluation.evaluator import Evaluator
 
 class Trainer:
     """Handles the training loop, optimizer, and data loading for fine-tuning."""
@@ -119,6 +120,31 @@ class Trainer:
         dataset = TensorDataset(input_ids, attention_mask, numerical_values, labels, target_values)
         return DataLoader(dataset, batch_size=self.batch_size, shuffle=shuffle)
 
+    def _run_evaluation(self, global_step):
+        """Runs validation on a fixed dataset and logs metrics to wandb."""
+        print("\n📈 Running End-of-Epoch Validation...")
+        
+        # 1. Create a fixed validation dataset for consistency using a proven method.
+        # In a real-world scenario, you would pass a pre-defined validation dataset.
+        print("   - Generating validation dataset...")
+        # Re-using the logic from _create_training_data to ensure correctness
+        eval_dataloader = self._create_training_data(num_samples=100, shuffle=False)
+        # We need the dataset object itself for the evaluator
+        eval_dataset = eval_dataloader.dataset
+        print("   - Validation dataset created.")
+
+        # 2. Instantiate the Evaluator
+        evaluator = Evaluator(self.model, self.tokenizer, self.device, self.config)
+
+        # 3. Get metrics from the evaluator
+        eval_metrics = evaluator.evaluate(eval_dataset, batch_size=self.batch_size)
+
+        # 4. Log metrics to wandb, prefixing with "eval/"
+        if self.wandb_run:
+            wandb_log_data = {f"eval/{k}": v for k, v in eval_metrics.items()}
+            self.wandb_run.log(wandb_log_data, step=global_step)
+            print(f"   - Validation metrics logged to wandb.")
+
     def train(self, num_epochs, num_samples):
         """
         Run the training loop.
@@ -217,15 +243,17 @@ class Trainer:
                             reg_mae = torch.abs(valid_reg_preds - valid_reg_targets).mean().item()
 
                     log_data = {
-                        "total_loss": loss.item(),
-                        "cls_loss": loss_dict["cls"].item(),
-                        "gated_reg_loss": loss_dict["reg"].item(),
-                        "reg_mae": reg_mae,
-                        "units_mean_loc": outputs['causal_loc'].mean().item(),
-                        "units_mean_scale": outputs['causal_scale'].mean().item(),
-                        "ovr_prob_sum": cls_probs.sum(dim=-1).mean().item(),
-                        "num_accuracy": num_acc,
-                        "accuracy": (valid_pred == valid_labels).sum().item() / valid_labels.size(0) if valid_labels.size(0) > 0 else 0.0
+                        "train/total_loss": loss_dict["total"].item(),
+                        "train/cls_loss_mean": loss_dict["cls"].item(),
+                        "train/reg_loss_effective": loss_dict["effective_reg_loss"].item(),
+                        # The raw reg_loss (before effective averaging) is also interesting
+                        "train/raw_gated_reg_loss": loss_dict["reg"].item(), 
+                        "train/accuracy_batch": (valid_pred == valid_labels).sum().item() / valid_labels.size(0) if valid_labels.size(0) > 0 else 0.0,
+                        
+                        # Distribution metrics
+                        "dist/U_loc_mean": outputs['causal_loc'][valid_mask].mean().item(),
+                        "dist/U_scale_mean": outputs['causal_scale'][valid_mask].mean().item(),
+                        "dist/ovr_prob_sum_median": cls_probs.sum(dim=-1).median().item(),
                     }
                     
                     self.wandb_run.log({k: v for k, v in log_data.items() if v is not None}, step=global_step)
@@ -242,10 +270,13 @@ class Trainer:
             # Log epoch-level summary to wandb
             if self.wandb_run:
                 self.wandb_run.log({
-                    "epoch_avg_loss": avg_loss,
-                    "epoch_accuracy": accuracy,
-                    "epoch_num_accuracy": num_accuracy
+                    "train/epoch_avg_loss": avg_loss,
+                    "train/epoch_accuracy": accuracy,
+                    "train/epoch_num_accuracy": num_accuracy
                 }, step=global_step)
+
+            # --- Run evaluation at the end of each epoch ---
+            self._run_evaluation(global_step)
 
         # Return training metrics instead of dataloader
         return {

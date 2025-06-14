@@ -5,8 +5,6 @@ import os
 # 在导入任何其他模块之前设置环境变量
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'  # 禁用 tokenizers 并行以避免 fork 警告
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # 对于 MacOS 的兼容性
-os.environ['WANDB_SILENT'] = 'true'  # 减少 wandb 输出
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 减少 TensorFlow 日志（如果有）
 
 import json
 import argparse
@@ -18,22 +16,9 @@ import wandb
 import sys
 import torch
 import warnings
-import logging
-from typing import Dict, Any
 
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# 设置日志配置
-from src.utils.logging_config import setup_logging
-
-# 抑制特定警告
-warnings.filterwarnings("ignore", message="Special tokens have been added in the vocabulary")
-warnings.filterwarnings("ignore", message="We detected that you are passing `past_key_values` as a tuple")
-warnings.filterwarnings("ignore", message="W&B API key is configured")
-
-# 设置 PyTorch 警告
-torch.set_warn_always(False)
 
 from src.models.causal_lm import CausalLMConfig, CausalLanguageModel
 from src.data.tokenizer import QwenTokenizerWrapper
@@ -207,9 +192,6 @@ def print_config_info(config_name, config, base_config=None):
 
 def main(args):
     """Main function to orchestrate the experiments."""
-    # 设置日志配置
-    setup_logging(verbose=getattr(args, 'verbose', False))
-    
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     results_dir = os.path.join(args.results_base_dir, f"{args.experiment}_{timestamp}")
     os.makedirs(results_dir, exist_ok=True)
@@ -378,7 +360,7 @@ def main(args):
             print(f"\n⏭️  跳过训练（--no_train 模式）")
         
         # Evaluate model
-        print(f"\n✅ 训练完成。 🧪 开始在测试集上进行最终评估...")
+        print(f"\n📊 开始模型评估...")
         evaluator = Evaluator(model, tokenizer, device, config)
         
         config_results = {}
@@ -544,12 +526,10 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for training.')
     parser.add_argument('--no_train', action='store_true', help="Skip training and only run evaluation.")
     parser.add_argument('--use_wandb', action='store_true', help="Use Weights & Biases for logging.")
-    parser.add_argument('--verbose', action='store_true', help="显示详细日志")
-    
+
     args = parser.parse_args()
     
     # Expand user path
     args.qwen_model_path = os.path.expanduser(args.qwen_model_path)
     
     main(args)
-

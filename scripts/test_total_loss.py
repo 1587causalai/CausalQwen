@@ -138,32 +138,46 @@ def main():
                 numerical_values=numerical_values, attention_mask=attention_mask
             )
             model_total_loss = loss_dict['total']
+            model_cls_loss = loss_dict['cls']
+            model_reg_loss = loss_dict['effective_reg_loss']
+            
             print(f"\n   --- 模型计算结果 ---")
-            print(f"     - 平均分类损失 (cls_loss): {loss_dict['cls']:.4f}")
-            print(f"     - 有效回归损失 (effective_reg_loss): {loss_dict['effective_reg_loss']:.4f}")
+            print(f"     - 平均分类损失 (cls_loss): {model_cls_loss:.4f}")
+            print(f"     - 有效回归损失 (effective_reg_loss): {model_reg_loss:.4f}")
             print(f"     - 模型计算总损失 (Model Total Loss): {model_total_loss.item():.4f}")
 
             # --- 步骤 6: 核心数学逻辑验证 ---
-            print_step("步骤 6", "核心数学逻辑验证")
+            print_step("步骤 6", "核心数学逻辑验证 (逐分量)")
             # 由于可能存在 NaN，我们在比较前也对模型输出进行处理
             model_total_loss_safe = torch.nan_to_num(model_total_loss, nan=0.0, posinf=0.0, neginf=0.0)
-            loss_match = torch.allclose(manual_total_loss, model_total_loss_safe, atol=1e-5)
             
-            if not loss_match:
+            # 独立验证每个分量
+            cls_loss_match = torch.allclose(L_cls_mean, model_cls_loss, atol=1e-5)
+            reg_loss_match = torch.allclose(L_reg_eff, model_reg_loss, atol=1e-5)
+            total_loss_match = torch.allclose(manual_total_loss, model_total_loss_safe, atol=1e-5)
+            
+            overall_match = cls_loss_match and reg_loss_match and total_loss_match
+            if not overall_match:
                 all_tests_passed = False
 
             print(f"\n   --- 验证: 手动计算 vs. 模型计算 ---")
-            print(f"     - 结论: {'✅ 通过' if loss_match else '❌ 失败'}")
-            if not loss_match:
-                diff = torch.abs(manual_total_loss - model_total_loss_safe)
-                print(f"     - 绝对差异: {diff.item():.8f}")
+            print(f"     - 分类损失 (cls_loss) 匹配: {'✅ 通过' if cls_loss_match else '❌ 失败'}")
+            if not cls_loss_match:
+                print(f"       - 手动: {L_cls_mean.item():.8f}, 模型: {model_cls_loss.item():.8f}")
+            print(f"     - 回归损失 (reg_loss) 匹配: {'✅ 通过' if reg_loss_match else '❌ 失败'}")
+            if not reg_loss_match:
+                print(f"       - 手动: {L_reg_eff.item():.8f}, 模型: {model_reg_loss.item():.8f}")
+            print(f"     - 总损失 (total_loss) 匹配: {'✅ 通过' if total_loss_match else '❌ 失败'}")
+            if not total_loss_match and total_loss_match:
+                 diff = torch.abs(manual_total_loss - model_total_loss_safe)
+                 print(f"       - 总损失差异: {diff.item():.8f}")
             
             results.append({
                 "threshold": threshold,
-                "cls_loss": loss_dict['cls'],
-                "reg_loss": loss_dict['effective_reg_loss'],
+                "cls_loss": model_cls_loss,
+                "reg_loss": model_reg_loss,
                 "total_loss": model_total_loss,
-                "passed": loss_match
+                "passed": overall_match
             })
 
     # --- 总结报告 ---

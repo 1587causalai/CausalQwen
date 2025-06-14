@@ -51,9 +51,8 @@ class Evaluator:
         
         # Lists to store predictions and ground truth for metric calculation
         all_pred_tokens, all_true_tokens = [], []
-        all_true_values, all_is_num_mask = [], []
-        all_reg_locs, all_reg_scales = [], []
-        all_pred_confidences = []
+        all_true_values, all_pred_values = [], []
+        all_pred_confidences, all_reg_scales = [], []
         
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Evaluating"):
@@ -97,40 +96,23 @@ class Evaluator:
                 pred_tokens = pred_classes
                 all_pred_tokens.extend(pred_tokens.cpu().numpy())
                 all_true_tokens.extend(valid_targets.cpu().numpy())
-
-                # Collect data for regression metrics
-                is_num_mask = (valid_targets == self.tokenizer.num_token_id)
-                all_is_num_mask.extend(is_num_mask.cpu().numpy())
                 all_true_values.extend(valid_target_values.cpu().numpy())
-                all_reg_locs.extend(valid_reg_loc.cpu().numpy())
+                all_pred_values.extend(valid_reg_loc.cpu().numpy())
                 all_reg_scales.extend(valid_reg_scale.cpu().numpy())
         
         # Convert all lists to numpy arrays for consistent processing
         all_pred_tokens = np.array(all_pred_tokens)
         all_true_tokens = np.array(all_true_tokens)
         all_true_values = np.array(all_true_values)
-        all_is_num_mask = np.array(all_is_num_mask, dtype=bool)
-        all_reg_locs = np.array(all_reg_locs)
+        all_pred_values = np.array(all_pred_values)
         all_reg_scales = np.array(all_reg_scales)
         all_pred_confidences = np.array(all_pred_confidences)
 
-        # Filter regression-related data using the mask
-        true_reg_values = all_true_values[all_is_num_mask]
-        pred_reg_locs = all_reg_locs[all_is_num_mask]
-        pred_reg_scales = all_reg_scales[all_is_num_mask]
-        
-        # Further filter out NaN values in regression targets
-        valid_reg_mask = ~np.isnan(true_reg_values)
-        true_reg_values = true_reg_values[valid_reg_mask]
-        pred_reg_locs = pred_reg_locs[valid_reg_mask]
-        pred_reg_scales = pred_reg_scales[valid_reg_mask]
-        
         # Compute all metrics from the collected data
         metrics = self._compute_metrics(
             all_pred_tokens, all_true_tokens,
-            true_reg_values, # Only pass actual regression values
-            all_pred_confidences,
-            pred_reg_locs, pred_reg_scales
+            all_pred_values, all_true_values,
+            all_pred_confidences, all_reg_scales
         )
         
         # Save raw outputs if a path is provided
@@ -138,10 +120,8 @@ class Evaluator:
             output_data = {
                 'pred_tokens': all_pred_tokens,
                 'true_tokens': all_true_tokens,
-                'is_num_mask': all_is_num_mask,
                 'true_values': all_true_values,
-                'reg_locs': all_reg_locs,
-                'reg_scales': all_reg_scales,
+                'pred_values': all_pred_values,
                 'confidences': all_pred_confidences,
                 'num_token_id': self.tokenizer.num_token_id
             }
@@ -151,38 +131,66 @@ class Evaluator:
             print(f"Saved raw evaluation outputs to {save_path}")
 
         return metrics
-    def _compute_metrics(self, pred_tokens, true_tokens, true_values, pred_confidences, reg_locs, reg_scales):
+
+    def _compute_metrics(self, pred_tokens, true_tokens, pred_values, true_values, pred_confidences, reg_scales):
         """Computes and returns a dictionary of all metrics."""
         metrics = {}
-        
-        # --- Classification Metrics ---
+        num_token_id = self.tokenizer.num_token_id
+
+        # --- Overall Classification Metrics (on all tokens) ---
         precision, recall, f1, _ = precision_recall_fscore_support(
             true_tokens, pred_tokens, average='weighted', zero_division=0
         )
-        metrics['cls_accuracy'] = accuracy_score(true_tokens, pred_tokens)
-        metrics['cls_precision'] = precision
-        metrics['cls_recall'] = recall
-        metrics['cls_f1'] = f1
+        metrics['cls_accuracy_all'] = accuracy_score(true_tokens, pred_tokens)
+        metrics['cls_precision_all'] = precision
+        metrics['cls_recall_all'] = recall
+        metrics['cls_f1_all'] = f1
         
-        # --- Regression Metrics ---
-        if true_values.size > 0:
-            # Note: The deterministic regression prediction is just the location 'loc'
-            pred_values = reg_locs
-            metrics['reg_mse'] = np.mean((true_values - pred_values)**2)
-            metrics['reg_mae'] = np.mean(np.abs(true_values - pred_values))
+        # --- <NUM> Token Detection Metrics ---
+        is_true_num = (true_tokens == num_token_id)
+        is_pred_num = (pred_tokens == num_token_id)
+
+        tp = np.sum(is_true_num & is_pred_num)
+        fp = np.sum(~is_true_num & is_pred_num)
+        fn = np.sum(is_true_num & ~is_pred_num)
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+        metrics['num_precision'] = precision
+        metrics['num_recall'] = recall
+        metrics['num_f1'] = f1
+
+        # --- Regression Metrics (only on True Positive <NUM> predictions) ---
+        tp_mask = is_true_num & is_pred_num
+        tp_true_values = true_values[tp_mask]
+        tp_pred_values = pred_values[tp_mask]
+        
+        # Filter out potential NaNs from targets
+        valid_reg_mask = ~np.isnan(tp_true_values)
+        tp_true_values = tp_true_values[valid_reg_mask]
+        tp_pred_values = tp_pred_values[valid_reg_mask]
+
+        if tp_true_values.size > 0:
+            metrics['reg_mae'] = np.mean(np.abs(tp_true_values - tp_pred_values))
+            metrics['reg_mdae'] = np.median(np.abs(tp_true_values - tp_pred_values))
+            metrics['reg_mse'] = np.mean((tp_true_values - tp_pred_values)**2)
         else:
-            metrics['reg_mse'] = 0
-            metrics['reg_mae'] = 0
+            metrics['reg_mae'] = 0.0
+            metrics['reg_mdae'] = 0.0
+            metrics['reg_mse'] = 0.0
 
         # --- Calibration Metrics ---
-        # Use the new multi-class calibration metrics
+        # ECE for overall classification
         calib_metrics = self._compute_multiclass_calibration_metrics(pred_confidences, pred_tokens, true_tokens)
         metrics.update(calib_metrics)
         
-        # PICP (Prediction Interval Coverage Probability) for Regression
-        if reg_locs.size > 0:
+        # PICP for regression (only on True Positives)
+        tp_reg_scales = reg_scales[tp_mask][valid_reg_mask]
+        if tp_true_values.size > 0:
             metrics['reg_picp'] = self._compute_picp(
-                true_values, reg_locs, reg_scales
+                tp_true_values, tp_pred_values, tp_reg_scales
             )
         else:
             metrics['reg_picp'] = 0
