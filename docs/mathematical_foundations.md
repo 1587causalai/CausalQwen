@@ -17,7 +17,7 @@
 
 模型训练的核心是执行一个完整的前向传播，计算预测值与真实标签之间的损失，然后通过反向传播更新模型参数。整个前向传播过程可以分解为五个核心模块。
 
-> 我们用 B 代表批次大小, S 代表序列长度, H 代表模型隐藏维度, C 代表因果表征维度, K 代表基座模型 Qwen 的已用词汇表大小, V_full 代表扩展后的总词汇表大小（V_full = K + 271，其中 271 是 Qwen 的预留词汇空间）, CausalQwen 使用其中的 K+1 个词汇（包含新增的 `<NUM>` 词元）
+> 我们用 B 代表批次大小, S 代表序列长度, H 代表模型隐藏维度, C 代表因果表征维度, V_full 代表 Qwen 的词汇表总大小。Qwen 的词汇表包含 K 个已使用词汇和 271 个预留位置，即 V_full = K + 271。CausalQwen 使用第一个预留位置（ID = K）作为 `<NUM>` 词元。
 
 > **设计决策**: 在当前实现中，我们设定因果表征维度 `C` 与模型隐藏层维度 `H` 相等，即 **`C = H`**。这简化了归因推断网络的初始化。
 
@@ -293,13 +293,13 @@ CausalQwen 的设计允许我们对生成过程中的“随机性”进行前所
 
 $$W_{\text{cls}} \leftarrow W_{\text{Qwen\_lm\_head}}, \quad b_{\text{cls}} = 0$$
 
-这确保了初始分类输出与 Qwen 一致。初始状态下，由于 $U_i \sim \text{Cauchy}(z_i, \gamma_0)$，行动网络的分类输出为：
+这确保了初始分类输出与 Qwen 一致。由于我们完整复制了 Qwen 的 `lm_head` 权重矩阵（维度为 `[V_full, H]`），所有词汇（包括已使用的和预留的）都有对应的权重。
 
 **分类决策分布推导**：
 - 融合输入分布（加入噪声）：
   $$U'_i \sim \text{Cauchy}(z_i, \gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|)$$
   
-  其中 $\gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|$ 表示对逐元素相加。
+  其中 $\gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|$ 表示对逐元素相加, $b_\text{noise}$ 初始化成某个常熟值即可。
   
 - 对于词汇 $k$，经过权重向量 $W_{\text{cls},k} \in \mathbb{R}^C$ 的线性变换（内积）后：
   $$S_{k,i} = W_{\text{cls},k} \cdot U'_i + b_{\text{cls},k} \sim \text{Cauchy}\left(W_{\text{cls},k} \cdot z_i, |W_{\text{cls},k}| \cdot (\gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|)\right)$$
@@ -328,7 +328,7 @@ $$\gamma_{\text{reg},i} = |W_{\text{reg}}| \cdot (\gamma_0 \cdot \mathbf{1}_C + 
 通过上述初始化步骤，CausalQwen 在训练开始时具有以下性质：
 
 -   **因果表征**: 对于每个位置 $i$，因果表征 $U_i$ 服从分布 $U_i \sim \text{Cauchy}(z_i, \gamma_0 \cdot \mathbf{1}_C)$，其中 $z_i \in \mathbb{R}^C$ 是 Qwen 的输出特征，$\gamma_0 = \text{softplus}(\sigma_{\text{init}})$ 是初始的常数尺度。
--   **分类决策**: 由于归因推断网络的恒等映射初始化和行动网络继承 Qwen 权重，分类输出的位置参数与 Qwen 完全一致：$\text{loc}_{S_{k,i}} = W_{\text{Qwen},k} \cdot z_i$。
+-   **分类决策**: 由于完整复制了 Qwen 的 lm_head 权重，分类输出的位置参数与 Qwen 完全一致：$\text{loc}_{S_{k,i}} = W_{\text{Qwen},k} \cdot z_i$，对所有 $k \in [0, V_{\text{full}})$。
 -   **回归决策**: 位置参数 $\mu_{\text{reg},i} = W_{\text{reg}} \cdot z_i + b_{\text{reg}}$ 接近零均值，尺度参数由权重向量与尺度向量的内积决定。
 -   **知识保持**: 当使用兼容性采样（基于 `loc_S` 的 softmax）时，模型的输出分布与原始 Qwen 完全相同，确保了知识的完美迁移。
 

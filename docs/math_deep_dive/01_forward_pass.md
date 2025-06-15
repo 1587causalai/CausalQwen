@@ -6,7 +6,7 @@
 
 ## 符号约定
 
-我们用 B 代表批次大小, S 代表序列长度, H 代表模型隐藏维度, C 代表因果表征维度, K 代表基座模型 Qwen 的已用词汇表大小, V_full 代表扩展后的总词汇表大小（V_full = K + 271，其中 271 是 Qwen 的预留词汇空间）, CausalQwen 使用其中的 K+1 个词汇（包含新增的 `<NUM>` 词元）
+我们用 B 代表批次大小, S 代表序列长度, H 代表模型隐藏维度, C 代表因果表征维度, V_full 代表 Qwen 的词汇表总大小。Qwen 的词汇表包含 K 个已使用词汇和 271 个预留位置，即 V_full = K + 271。CausalQwen 使用第一个预留位置（ID = K）作为 `<NUM>` 词元。
 
 > **设计决策**: 在当前实现中，我们设定因果表征维度 `C` 与模型隐藏层维度 `H` 相等，即 **`C = H`**。这简化了归因推断网络的初始化。
 
@@ -127,6 +127,29 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 
 **初始化后的效果**：由于我们完全继承了 Qwen 的 Transformer 权重，当输入的增强嵌入 $e$ 接近原始 Qwen 嵌入时（数值编码的影响很小），输出 $z$ 也将非常接近原始 Qwen 的特征表示。
 
+### 2.1 Transformer 处理流程图
+
+```mermaid
+graph TD
+    subgraph "输入"
+        A["增强嵌入 e<br>[B, S, H]"]
+    end
+    
+    subgraph "Qwen Transformer 层级结构"
+        A --> B1["Layer 1: Self-Attention + FFN"]
+        B1 --> B2["Layer 2: Self-Attention + FFN"]
+        B2 --> B3["..."]
+        B3 --> BL["Layer L: Self-Attention + FFN"]
+    end
+    
+    subgraph "输出"
+        BL --> Z["上下文特征 z<br>[B, S, H]"]
+    end
+    
+    style A fill:#e3f2fd
+    style Z fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+```
+
 ## 3. 模块三：归因推断网络 (Abduction Network)
 
 该模块从上下文特征中推断出每个位置的个体因果表征分布。
@@ -160,6 +183,55 @@ $$U_i \sim \text{Cauchy}(z_i, \gamma_0 \cdot \mathbf{1}_C)$$
 
 其中 $\gamma_0 = \text{softplus}(\sigma_{\text{init}})$，$\mathbf{1}_C$ 是 C 维的全 1 向量。
 
+### 3.1 归因推断网络结构图
+
+```mermaid
+graph LR
+    subgraph "输入"
+        Z["上下文特征 z<br>[B, S, H]"]
+    end
+    
+    subgraph "并行线性变换"
+        Z --> L1["位置网络<br>W_loc · z + b_loc"]
+        Z --> L2["尺度网络<br>W_scale · z + b_scale"]
+    end
+    
+    subgraph "激活与输出"
+        L1 --> LOC["loc_U = W_loc · z + b_loc<br>[B, S, C]"]
+        L2 --> ACT["softplus 激活"]
+        ACT --> SCALE["scale_U = softplus(...)<br>[B, S, C]"]
+    end
+    
+    LOC --> U["U ~ Cauchy(loc_U, scale_U)"]
+    SCALE --> U
+    
+    style Z fill:#e8f5e9
+    style U fill:#fff3e0,stroke:#e65100,stroke-width:2px
+```
+
+### 3.2 初始化效果可视化
+
+```mermaid
+graph TD
+    subgraph "初始化参数"
+        P1["W_loc = I_H<br>b_loc = 0"]
+        P2["W_scale = 0<br>b_scale = σ_init"]
+    end
+    
+    subgraph "初始化后的效果"
+        Z["特征 z_i"] --> LOC["loc_U_i = z_i<br>(恒等映射)"]
+        Z --> SCALE["scale_U_i = γ_0 · 1_C<br>(常数尺度)"]
+    end
+    
+    LOC --> U["U_i ~ Cauchy(z_i, γ_0 · 1_C)"]
+    SCALE --> U
+    
+    P1 --> LOC
+    P2 --> SCALE
+    
+    style U fill:#fff3e0,stroke:#e65100,stroke-width:2px
+```
+
 ## 4. 模块四：行动决策网络 (Action Network)
 
 该模块是模型的核心决策单元。其内部包含一个可学习的噪声参数 $b_{\text{noise}} \in \mathbb{R}^C$，工作流程分为两步：
@@ -189,49 +261,56 @@ $$U_i \sim \text{Cauchy}(z_i, \gamma_0 \cdot \mathbf{1}_C)$$
     - 分类决策分布参数: `loc_S` (形状: `[B, S, V_full]`), `scale_S` (形状: `[B, S, V_full]`)
     - 回归决策分布参数: `loc_Y` (形状: `[B, S]`), `scale_Y` (形状: `[B, S]`)
 
-### 4.1 分类决策
+### 4.1 行动网络的双步骤流程
 
-对于词汇表中的每个词汇 $k$：
+```mermaid
+graph TB
+    subgraph "Step 1: 噪声注入"
+        U["个体表征分布<br>U ~ Cauchy(loc_U, scale_U)"] --> Plus["\+"]
+        Noise["噪声分布<br>ε ~ Cauchy(0, |b_noise|)"] --> Plus
+        Plus --> U_prime["融合分布<br>U' ~ Cauchy(loc_U, scale_U + |b_noise|)"]
+    end
+    
+    subgraph "Step 2: 并行决策"
+        U_prime --> CLS["分类线性层<br>W_cls, b_cls"]
+        U_prime --> REG["回归线性层<br>W_reg, b_reg"]
+        
+        CLS --> S["分类决策分布<br>S_k ~ Cauchy(loc_S_k, scale_S_k)"]
+        REG --> Y["回归决策分布<br>Y ~ Cauchy(loc_Y, scale_Y)"]
+    end
+    
+    style U fill:#fff3e0
+    style U_prime fill:#fbe9e7,stroke:#ff6f00,stroke-width:2px
+    style S fill:#e3f2fd
+    style Y fill:#e8f5e9
+```
 
-**融合噪声后的决策分布**：
-基于融合输入分布 $U'_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i} + |b_{\text{noise}}|)$，经过权重向量 $W_{\text{cls},k} \in \mathbb{R}^C$ 的线性变换（内积）后：
+### 4.2 噪声注入的数学原理
 
-$$S_{k,i} = W_{\text{cls},k} \cdot U'_i + b_{\text{cls},k} \sim \text{Cauchy}(\text{loc}_{S_{k,i}}, \text{scale}_{S_{k,i}})$$
-
-其中：
-$$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k}$$
-$$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$$
-
-这里 $|W_{\text{cls},k}|$ 表示对权重向量逐元素取绝对值，然后与尺度向量进行内积。
-
-**初始化后的计算**：由于 $W_{\text{cls}} = W_{\text{Qwen\_lm\_head}}$，$b_{\text{cls}} = 0$，且 $\text{loc}_{U_i} = z_i$：
-
-$$\text{loc}_{S_{k,i}} = W_{\text{Qwen},k} \cdot z_i$$
-
-这正是原始 Qwen 的 logits！同时：
-$$\text{scale}_{S_{k,i}} = |W_{\text{Qwen},k}| \cdot (\gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|)$$
-
-### 4.2 回归决策
-
-**融合噪声后的决策分布**：
-基于融合输入分布 $U'_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i} + |b_{\text{noise}}|)$，经过回归权重向量 $W_{\text{reg}} \in \mathbb{R}^C$ 的线性变换：
-
-$$Y_i = W_{\text{reg}} \cdot U'_i + b_{\text{reg}} \sim \text{Cauchy}(\text{loc}_{Y_i}, \text{scale}_{Y_i})$$
-
-其中：
-$$\text{loc}_{Y_i} = W_{\text{reg}} \cdot \text{loc}_{U_i} + b_{\text{reg}}$$
-$$\text{scale}_{Y_i} = |W_{\text{reg}}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$$
-
-这里 $|W_{\text{reg}}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$ 表示先对权重向量逐元素取绝对值，再与融合后的尺度向量进行内积。
-
-**初始化后的计算**：使用标准初始化（如 Xavier），$W_{\text{reg}}$ 的元素较小，因此：
-
-$$\text{loc}_{Y_i} = W_{\text{reg}} \cdot z_i + b_{\text{reg}}$$
-$$\text{scale}_{Y_i} = |W_{\text{reg}}| \cdot (\gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|)$$
+```mermaid
+graph LR
+    subgraph "个体不确定性"
+        U1["U_i 的第 j 维<br>U_ij ~ Cauchy(loc_ij, scale_ij)"]
+    end
+    
+    subgraph "环境不确定性"
+        E1["ε_j ~ Cauchy(0, |b_noise_j|)"]
+    end
+    
+    subgraph "柯西分布加法性质"
+        U1 --> Add["独立相加"]
+        E1 --> Add
+        Add --> U_prime["U'_ij ~ Cauchy(loc_ij, scale_ij + |b_noise_j|)"]
+    end
+    
+    U_prime --> Note["注：逐元素独立操作"]
+    
+    style U1 fill:#fff3e0
+    style E1 fill:#fce4ec
+    style U_prime fill:#fbe9e7
+```
 
 ## 5. 模块五：损失计算 (Loss Calculation)
-
-此模块计算模型预测与真实标签之间的差异，为反向传播提供依据。
 
 ### 5.1 OvR 分类损失
 
@@ -446,18 +525,28 @@ graph TD
     style D fill:#f1f8e9
 ```
 
-最终的总损失由平均分类损失和有效的平均回归损失加权构成。
+### 5.3.1 损失归约的数学细节
 
-1.  **平均分类损失**：对所有有效词元的分类损失求平均
-    $$\mathcal{L}_{\text{cls\_mean}} = \frac{\sum_{i \in \text{valid}} L_{\text{cls}, i}}{\sum_{i} \text{cls\_mask}_i}$$
-
-2.  **有效回归损失**：只对数值词元的回归损失求平均
-    $$\mathcal{L}_{\text{reg\_eff}} = \frac{\sum_{i} \mathcal{L}_{\text{reg\_gated},i}}{\sum_{i} m_{i}}$$
-
-3.  **最终总损失**：
-    $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{cls\_mean}} + \lambda \cdot \mathcal{L}_{\text{reg\_eff}}$$
-
-这种分离求平均的方式是模型能够同时有效学习分类和回归任务的关键。
+```mermaid
+graph LR
+    subgraph "为什么分离归约？"
+        Issue["问题：数值词元稀疏<br>典型比例 < 5%"]
+        Issue --> Solution["解决：使用不同的归约基数"]
+    end
+    
+    subgraph "归约策略"
+        Solution --> Cls["分类：sum(L_cls) / N_all<br>N_all = sum(cls_mask)"]
+        Solution --> Reg["回归：sum(L_reg) / N_num<br>N_num = sum(num_mask)"]
+    end
+    
+    subgraph "效果"
+        Cls --> Effect1["保证语言建模信号充足"]
+        Reg --> Effect2["避免回归信号被稀释"]
+    end
+    
+    style Issue fill:#ffebee
+    style Solution fill:#e8f5e9
+```
 
 ## 实现要点总结
 
@@ -468,3 +557,49 @@ graph TD
 5. **分离归约**：不同的平均基数确保回归信号不被稀释
 
 这种设计使得 CausalQwen 能够在单一架构中同时处理文本生成和数值预测任务。
+
+### 总体数据流与维度变化图
+
+```mermaid
+graph TD
+    subgraph "输入层"
+        Text["文本: '价格是99.9元'"] --> IDs["input_ids [B,S]"]
+        Text --> Nums["numeric_values [B,S]"]
+    end
+    
+    subgraph "嵌入层"
+        IDs --> Embed["base_embed [B,S,H]"]
+        Nums --> Phi["φ(v) [B,S,H]"]
+        Embed --> E["e = base + φ(v)<br>[B,S,H]"]
+        Phi --> E
+    end
+    
+    subgraph "特征提取"
+        E --> Z["z = Qwen(e)<br>[B,S,H]"]
+    end
+    
+    subgraph "归因推断"
+        Z --> LocU["loc_U [B,S,C]"]
+        Z --> ScaleU["scale_U [B,S,C]"]
+    end
+    
+    subgraph "决策输出"
+        LocU --> LocS["loc_S [B,S,V_full]"]
+        ScaleU --> ScaleS["scale_S [B,S,V_full]"]
+        LocU --> LocY["loc_Y [B,S]"]
+        ScaleU --> ScaleY["scale_Y [B,S]"]
+    end
+    
+    subgraph "损失计算"
+        LocS --> Loss["L_total (标量)"]
+        ScaleS --> Loss
+        LocY --> Loss
+        ScaleY --> Loss
+    end
+    
+    style E fill:#e3f2fd
+    style Z fill:#e8f5e9
+    style LocU fill:#fff3e0
+    style ScaleU fill:#fff3e0
+    style Loss fill:#fce4ec
+```
