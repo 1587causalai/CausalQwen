@@ -51,16 +51,113 @@ graph TD
 
 这一模块的目标是将混合了文本和数值的原始输入，转化为一个统一的、数值感知的特征向量序列。
 
-### 1.1 分词与数值识别
-分词器处理原始文本，识别并替换数值：
+### 1.1 第一步：数值感知的分词处理
 
-1.  **数值识别**: 分词器扫描文本，识别数值模式（如 `99.9`）
-2.  **词元替换**: 将识别出的数值替换为特殊词元 `<NUM>`
-3.  **数值保存**: 将原始数值单独保存，与词元序列保持位置对齐
+分词器将混合文本和数值的原始输入转换为 token IDs 和对齐的数值序列。
 
--   **输出**: 
-    - `input_ids` $[x_1, ..., x_S]$: `['价格', '是', '<NUM>', '元']` → `[12345, 67890, <NUM_ID>, 11111]` (形状: `[B, S]`)
-    - `numeric_values` $[v_1, ..., v_S]$: `[0.0, 0.0, 99.9, 0.0]` (形状: `[B, S]`)
+**核心实现代码**：
+
+```python
+def preprocess_text(text, tokenizer):
+    """
+    将文本转换为 token IDs 和数值序列
+    
+    示例:
+        输入: "价格是99.9元"
+        输出: 
+            - input_ids: [12345, 67890, <NUM_ID>, 11111]
+            - numeric_values: [0.0, 0.0, 99.9, 0.0]
+    """
+    import re
+    
+    # 1. 提取数值并替换为占位符
+    number_pattern = re.compile(r'(-?\d+\.?\d*)')
+    numeric_values = []
+    
+    def replace_num(match):
+        numeric_values.append(float(match.group(1)))
+        return ' _NUM_HOLDER_ '
+    
+    processed_text = number_pattern.sub(replace_num, text)
+    
+    # 2. 使用 tokenizer 分词
+    tokens = tokenizer.tokenizer(processed_text, return_tensors='pt')
+    input_ids = tokens['input_ids'][0]  # [S]
+    
+    # 3. 替换占位符并对齐数值
+    placeholder_id = tokenizer.placeholder_id
+    num_token_id = tokenizer.num_token_id
+    
+    numeric_values_aligned = torch.zeros_like(input_ids, dtype=torch.float32)
+    
+    # 找到占位符位置并替换
+    placeholder_positions = (input_ids == placeholder_id).nonzero(as_tuple=True)[0]
+    
+    for idx, pos in enumerate(placeholder_positions):
+        if idx < len(numeric_values):
+            input_ids[pos] = num_token_id
+            numeric_values_aligned[pos] = numeric_values[idx]
+    
+    return input_ids, numeric_values_aligned
+
+# 批处理版本
+def batch_preprocess(texts, tokenizer, max_length=512):
+    """
+    批量处理文本
+    
+    Args:
+        texts: 文本列表
+        tokenizer: QwenTokenizerWrapper
+        max_length: 最大长度
+        
+    Returns:
+        dict: 包含 input_ids, numeric_values, attention_mask
+    """
+    batch_input_ids = []
+    batch_numeric_values = []
+    
+    for text in texts:
+        input_ids, numeric_values = preprocess_text(text, tokenizer)
+        batch_input_ids.append(input_ids)
+        batch_numeric_values.append(numeric_values)
+    
+    # Padding
+    max_len = min(max_length, max(len(ids) for ids in batch_input_ids))
+    
+    padded_input_ids = []
+    padded_numeric_values = []
+    attention_mask = []
+    
+    for input_ids, numeric_values in zip(batch_input_ids, batch_numeric_values):
+        # 截断
+        if len(input_ids) > max_len:
+            input_ids = input_ids[:max_len]
+            numeric_values = numeric_values[:max_len]
+        
+        # 填充
+        pad_len = max_len - len(input_ids)
+        padded_input_ids.append(
+            torch.cat([input_ids, torch.full((pad_len,), tokenizer.pad_token_id)])
+        )
+        padded_numeric_values.append(
+            torch.cat([numeric_values, torch.zeros(pad_len)])
+        )
+        attention_mask.append(
+            torch.cat([torch.ones(len(input_ids)), torch.zeros(pad_len)])
+        )
+    
+    return {
+        'input_ids': torch.stack(padded_input_ids),  # [B, S]
+        'numeric_values': torch.stack(padded_numeric_values),  # [B, S]
+        'attention_mask': torch.stack(attention_mask)  # [B, S]
+    }
+
+# 使用示例
+texts = ["价格是99.9元", "温度-15.5度"]
+outputs = batch_preprocess(texts, tokenizer)
+print(f"Input IDs shape: {outputs['input_ids'].shape}")
+print(f"Numeric values shape: {outputs['numeric_values'].shape}")
+```
 
 ### 1.2 词元嵌入
 将词元ID序列转换为基础嵌入向量：
@@ -105,6 +202,69 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 
 > **设计动机**: 选择对数编码 $\phi(v)$ 是因为它具有三大优势：1) **数值稳定性**，将大范围数值压缩到合理区间；2) **相对误差保持**，对数空间中的等距对应原空间的等比；3) **自然退化**，由于$\phi(0)=0$，非数值位置自然退化为标准词元嵌入，无需特殊处理。
 
+**完整实现代码**：
+
+```python
+def numerical_aware_embedding(input_ids, numeric_values, embed_tokens, numerical_embed):
+    """
+    数值感知嵌入的完整实现
+    
+    Args:
+        input_ids: [B, S] - 词元ID序列
+        numeric_values: [B, S] - 对应的数值
+        embed_tokens: 词元嵌入层
+        numerical_embed: 数值编码模块
+    
+    Returns:
+        enhanced_embeddings: [B, S, H] - 增强后的嵌入
+    """
+    # Step 1: 获取基础词元嵌入
+    base_embeddings = embed_tokens(input_ids)  # [B, S, H]
+    
+    # Step 2: 计算数值编码
+    # φ(v) = sign(v) * ln(1 + |v|) * w_num
+    numeric_encoding = numerical_embed(numeric_values)  # [B, S, H]
+    
+    # Step 3: 融合
+    enhanced_embeddings = base_embeddings + numeric_encoding  # [B, S, H]
+    
+    return enhanced_embeddings
+
+class NumericalEmbedding(nn.Module):
+    """数值编码模块的实现"""
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.direction_vector = nn.Parameter(torch.randn(hidden_size))
+        self._init_weights()
+    
+    def _init_weights(self):
+        # 初始化为单位向量
+        with torch.no_grad():
+            self.direction_vector.data = F.normalize(self.direction_vector.data, dim=0)
+    
+    def forward(self, numeric_values):
+        """
+        计算数值编码 φ(v) = sign(v) * ln(1 + |v|) * w_num
+        
+        Args:
+            numeric_values: [B, S] - 数值序列
+        
+        Returns:
+            encoding: [B, S, H] - 数值编码
+        """
+        # 扩展维度以便广播
+        values = numeric_values.unsqueeze(-1)  # [B, S, 1]
+        
+        # 计算编码
+        # sign(v) * ln(1 + |v|)
+        magnitude = torch.sign(values) * torch.log1p(torch.abs(values))  # [B, S, 1]
+        
+        # 与方向向量相乘
+        encoding = magnitude * self.direction_vector.unsqueeze(0).unsqueeze(0)  # [B, S, H]
+        
+        return encoding
+```
+
 ## 2. 模块二：特征提取网络 (Feature Extraction Network)
 
 该模块使用一个标准的 Transformer 网络（如Qwen）作为主干，来深度理解序列的上下文信息。
@@ -148,6 +308,43 @@ graph TD
     
     style A fill:#e3f2fd
     style Z fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+```
+
+**实现代码**：
+
+```python
+def extract_features(enhanced_embeddings, transformer_model, attention_mask=None):
+    """
+    使用 Transformer 提取上下文特征
+    
+    Args:
+        enhanced_embeddings: [B, S, H] - 增强嵌入
+        transformer_model: Qwen Transformer 模型
+        attention_mask: [B, S] - 注意力掩码（可选）
+    
+    Returns:
+        features: [B, S, H] - 上下文特征
+    """
+    # 准备注意力掩码
+    if attention_mask is not None:
+        # 转换为 Transformer 需要的格式
+        # [B, S] -> [B, 1, 1, S]
+        attention_mask = attention_mask[:, None, None, :]
+        attention_mask = (1.0 - attention_mask) * -10000.0
+    
+    # 通过 Transformer 层
+    hidden_states = enhanced_embeddings
+    for layer in transformer_model.layers:
+        hidden_states = layer(
+            hidden_states,
+            attention_mask=attention_mask,
+            use_cache=False
+        )[0]
+    
+    # 最后的层归一化
+    features = transformer_model.norm(hidden_states)
+    
+    return features
 ```
 
 ## 3. 模块三：归因推断网络 (Abduction Network)
@@ -232,6 +429,56 @@ graph TD
     style U fill:#fff3e0,stroke:#e65100,stroke-width:2px
 ```
 
+**完整实现代码**：
+
+```python
+class AbductionNetwork(nn.Module):
+    """归因推断网络的完整实现"""
+    
+    def __init__(self, hidden_size, causal_hidden_size):
+        super().__init__()
+        self.loc_net = nn.Linear(hidden_size, causal_hidden_size)
+        self.scale_net = nn.Linear(hidden_size, causal_hidden_size)
+        
+    def forward(self, features):
+        """
+        从特征推断个体因果表征分布
+        
+        Args:
+            features: [B, S, H] - 上下文特征
+        
+        Returns:
+            loc_U: [B, S, C] - 位置参数
+            scale_U: [B, S, C] - 尺度参数（正值）
+        """
+        # 计算位置参数
+        loc_U = self.loc_net(features)  # [B, S, C]
+        
+        # 计算尺度参数（使用 softplus 保证正值）
+        scale_U = F.softplus(self.scale_net(features))  # [B, S, C]
+        
+        return loc_U, scale_U
+
+def abduction_inference(features, abduction_network):
+    """
+    执行归因推断
+    
+    Args:
+        features: [B, S, H] - 上下文特征
+        abduction_network: 归因推断网络
+    
+    Returns:
+        loc_U: [B, S, C] - 个体表征位置参数
+        scale_U: [B, S, C] - 个体表征尺度参数
+    """
+    loc_U, scale_U = abduction_network(features)
+    
+    # 可选：添加数值稳定性检查
+    scale_U = torch.clamp(scale_U, min=1e-6)
+    
+    return loc_U, scale_U
+```
+
 ## 4. 模块四：行动决策网络 (Action Network)
 
 该模块是模型的核心决策单元。其内部包含一个可学习的噪声参数 $b_{\text{noise}} \in \mathbb{R}^C$，工作流程分为两步：
@@ -308,6 +555,83 @@ graph LR
     style U1 fill:#fff3e0
     style E1 fill:#fce4ec
     style U_prime fill:#fbe9e7
+```
+
+**完整实现代码**：
+
+```python
+class ActionNetwork(nn.Module):
+    """行动网络的完整实现"""
+    
+    def __init__(self, causal_hidden_size, vocab_size):
+        super().__init__()
+        # 分类头
+        self.classification_head = nn.Linear(causal_hidden_size, vocab_size)
+        # 回归头
+        self.regression_head = nn.Linear(causal_hidden_size, 1)
+        # 噪声参数
+        self.b_noise = nn.Parameter(torch.zeros(causal_hidden_size))
+        
+    def forward(self, loc_U, scale_U):
+        """
+        基于个体表征分布进行决策
+        
+        Args:
+            loc_U: [B, S, C] - 个体表征位置参数
+            scale_U: [B, S, C] - 个体表征尺度参数
+        
+        Returns:
+            loc_S: [B, S, V] - 分类决策位置参数
+            scale_S: [B, S, V] - 分类决策尺度参数
+            loc_Y: [B, S] - 回归决策位置参数
+            scale_Y: [B, S] - 回归决策尺度参数
+        """
+        # Step 1: 噪声融合
+        # U' ~ Cauchy(loc_U, scale_U + |b_noise|)
+        noise_scale = torch.abs(self.b_noise).unsqueeze(0).unsqueeze(0)  # [1, 1, C]
+        scale_U_fused = scale_U + noise_scale  # [B, S, C]
+        
+        # Step 2: 分类决策
+        # 计算所有词汇的决策分布参数
+        loc_S = self.classification_head(loc_U)  # [B, S, V]
+        
+        # 对每个词汇 k，scale_S[..., k] = |W_cls[k]| · scale_U_fused
+        W_cls_abs = torch.abs(self.classification_head.weight)  # [V, C]
+        scale_S = torch.matmul(scale_U_fused, W_cls_abs.T)  # [B, S, V]
+        
+        # Step 3: 回归决策
+        loc_Y = self.regression_head(loc_U).squeeze(-1)  # [B, S]
+        
+        # scale_Y = |W_reg| · scale_U_fused
+        W_reg_abs = torch.abs(self.regression_head.weight)  # [1, C]
+        scale_Y = torch.matmul(scale_U_fused, W_reg_abs.T).squeeze(-1)  # [B, S]
+        
+        return loc_S, scale_S, loc_Y, scale_Y
+
+def action_decision(loc_U, scale_U, action_network):
+    """
+    执行行动决策
+    
+    Args:
+        loc_U: [B, S, C] - 个体表征位置参数
+        scale_U: [B, S, C] - 个体表征尺度参数
+        action_network: 行动网络
+    
+    Returns:
+        决策分布参数（分类和回归）
+    """
+    loc_S, scale_S, loc_Y, scale_Y = action_network(loc_U, scale_U)
+    
+    # 数值稳定性
+    scale_S = torch.clamp(scale_S, min=1e-6)
+    scale_Y = torch.clamp(scale_Y, min=1e-6)
+    
+    return {
+        'loc_S': loc_S,
+        'scale_S': scale_S,
+        'loc_Y': loc_Y,
+        'scale_Y': scale_Y
+    }
 ```
 
 ## 5. 模块五：损失计算 (Loss Calculation)
@@ -494,6 +818,39 @@ graph TD
     
     其中 $m_i = \mathbb{1}[y_i = \text{<NUM>}]$ 是数值位置掩码。
 
+**完整实现代码**：
+
+```python
+def compute_gated_regression_loss(loc_Y, scale_Y, numeric_values, P_num, num_mask, alpha=0.0):
+    """
+    计算门控回归损失
+    
+    Args:
+        loc_Y: [B, S] - 回归位置参数
+        scale_Y: [B, S] - 回归尺度参数
+        numeric_values: [B, S] - 真实数值
+        P_num: [B, S] - <NUM> 词元的 OvR 概率
+        num_mask: [B, S] - 数值位置掩码
+        alpha: float - 门控系数（默认0，完全依赖分类概率）
+    
+    Returns:
+        loss_gated: [B, S] - 门控回归损失
+    """
+    # 计算柯西分布的负对数似然
+    # L_nll = log(π·scale) + log(1 + ((y_true - loc) / scale)²)
+    residual = (numeric_values - loc_Y) / scale_Y  # [B, S]
+    nll = torch.log(math.pi * scale_Y) + torch.log1p(residual ** 2)  # [B, S]
+    
+    # 计算门控权重
+    # gate = num_mask * (alpha + (1 - alpha) * P_num)
+    gate = num_mask * (alpha + (1 - alpha) * P_num)  # [B, S]
+    
+    # 应用门控
+    loss_gated = gate * nll  # [B, S]
+    
+    return loss_gated
+```
+
 ### 5.3 总损失的合并
 
 ```mermaid
@@ -525,27 +882,73 @@ graph TD
     style D fill:#f1f8e9
 ```
 
-### 5.3.1 损失归约的数学细节
+#### 实现示例（PyTorch 风格）
 
-```mermaid
-graph LR
-    subgraph "为什么分离归约？"
-        Issue["问题：数值词元稀疏<br>典型比例 < 5%"]
-        Issue --> Solution["解决：使用不同的归约基数"]
-    end
+```python
+def compute_total_loss(loc_S, scale_S, loc_Y, scale_Y, labels, numeric_values, 
+                      attention_mask, num_token_id, C_ovr=100.0, 
+                      reg_weight=1.0, alpha=0.0, ignore_index=-100):
+    """
+    计算 CausalQwen 的总损失
     
-    subgraph "归约策略"
-        Solution --> Cls["分类：sum(L_cls) / N_all<br>N_all = sum(cls_mask)"]
-        Solution --> Reg["回归：sum(L_reg) / N_num<br>N_num = sum(num_mask)"]
-    end
+    Args:
+        loc_S, scale_S: 分类决策分布参数
+        loc_Y, scale_Y: 回归决策分布参数
+        labels: 真实标签
+        numeric_values: 真实数值
+        attention_mask: 注意力掩码
+        num_token_id: <NUM> 词元的 ID
+        C_ovr: OvR 阈值
+        reg_weight: 回归损失权重 λ
+        alpha: 门控系数
+        ignore_index: 忽略的标签值
     
-    subgraph "效果"
-        Cls --> Effect1["保证语言建模信号充足"]
-        Reg --> Effect2["避免回归信号被稀释"]
-    end
+    Returns:
+        total_loss: 标量总损失
+        loss_dict: 包含各部分损失的字典
+    """
+    # 1. 计算 OvR 分类损失
+    cls_loss, valid_mask = compute_ovr_classification_loss(
+        loc_S, scale_S, labels, C_ovr, ignore_index
+    )
     
-    style Issue fill:#ffebee
-    style Solution fill:#e8f5e9
+    # 2. 创建掩码
+    cls_mask = attention_mask  # [B, S]
+    num_mask = ((labels == num_token_id) & (attention_mask > 0)).float()  # [B, S]
+    
+    # 3. 计算 <NUM> 词元的预测概率（用于门控）
+    # 提取 <NUM> 词元的决策分布参数
+    loc_S_num = loc_S[:, :, num_token_id]  # [B, S]
+    scale_S_num = scale_S[:, :, num_token_id]  # [B, S]
+    
+    # 计算 P(<NUM>)
+    z_num = (loc_S_num - C_ovr) / scale_S_num
+    P_num = 0.5 + torch.atan(z_num) / math.pi  # [B, S]
+    
+    # 4. 计算门控回归损失
+    reg_loss_gated = compute_gated_regression_loss(
+        loc_Y, scale_Y, numeric_values, P_num, num_mask, alpha
+    )
+    
+    # 5. 归约损失
+    # 分类损失：在所有有效位置上平均
+    n_cls = cls_mask.sum()
+    cls_loss_mean = (cls_loss * cls_mask).sum() / n_cls.clamp(min=1)
+    
+    # 回归损失：仅在数值位置上平均
+    n_reg = num_mask.sum()
+    reg_loss_effective = reg_loss_gated.sum() / n_reg.clamp(min=1)
+    
+    # 6. 总损失
+    total_loss = cls_loss_mean + reg_weight * reg_loss_effective
+    
+    return total_loss, {
+        'cls_loss_mean': cls_loss_mean.item(),
+        'reg_loss_effective': reg_loss_effective.item(),
+        'total_loss': total_loss.item(),
+        'n_cls': n_cls.item(),
+        'n_reg': n_reg.item()
+    }
 ```
 
 ## 实现要点总结
