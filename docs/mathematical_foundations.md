@@ -1,5 +1,11 @@
 # 因果语言模型数学概览
 
+cmt: 我修改了行动网络，增加了一个外生噪声注入层，以更加符合 DiscoSCM(arXiv:2401.15911) 框架设定。
+
+cmt: 行动网络，我更片好的表达是行动决策网络
+
+cmt: 流程图部分我还没有开始去仔细思考和更改的，我觉得先要把文字部分数学部分给讨论清楚。
+
 本文档旨在为读者提供 CausalQwen 模型核心数学思想的直观概览。
 
 ## 1.核心创新：引入个体选择变量 U
@@ -9,15 +15,16 @@
 1.  **个体选择变量 (Individual Selection Variable)**：一次具体的赋值 $U=u$ 代表着从所有可能的个体中"选中"了某一个特定个体 `u`。
 2.  **个体因果表征 (Individual Causal Representation)**：被选中的向量 $u$ 本身，就包含了该个体所有内在的、驱动其行为的潜在属性。
 
-**核心思想**：普适的因果律 ($Y=f(t;u, \text{noise})$) 应用于不同的个体 ($u$) 与外生噪声 ($\text{noise}$)，从而产生了不同的反事实结果 ($Y(t)$)。$U$ 是所有个体性系统性差异的最终来源，而 $\text{noise}$ 则代表了不可控的、非系统性的随机扰动。
+**核心思想**：普适的因果律 ($Y=f(t;u, \text{noise})$) 应用于不同的个体 ($u$) 与外生噪声 ($\text{noise}$)，从而产生了不同的反事实结果 ($Y(t)$)。$U$ 是所有个体性系统性差异的最终来源，而 $\text{noise}$ 则代表了不可控的的外生随机扰动。
 
-> 深度解读请参见: [`design-docs/U_deep_dive.md`](design-docs/U_deep_dive.md)
 
 ## 2.训练阶段：前向传播 (Forward Pass)
 
 模型训练的核心是执行一个完整的前向传播，计算预测值与真实标签之间的损失，然后通过反向传播更新模型参数。整个前向传播过程可以分解为五个核心模块。
 
-> 我们用 B 代表批次大小, S 代表序列长度, H 代表模型核心维度 (即词嵌入和隐藏层维度), C 代表因果表征维度, K 代表基座模型 Qwen 的已用词汇表大小, V_full代表总词汇表大小, CausalQwen 的已用词汇表大小为 K+1 (K+1 包含基座模型 Qwen 的已用词汇表大小 K 和 CausalQwen 的额外词汇 `<NUM>`) 
+> 我们用 B 代表批次大小, S 代表序列长度, H 代表模型核心维度 (即词嵌入和隐藏层维度), C 代表因果表征维度, K 代表基座模型 Qwen 的已用词汇表大小, V_full代表其总词汇表配额（V_full = K + 271, 271 是 Qwen 的预留词汇大小）, CausalQwen 的已用词汇表大小为 K+1 (K+1 包含基座模型 Qwen 的已用词汇表大小 K 和 CausalQwen 的额外词汇 `<NUM>`) 
+
+cmt: 优化一下表达，和全文更一致的表达。
 
 > **设计决策**: 在当前实现中，我们设定因果表征维度 `C` 与模型隐藏层维度 `H` 相等，即 **`C = H`**。这方便了我们进行归因推断网络的初始化。
 
@@ -57,6 +64,8 @@
 -   **输出**: 
     - `e`: 增强嵌入张量 (形状: `[B, S, H]`)
 
+cmt: 这个没有说清楚这个 $\vec{e}$ 的含义其实是数值感知嵌入模块可学习的参数，需要优化一下表达，考虑换一个数学符号都可以， 比如 $\vec{e}$ 可以换成 $\vec{w}$。
+
 **关键洞察**：
 1. **自然退化**: 对于非数值位置，$v_i = 0$ 导致 $\phi(0) = 0$，因此 $e_i = \text{base\_embed}_i$，自然退化为标准词元嵌入
 2. **统一处理**: 所有位置使用相同的计算公式，无需条件分支
@@ -88,6 +97,9 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
     由于完全继承 Qwen 权重，当 $e \approx e_{\text{Qwen}}$ 时，$z \approx z_{\text{Qwen}}$。
 -   **输出**: `z`: 上下文特征张量 (形状: `[B, S, H]`)
 
+
+cmt: 这个提醒一下我们后续学习不会改变这里参数，只有到非常非常后面的阶段才会考虑对其参数进行 Lora 微调， 既可以让我们 CausalQwen 快速学习到效果，也可以和 Qwen 有一个合理对比。 
+
 ### 2.3 模块三：归因推断网络 (Abduction Network)
 该模块从上下文特征中推断出每个位置的个体因果表征分布。
 
@@ -103,6 +115,8 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
     - `loc_U`: 因果表征分布的位置参数 (形状: `[B, S, C]`)
     - `scale_U`: 因果表征分布的尺度参数 (形状: `[B, S, C]`)
 
+cmt: 注意这里的参数是我们最优先微调， 多个原因导致 QwenTransformer 的参数一般不会被微调，对于新的领域数据，后续的 Action Network 的参数代表因果结果方程也一般不会进行微调。 Abduction Network 是最灵活最灵活的, 它甚至可以改变网络结构, 每个不同领域的额外数据来一个不同的网络结构, 但是微调的时候它是要保证 $DL(U, U_\text{base}) \leq \epsilon$ 的, 这样才能防止发生灾难性遗忘问题。
+
 ### 2.4 模块四：行动决策网络 (Action Network)
 
 该模块是模型的核心决策单元。其内部包含一个可学习的噪声参数 $b_{noise}$，并且其工作流程分为两步：
@@ -111,26 +125,31 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
     $$U'_{\text{effective}, i} \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i} + |b_\text{noise}|)$$
 2.  **并行决策 (Decision Making)**：然后，网络基于这个包含了两种不确定性来源的有效分布，进行并行的分类和回归决策。
 
-从数学上看，由于噪声注入和决策本身都是线性变换，整个行动网络可以被视为一个单一的、作用于增广输入 $[U_i, \epsilon_i]$ 上的线性变换，这保证了我们可以持续利用柯西分布的线性稳定性进行解析计算。
 
 
--   **输入**: `loc_U`, `scale_U` (来自归因网络), $b_{noise}$ (内部可学习参数)
+-   **输入**: `loc_U`, `scale_U` 
 -   **处理**: 
     - **分类**：每个词汇 $k$ 有独立的线性变换。该变换作用于有效输入分布 $U'_{\text{effective}, i}$ 上：
-      $$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k}$$
-      $$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot(\text{scale}_{U_i} + |b_\text{noise}|)$$
+      $$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k} \\ 
+      \text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot(\text{scale}_{U_i} + |b_\text{noise}|)$$
       
       **初始化后**：$\text{loc}_{S_{k,i}} = W_{\text{Qwen},k} \cdot z_i$（与 Qwen 相同的 logits）
       
     - **回归**：单一的线性变换，同样作用于有效输入分布 $U'_{\text{effective}, i}$：
-      $$\text{loc}_{Y_i} = W_{\text{reg}} \cdot \text{loc}_{U_i} + b_{\text{reg}}$$
-      $$\text{scale}_{Y_i} = \|W_{\text{reg}}\|_1 \cdot (\text{scale}_{U_i} + |b_{noise}|)$$
+      $$\text{loc}_{Y_i} = W_{\text{reg}} \cdot \text{loc}_{U_i} + b_{\text{reg}} \\ 
+      \text{scale}_{Y_i} = \|W_{\text{reg}}\|_1 \cdot (\text{scale}_{U_i} + |b_{noise}|)$$
       
       **初始化后**：$Y_i \sim \text{Cauchy}(0, \epsilon\gamma)$（近似无偏先验）
       
 -   **输出**:
     - 分类决策分布参数: `loc_S` (形状: `[B, S, V_full]`), `scale_S` (形状: `[B, S, V_full]`)
     - 回归决策分布参数: `loc_Y` (形状: `[B, S]`), `scale_Y` (形状: `[B, S]`)
+
+
+从数学上看，由于噪声注入和决策本身都是线性变换，整个行动网络可以被视为一个单一的、作用于增广输入 $[U_i, \epsilon_i]$ 上的线性变换，这保证了我们可以持续利用柯西分布的线性稳定性进行解析计算。
+
+cmt:被$b_\text{noise}$ 调制的线性变换, 你看看有什么更好的表达, 该参数的可学习性也没有很好的表达，换成 $w_\text{noise}$? 我希望你优化一下。
+
 
 > **核心引擎：柯西分布的线性稳定性**
 > 如果 $U \sim \text{Cauchy}(\mu, \gamma)$，那么 $aU + b \sim \text{Cauchy}(a\mu + b, |a|\gamma)$。这让我们无需采样就能计算变换后的分布。
@@ -158,6 +177,9 @@ $$\mathcal{L}_{\text{reg\_gated},i} = m_i \cdot P_{\text{<NUM>},i} \cdot \mathca
 #### 3. 总损失
 $$\mathcal{L}_{\text{total}} = \underbrace{\frac{\sum_i L_{\text{cls}, i} \cdot \text{mask}_i}{\sum_i \text{mask}_i}}_{\text{平均分类损失}} + \lambda \cdot \underbrace{\frac{\sum_i \mathcal{L}_{\text{reg\_gated},i}}{\sum_i m_i}}_{\text{有效回归损失}}$$
 
+cmt: 我建议是优化一下表达, 提一个看法呀, 我们引入 cls_mask, num_mask 这样的概念，他们都是一种 attention_mask 的变种，然后我们用 cls_mask 来计算分类损失， 用 num_mask 来计算回归损失。 这样我们就可以避免计算那些没有意义的损失。如果你采用我这个建议，我会思考 padding token 有关逻辑如何处理？ 还有 ignore_index 有关逻辑如何处理？
+
+
 ## 3.推理阶段：生成预测 (Inference)
 
 在模型训练完成后，我们使用它来生成预测。CausalQwen 提供了一个层次化的推理方法体系，从最高效的标准预测，到能体现因果性的生成式采样，再到用于深度反事实分析的高级模式，允许用户根据不同需求选择合适的工具。
@@ -173,6 +195,9 @@ $$\mathcal{L}_{\text{total}} = \underbrace{\frac{\sum_i L_{\text{cls}, i} \cdot 
     \hat{y}_{\text{reg},i} = \text{loc}_{Y_i}
     $$
 
+
+cmt: Deterministic Inference 的表达当然会误导，没有随机性， 你有什么比较好的名字吗？ normal inference 那也不太好, top-1 inference 那也不太好？point inference 那也不太好, 你有什么比较好的名字吗？quick inference 那也不太好, 你有什么比较好的名字吗？non-random inference 那也不太好, 你有什么比较好的名字吗？
+
 ### 3.2 因果采样 (Causal Sampling)
 这是一种混合了随机性与确定性的高级推理模式，它深刻地体现了模型的因果哲学：分离可控的个体因素与不可控的随机噪声。其过程分为三步：
 
@@ -180,6 +205,8 @@ $$\mathcal{L}_{\text{total}} = \underbrace{\frac{\sum_i L_{\text{cls}, i} \cdot 
 
 2.  **第二步：构建"情境"分布 (Construct the Situational Distribution)**: 接下来，我们将这个确定的个体 $u_i$ 与模型中固有的、不可控的**外生噪声分布** `Cauchy(0, |b_noise|)` 相结合。其结果是一个新的、代表了"特定个体在随机情境中"的柯西分布：
     $$ U'_{\text{situational}, i} \sim \text{Cauchy}(u_i, |b_{noise}|) $$
+
+> cmt: 这里需要优化一下表达，直接说构建决策输入？ 这个Situational 的表达我肯定是不想要的，因为它会引起一些不必要的误解，嗯，数学公式描述也不精确。
 
 3.  **第三步：执行"确定性"决策 (Perform Deterministic Decision)**: 最后，我们将这个新的"情境分布" $U'_{\text{situational}, i}$ 作为输入，传入行动网络的决策层（即线性变换部分）。由于柯西分布的线性稳定性，我们可以**解析地**计算出最终的分类和回归决策分布，并像在标准确定性推理中一样，通过取分布的中位数（`loc`参数）来得到最终的预测值。
 
@@ -196,11 +223,11 @@ $$
 
 另一种可选的归一化方法是直接对所有类别的 OvR 概率进行求和，并以此为分母进行归一化，这为评估模型提供了不同的视角
 
-### 3.4 高级因果采样：分解并固定随机性来源
+### 3.4 高级（序列）因果采样：分解并固定随机性来源
 
 CausalQwen 的设计允许我们对生成过程中的“随机性”进行前所未有的精细控制。传统的采样（如 top-k）在每一步都从一个临时的概率分布中抽取结果，导致随机性是无记忆、逐词元独立的。
 
-高级因果采样模式则基于一个核心思想：**在一次完整的生成任务中，将模型两大不确定性来源（个体 `U` 或噪声 `noise`）之一的随机实例固定下来，并观察其在整个生成过程中如何持续地与另一不确定性来源相互作用。** 这使得我们能进行两种深刻的反事实探究。
+高级（序列）因果采样模式则基于一个核心思想：**在一次完整的生成任务中，将模型两大不确定性来源（个体 `U` 或噪声 `noise`）之一的随机实例固定下来，并观察其在整个生成过程中如何持续地与另一不确定性来源相互作用。** 这使得我们能进行两种深刻的反事实探究。
 
 
 #### 3.4.1 模式一：共享“个体选择因子” (Fixing the Individual, Observing its Interaction with Noise)
@@ -217,7 +244,7 @@ CausalQwen 的设计允许我们对生成过程中的“随机性”进行前所
      U'_{\text{effective}, i} \sim \text{Cauchy}(u_i, |b_{noise}|)
      $$
   3. **解析决策**: 我们将这个**有效输入分布** $U'_{\text{effective}, i}$ 传入行动网络。由于柯西分布的线性稳定性，我们可以**解析地**计算出最终的分类和回归决策分布，并取其位置参数（中位数）作为该步骤的最终预测。
-* 随机性的来源被分解：代表“个体选择”的随机性（来自 $U$）在任务开始时被一次性固定。而代表“不可控扰动”的随机性（来自 `noise`）则在**每一步的决策中都保持其分布形态**，代表了每一次决策时都会遇到的、全新的、不可预测的微小扰动。
+* 随机性的来源被分解：代表“个体选择”的随机性（来自 $U$）在任务开始时被一次性固定。而代表“不可控扰动”的随机性（来自 `noise`）则在**每一步的决策中都保持其分布形态**，代表了每一token 生成决策时都会遇到的、全新的、不可预测的微小扰动。
 
 
 #### 3.4.2 模式二：共享"系统性噪声实例" (Fixing the Noise, Observing the Uncertain Individual)
@@ -258,6 +285,8 @@ $$e_i = \text{embed}(x_i) + \phi(v_i), \quad \text{where }  \phi(v) = \text{sign
 
 使用它作为输出，经过 Qwen 主干网络，得到高维的特征表征 $z_i$(形状: [B, S, H]), 作为后续归因推断网络的输入。
 
+cmt: 我是觉得这个又是归一化又是什么是非必要的复杂，就像一般的神经网络权重一样进行设置？直接一个最常见的高维向量初始化（一般就是随机抽样，然后除以根号维度之类）？
+
 
 #### 步骤2：归因推断网络 → 恒等映射
 
@@ -272,7 +301,7 @@ $$\text{loc}_{U_i} = z_i, \quad \text{scale}_{U_i} = \gamma$$
 
 > **注意**：当 $\gamma$ 较大时，$\text{softplus}^{-1}(\gamma) \approx \gamma - \log(2)$
 
-#### 步骤3：行动网络(分类) → 复制 Qwen 权重
+#### 步骤3：行动决策网络(分类) → 复制 Qwen 权重
 
 $$W_{\text{cls}} \leftarrow W_{\text{Qwen\_lm\_head}}, \quad b_{\text{cls}} = 0$$
 
@@ -281,20 +310,28 @@ $$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot z_i = W_{\text{Qwen},k} \cdot z_
 
 这确保了初始分类输出与 Qwen 完全一致。
 
-#### 步骤4：行动网络(回归) → 常规初始化
+cmt: 我本着一个非必要不进行复杂设置的原则, 我觉得一个初始的方案不要去考虑提供宽泛的初始分布这个事情，你就用最常规的初始化， 然后让模型在训练过程中去学习这个分布。
 
-将回归行动网络使用标准的小权重初始化，如 Xavier 或 Kaiming 初始化。
+
+#### 步骤4：行动决策网络(回归) → 常规初始化
+
 
 **数学效果**：由于 $\|W_{\text{reg}}\|_1$ 很小，结合大尺度的因果表征分布 $U_i \sim \text{Cauchy}(z_i, \gamma_i)$，位置 $i$ 的回归预测分布为：
 $$Y_i \sim \text{Cauchy}(\mu_{\text{reg},i}, \gamma_{\text{reg},i}),  \\
-\mu_{\text{reg},i} = W_{\text{reg}} \cdot z_i + b_{\text{reg}},  \gamma_{\text{reg},i} = \|W_{\text{reg}}\|_1 \cdot (\gamma_i + |b_{noise}|)$$
+\mu_{\text{reg},i} = W_{\text{reg}} \cdot z_i + b_{\text{reg}},  \gamma_{\text{reg},i} = |W_{\text{reg}}|_1 \cdot (\gamma_i + |b_{noise}|)$$
 
-其中 $\|W_{\text{reg}}\|_1$ 是 $W_{\text{reg}}$ 权重的 L1 范数。在初始化阶段（由于 $b_{noise}$ 被初始化为 0），回归输出近似为以 $0$ 为中心的宽泛分布，提供了**无偏的回归先验** ($\mu_{\text{reg}}$ 和 $\gamma_{\text{reg}}$ 的张量形状都是 [B, S]) 。
+其中 $|W_{\text{reg}}|_1$ 是 $W_{\text{reg}}$ 权重的 L1 范数。在初始化阶段，回归输出近似为以 $0$ 为中心的宽泛分布，提供了**无偏的回归先验** ($\mu_{\text{reg}}$ 和 $\gamma_{\text{reg}}$ 的张量形状都是 [B, S]) 。
+
+cmt: 我觉得所有的可学习参数的都可以使用最常规的初始化, 宽泛分布嗯的初始化自然是很好，但是有多大作用呢？值得我们特意去设置吗？不过这个地方有一个特别重要的点是，随着学习的进行，因果表征能解释的越来越多了， 外生噪声的影响力会越来越小， 所以噪声项的系数是越来越小才合理，你觉得呢？
+
 
 #### 步骤5：噪声参数初始化 → 零初始化
 为保证初始化的确定性，我们将噪声项的系数初始化为零：
 $$b_{noise} \leftarrow 0$$
 这确保了在训练开始时，模型行为与无噪声版本完全一致，噪声的影响力将在训练中被逐步学习。
+
+
+cmt: 这个初始化在我看来就是非必要的复杂, 原因是你把结果的随机性刚开始的时候全部归因于因果表征， 假定一旦因果表征确定了，结果就完全确定了， 这是一个相对极端的情况，不符合核心理论 DiscoSCM 的设定。
 
 #### 步骤6：OvR 阈值 → 统一设置
 
@@ -332,6 +369,8 @@ $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\t
 -   **阈值设置**: 所有类别共享相同的初始阈值 $C_k = C_{\text{OvR}}$，这提供了一个适度稀疏且数值稳定的初始概率分布。
 
 
+cmt: 如果说前面外生噪声系数零初始化设计是非必要的复杂初始化， 那么这个部分的阈值初始化可能是我认为相对来说是必要的，并不是说我会拒绝去把这个初始化给去掉， 只是说这个初始化比其他的初始化保留的优先级更高。 我觉得要不直接把它变成可学习的参数吧？ 因为逻辑上来说，我觉得是有这个必要的，而且实际上也并不复杂？ 你对我的建议怎么看？
+
 ## 5. 训练监控指标 (Training Monitoring Metrics)
 
 为了有效评估和调试 CausalQwen 模型的训练过程，我们利用 Weights & Biases (wandb) 平台进行实时监控。本章提炼了 [`wandb_monitoring_metrics.md`](./experiments/wandb_monitoring_metrics.md) 中的核心指标，所有指标的计算都严格遵循本文档定义的数学原理。
@@ -341,7 +380,7 @@ $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\t
 所有性能评估指标 (以 `eval/` 为前缀) **均基于确定性推理 (Deterministic Inference) 模式计算**。这保证了评估结果的**可复现性**和**稳定性**，为不同实验提供了可靠的基准。
 
 ### 5.2. 核心损失指标 (`train/*`)
-
+-   **`train/accuracy`**: 在所有真实词元（应用 `attention_mask`）上计算分类准确率，衡量基础语言能力。
 -   **`train/total_loss`**: 由平均分类损失 (`cls_loss_mean`) 和有效回归损失 (`reg_loss_effective`) 加权构成，是最终的优化目标。
 -   **`train/cls_loss_mean`**: 在所有真实词元（应用 `attention_mask`）上计算的 OvR 分类损失的平均值，衡量基础语言能力。
 -   **`train/reg_loss_effective`**: 仅在真实数值词元（应用数值掩码 `m`）上计算的门控回归损失的平均值，确保回归信号不被稀释。
@@ -367,8 +406,8 @@ $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\t
 -   **OvR 校准 (`dist/ovr_prob_sum_median`)**:
     -   监控所有词元的 OvR 概率之和的中位数。一个充分校准的模型，其概率和应**收敛于 1**，这反映了模型学习到了词元预测任务的内在互斥性。
 
----
-*本章是对详细监控文档的概括。关于每个指标更深入的数学公式、解读和诊断指南，请参阅 [`docs/experiments/wandb_monitoring_metrics.md`](./experiments/wandb_monitoring_metrics.md)。*
+cmt: 这个地方你还要考虑一下 causal sampling 下， ovr_prob_sum_median 会不会接近 1？ 我觉得这个监控好像同样重要？甚至监控他逻辑上可能更加合理？对同一个个体，他才会 next token 只能有一个真值！你这个可以跟我好好讨论一下，期待咱们把这个事情给确认下来，找到数学上逻辑上原理上更加合适的监控指标。
+
 
 
 ## 6. 使用流程图理解
@@ -513,6 +552,37 @@ graph TD
 ``` 
 
 
+```mermaid
+graph LR
+    start_point["共享随机性实例生哼<br>（个体选择因子或噪声实例）"]
+
+    start_point --> C1
+    start_point --> C2
+
+    subgraph "模式一：共享个体选择因子<br>ε_seed ~ U(0,1)^C"
+        C1["循环: t=1,2,..."]
+        C1 --> D1["计算 U_t 分布<br>U_t ~ Cauchy(loc_U_t, scale_U_t)"]
+        D1 --> E1["使用固定因子计算个体<br>u_t = loc_U_t + scale_U_t ⊙ tan(π(ε_seed - 0.5))"]
+        E1 --> F1["U'_t ~ Cauchy(u_t, |b_noise|)"]
+        F1 --> G1["生成下一词元"]
+        G1 --> H1{继续生成?}
+        H1 -->|是| C1
+        H1 -->|否| I1["结束"]
+    end
+    
+    subgraph "模式二：共享外生噪声实例<br>ε_noise ~ Cauchy(0, I)"
+        C2["循环: t=1,2,..."]
+        C2 --> D2["计算 U_t 分布<br>U_t ~ Cauchy(loc_U_t, scale_U_t)"]
+        D2 --> E2["U'_t ~ Cauchy(loc_U_t + |b_noise|·ε_noise, scale_U_t)"]
+        E2 --> F2["生成下一词元"]
+        F2 --> H2{继续生成?}
+        H2 -->|是| C2
+        H2 -->|否| I2["结束"]
+    end
+    
+    style E1 fill:#fbe9e7
+    style E2 fill:#fbe9e7
+```
 
 ### 图 5：损失流程图
 
@@ -641,4 +711,7 @@ CausalQwen 的数学框架三个特色：
 | **损失函数** 🧮<br>Loss Function | **Softmax 交叉熵 (Softmax Cross-Entropy)**<br>在整个词汇表上进行归一化，计算单一正确答案的损失。 | **OvR + 门控回归损失 (Gated Reg Loss)**<br>分类上进行独立二元判断，回归上由分类结果**智能门控**，实现多任务学习。 |
 | **采样范式** 🎲<br>Sampling Paradigm | **对"结果"采样 (Sampling the "Effect")**<br>在最终的 logits 分布上使用 `top-k`/`top-p` 进行随机采样。 | **对"原因"采样 (Sampling the "Cause")**<br>引入**因果采样**，直接对"个体" $U$ 进行采样，得到更多样且风格一致的生成结果。 |
 | **核心创新** ✨<br>Key Innovation | 强大的语言建模与上下文理解能力。 | 引入外生**个体选择变量 $U$**，显式建模**外生噪声 $\text{noise}$**，并利用柯西分布的数学特性，构建了一个可高效训练的因果生成框架。 |
+
+
+> cmt: 采样范式方面肯定是需要仔细斟酌他的写法的, 
 
