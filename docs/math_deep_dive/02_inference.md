@@ -1,417 +1,1055 @@
-# 推理模式详解
+# 推理阶段详解
 
-本文档详细介绍 CausalQwen 的三种推理模式及其高级技巧。
+本文档深入探讨 CausalQwen 的推理机制，涵盖从基础的确定性预测到高级的因果采样方法。
 
 > 返回主文档：[`../mathematical_foundations.md`](../mathematical_foundations.md)
 
-## 1. 确定性推理 (Deterministic Inference)
+## 符号约定
+
+与主文档保持一致：
+- B: 批次大小
+- S: 序列长度  
+- H: 模型隐藏维度
+- C: 因果表征维度（当前实现中 C = H）
+- V_full: 扩展后的总词汇表大小
+
+## 概述
+
+CausalQwen 提供了一个层次化的推理方法体系：
+
+1. **标准推理**：最高效的确定性预测
+2. **因果采样**：体现因果性的生成式采样
+3. **传统兼容**：与 Qwen 兼容的 top-k/top-p 采样
+4. **高级序列因果采样**：用于深度反事实分析
+
+## 1. 标准推理 (Standard Inference)
 
 这是默认的、最高效的推理模式。它完全基于解析计算，不涉及任何随机采样。
 
-- **分类预测**: 直接使用前向传播计算出的各类 OvR 概率，并选择概率最高的类别。
-    $$
-    \hat{y}_{\text{cls},i} = \arg\max_k P_{k,i}
-    $$
-- **回归预测**: 直接使用回归值分布的位置参数（中位数），这是对柯西分布最稳健的点估计。
-    $$
-    \hat{y}_{\text{reg},i} = \text{loc}_{Y_i}
-    $$
+### 1.1 推理流程图
+
+```mermaid
+graph TB
+    Start["输入文本<br>'预测明天股价'"] --> Embed["数值感知嵌入"]
+    Embed --> Qwen["Qwen Transformer<br>提取上下文特征 z"]
+    Qwen --> Abduction["归因推断网络"]
+    
+    Abduction --> U["个体表征分布<br>U ~ Cauchy(loc_U, scale_U)"]
+    
+    U --> Noise["噪声融合<br>U' ~ Cauchy(loc_U, scale_U + |b_noise|)"]
+    
+    Noise --> Action["行动网络（并行）"]
+    
+    Action --> ClassDist["分类决策分布<br>S_k ~ Cauchy(loc_S_k, scale_S_k)"]
+    Action --> RegDist["回归决策分布<br>Y ~ Cauchy(loc_Y, scale_Y)"]
+    
+    ClassDist --> OvR["OvR 概率计算<br>P_k = 1/2 + (1/π)arctan((loc_S_k - C_k)/scale_S_k)"]
+    RegDist --> RegPred["回归预测<br>y_reg = loc_Y"]
+    
+    OvR --> ArgMax["选择最大概率<br>y_cls = argmax_k P_k"]
+    
+    ArgMax --> Decision{是否为&lt;NUM&gt;?}
+    Decision -->|是| NumOutput["输出: (&lt;NUM&gt;, y_reg)"]
+    Decision -->|否| TextOutput["输出: (token_id, 0.0)"]
+    
+    NumOutput --> FinalOutput["完整输出:<br>(token_ids, numeric_values)"]
+    TextOutput --> FinalOutput
+    
+    style U fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style FinalOutput fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+```
+
+### 1.2 分类预测
+
+对于每个位置 $i$，我们有：
+
+1. **个体表征分布**（来自归因推断网络）：
+   $$U_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$$
+
+2. **融合噪声后的输入分布**：
+   $$U'_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i} + |b_{\text{noise}}|)$$
+   
+   这里使用逐元素相加，利用了柯西分布的加法稳定性。
+
+3. **分类决策分布**（对每个词汇 $k$）：
+   $$S_{k,i} = W_{\text{cls},k} \cdot U'_i + b_{\text{cls},k} \sim \text{Cauchy}(\text{loc}_{S_{k,i}}, \text{scale}_{S_{k,i}})$$
+   
+   其中：
+   $$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k}$$
+   $$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$$
+   
+   这里 $W_{\text{cls},k} \in \mathbb{R}^C$ 是词汇 $k$ 对应的权重向量，$\cdot$ 表示内积运算。
+
+4. **OvR 概率计算**：
+   $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
+
+5. **最终预测**：
+   $$\hat{y}_{\text{cls},i} = \arg\max_k P_{k,i}$$
+
+**实现代码**：
+```python
+def standard_inference_classification(loc_U, scale_U, W_cls, b_cls, b_noise, C_ovr):
+    """
+    标准推理模式下的分类预测
+    
+    Args:
+        loc_U: [B, S, C] - 个体表征位置参数
+        scale_U: [B, S, C] - 个体表征尺度参数
+        W_cls: [V_full, C] - 分类权重
+        b_cls: [V_full] - 分类偏置
+        b_noise: [C] - 噪声参数
+        C_ovr: float or [V_full] - OvR 阈值
+    
+    Returns:
+        predictions: [B, S] - 预测的词汇索引
+        P_ovr: [B, S, V_full] - OvR 概率
+    """
+    B, S, C = loc_U.shape
+    V_full = W_cls.shape[0]
+    
+    # 融合噪声：使用逐元素相加
+    scale_U_fused = scale_U + torch.abs(b_noise).unsqueeze(0).unsqueeze(0)  # [B, S, C]
+    
+    # 计算分类决策分布参数
+    # loc_S: [B, S, V_full] = [B, S, C] @ [C, V_full]
+    loc_S = torch.matmul(loc_U, W_cls.T) + b_cls.unsqueeze(0).unsqueeze(0)
+    
+    # scale_S: [B, S, V_full]
+    # 对每个词汇 k，scale_S[..., k] = |W_cls[k]| · scale_U_fused
+    scale_S = torch.matmul(scale_U_fused, torch.abs(W_cls).T)
+    
+    # 计算 OvR 概率
+    if isinstance(C_ovr, (int, float)):
+        C_ovr = torch.full((V_full,), C_ovr, device=loc_S.device)
+    
+    z = (loc_S - C_ovr.unsqueeze(0).unsqueeze(0)) / scale_S
+    P_ovr = 0.5 + torch.atan(z) / math.pi  # [B, S, V_full]
+    
+    # 选择概率最高的词汇
+    predictions = torch.argmax(P_ovr, dim=-1)  # [B, S]
+    
+    return predictions, P_ovr
+```
+
+### 1.3 回归预测
+
+1. **回归决策分布**：
+   $$Y_i = W_{\text{reg}} \cdot U'_i + b_{\text{reg}} \sim \text{Cauchy}(\text{loc}_{Y_i}, \text{scale}_{Y_i})$$
+   
+   其中：
+   $$\text{loc}_{Y_i} = W_{\text{reg}} \cdot \text{loc}_{U_i} + b_{\text{reg}}$$
+   $$\text{scale}_{Y_i} = |W_{\text{reg}}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$$
+
+2. **最终预测**（使用位置参数作为点估计）：
+   $$\hat{y}_{\text{reg},i} = \text{loc}_{Y_i}$$
+
+**数学原理**：对于柯西分布 $X \sim \text{Cauchy}(\mu, \gamma)$：
+- 中位数 = 众数 = $\mu$（位置参数）
+- 均值不存在（积分不收敛）
+
+**实现代码**：
+```python
+def standard_inference_regression(loc_U, scale_U, W_reg, b_reg, b_noise):
+    """
+    标准推理模式下的回归预测
+    
+    Args:
+        loc_U: [B, S, C] - 个体表征位置参数
+        scale_U: [B, S, C] - 个体表征尺度参数
+        W_reg: [C] - 回归权重
+        b_reg: float - 回归偏置
+        b_noise: [C] - 噪声参数
+    
+    Returns:
+        predictions: [B, S] - 预测的数值
+        scale_Y: [B, S] - 预测的不确定性
+    """
+    # 融合噪声
+    scale_U_fused = scale_U + torch.abs(b_noise).unsqueeze(0).unsqueeze(0)
+    
+    # 计算回归决策分布参数
+    loc_Y = torch.matmul(loc_U, W_reg) + b_reg  # [B, S]
+    scale_Y = torch.matmul(scale_U_fused, torch.abs(W_reg))  # [B, S]
+    
+    # 使用位置参数作为点估计
+    predictions = loc_Y
+    
+    return predictions, scale_Y
+```
 
 ## 2. 因果采样 (Causal Sampling)
 
-这是一种新颖的随机推理范式，它不直接对不确定的"结果"进行采样，而是对不确定的"原因"（即个体因果表征 U）进行采样 .... 
+这是一种混合了随机性与确定性的高级推理模式，深刻体现了模型的因果哲学。
 
-### 基本流程
+### 2.1 因果采样流程图
 
-1.  **采样"原因"**: 根据上下文推断出的因果表征分布 `Cauchy(loc_U, scale_U)`，从中采样一个**具体的**表征向量 $u$。
-2.  **观察"结果"**: 将这个确定的 $u$ 传入**行动网络**，得到**确定性的**分类分数和回归值，并据此做出最终预测。
+```mermaid
+graph TB
+    Start["输入序列"] --> Forward["前向传播<br>得到 U 分布"]
+    
+    Forward --> Sample["采样具体个体<br>u ~ U ~ Cauchy(loc_U, scale_U)"]
+    
+    Sample --> Explain["u 代表一个特定的个体<br>包含其所有内在属性"]
+    
+    Explain --> Noise["构建决策输入分布<br>U'_input ~ Cauchy(u, |b_noise|)"]
+    
+    Noise --> Explain2["保持噪声为分布形式<br>代表不可控的环境扰动"]
+    
+    Explain2 --> Action["行动网络（解析计算）"]
+    
+    Action --> ClassDist["S_k ~ Cauchy(W_cls_k·u + b_cls_k, |W_cls_k|·|b_noise|)"]
+    Action --> RegDist["Y ~ Cauchy(W_reg·u + b_reg, |W_reg|·|b_noise|)"]
+    
+    ClassDist --> OvR["计算 OvR 概率"]
+    RegDist --> RegValue["取位置参数"]
+    
+    OvR --> Decision{是否为&lt;NUM&gt;?}
+    Decision -->|是| NumOut["输出: (&lt;NUM&gt;, loc_Y)"]
+    Decision -->|否| TextOut["输出: (token_id, 0.0)"]
+    
+    NumOut --> Output["生成输出:<br>(token_ids, numeric_values)"]
+    TextOut --> Output
+    
+    style Sample fill:#fbe9e7,stroke:#e65100,stroke-width:2px
+    style Noise fill:#fff3e0,stroke:#ff6f00,stroke-width:2px
+```
+
+### 2.2 核心思想
+
+- **随机性**：只在"个体选择"步骤引入
+- **确定性**：环境噪声保持为分布形式
+
+### 2.3 数学推导与实现
+
+1. **采样个体**：
+   从个体表征分布中采样具体的个体：
+   $$u_i \sim U_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$$
+   
+   具体实现：生成 $\epsilon \sim U(0,1)$，然后：
+   $$u_i = \text{loc}_{U_i} + \text{scale}_{U_i} \cdot \tan(\pi(\epsilon - 0.5))$$
+
+2. **构建决策输入分布**：
+   将确定的个体与噪声分布结合：
+   $$U'_{\text{input},i} \sim \text{Cauchy}(u_i, |b_{\text{noise}}|)$$
+
+3. **解析计算决策分布**：
+   
+   **分类**：
+   $$S_{k,i} \sim \text{Cauchy}(\text{loc}_{S_{k,i}}, \text{scale}_{S_{k,i}})$$
+   其中：
+   $$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot u_i + b_{\text{cls},k}$$
+   $$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot |b_{\text{noise}}|$$
+   
+   **回归**：
+   $$Y_i \sim \text{Cauchy}(\text{loc}_{Y_i}, \text{scale}_{Y_i})$$
+   其中：
+   $$\text{loc}_{Y_i} = W_{\text{reg}} \cdot u_i + b_{\text{reg}}$$
+   $$\text{scale}_{Y_i} = |W_{\text{reg}}| \cdot |b_{\text{noise}}|$$
+
+**完整实现代码**：
+```python
+def causal_sampling_inference(loc_U, scale_U, W_cls, b_cls, W_reg, b_reg, b_noise, C_ovr):
+    """
+    因果采样推理：先采样个体，再计算决策
+    
+    核心思想：
+    - 随机性只在个体选择时引入（采样 u）
+    - 噪声保持分布形式，不进行采样
+    
+    Args:
+        loc_U: [B, S, C] - 个体表征位置参数
+        scale_U: [B, S, C] - 个体表征尺度参数
+        W_cls: [V_full, C] - 分类权重
+        b_cls: [V_full] - 分类偏置
+        W_reg: [C] - 回归权重
+        b_reg: float - 回归偏置
+        b_noise: [C] - 噪声参数
+        C_ovr: float or [V_full] - OvR 阈值
+    
+    Returns:
+        cls_predictions: [B, S] - 分类预测
+        reg_predictions: [B, S] - 回归预测
+        u_sampled: [B, S, C] - 采样的个体
+    """
+    B, S, C = loc_U.shape
+    
+    # Step 1: 采样个体
+    epsilon = torch.rand_like(scale_U)  # [B, S, C]
+    # 避免数值问题
+    epsilon = torch.clamp(epsilon, 1e-7, 1 - 1e-7)
+    u_sampled = loc_U + scale_U * torch.tan(math.pi * (epsilon - 0.5))
+    
+    # Step 2: 构建决策输入分布（这里我们有确定的 u，噪声保持分布形式）
+    # 注意：我们不采样噪声，而是保持其分布形式 |b_noise|
+    
+    # Step 3: 计算分类决策
+    # 对于确定的 u 和分布形式的噪声，决策分布的参数为：
+    loc_S = torch.matmul(u_sampled, W_cls.T) + b_cls.unsqueeze(0)
+    # 噪声只影响尺度参数
+    scale_S = torch.matmul(
+        torch.abs(b_noise).unsqueeze(0).unsqueeze(0).expand(B, S, -1),
+        torch.abs(W_cls).T
+    )
+    
+    # 计算 OvR 概率
+    if isinstance(C_ovr, (int, float)):
+        C_ovr = torch.full((W_cls.shape[0],), C_ovr, device=loc_S.device)
+    
+    z = (loc_S - C_ovr.unsqueeze(0).unsqueeze(0)) / scale_S
+    P_ovr = 0.5 + torch.atan(z) / math.pi
+    cls_predictions = torch.argmax(P_ovr, dim=-1)
+    
+    # Step 4: 计算回归决策
+    loc_Y = torch.matmul(u_sampled, W_reg) + b_reg
+    scale_Y = torch.matmul(
+        torch.abs(b_noise).unsqueeze(0).unsqueeze(0).expand(B, S, -1),
+        torch.abs(W_reg)
+    )
+    reg_predictions = loc_Y  # 使用位置参数作为预测
+    
+    return cls_predictions, reg_predictions, u_sampled
+```
+
+### 2.4 优势分析
+
+1. **风格一致性**：同一个体 $u_i$ 的生成保持内在一致
+2. **多样性探索**：不同采样得到不同个体
+3. **决策稳健性**：噪声以分布形式参与，避免极端值
+
+## 3. 传统兼容模式
+
+CausalQwen 完全兼容传统语言模型的采样方法。
+
+### 3.1 兼容模式流程图
 
 ```mermaid
 graph TD
-    A["<b>个体因果表征 U</b><br>Uᵢ ~ Cauchy(loc, scale)"];
-    A -- "采样具体个体" --> F["得到具体 u"];
-    F -- "传入行动网络" --> G["<b>确定性预测</b> <br> ŷ_cls, ŷ_reg"];
+    Start["前向传播结果"] --> Choice{选择归一化方法}
     
-    style A fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    style G fill:#fce4ec,stroke:#880e4f
+    Choice -->|方法一| Logits["使用 loc_S 作为 logits"]
+    Choice -->|方法二| OvR["先计算 OvR 概率"]
+    
+    Logits --> Softmax1["Softmax 归一化<br>p_k = exp(loc_S_k) / Σexp(loc_S_j)"]
+    OvR --> Normalize["归一化 OvR 概率<br>p_k = P_k / ΣP_j"]
+    
+    Softmax1 --> Sampling["传统采样方法"]
+    Normalize --> Sampling
+    
+    Sampling --> TopK["Top-k 采样<br>保留概率最高的 k 个词"]
+    Sampling --> TopP["Top-p 采样<br>保留累积概率 ≤ p 的词"]
+    
+    TopK --> Sample["从筛选后的分布采样"]
+    TopP --> Sample
+    
+    Sample --> Output["输出词元"]
+    
+    style Logits fill:#e3f2fd
+    style OvR fill:#fff3e0
 ```
 
-## 2.2 采样部分原因
+### 3.2 Softmax 归一化
 
-我们如果对于 $U~Cauchy$ 的每个分量都进行采样， 得到的分类得分 $s$ 将会退化成一个数值，将会对具体预测哪个类别造成困难， 
+**方法一：基于 loc_S**
+$$p_k = \frac{\exp(\text{loc}_{S_{k,i}})}{\sum_{j=1}^{V_{\text{full}}} \exp(\text{loc}_{S_{j,i}})}$$
 
+**方法二：基于 OvR 概率（可选）**
+首先计算 OvR 概率：
+$$P_{k,i} = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
 
-### 2.2 共享随机性：因果采样的高级模式
+然后归一化：
+$$p_k = \frac{P_{k,i}}{\sum_{j=1}^{V_{\text{full}}} P_{j,i}}$$
 
-因果采样的一个核心优势，在于通过**重参数化技巧 (Reparameterization Trick)**，实现了对生成过程随机性的精细控制。
-
-#### 重参数化的数学形式
-
-为了从推断出的因果表征分布 $\text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$ 中采样，我们执行一个确定性变换：
-
-1. **在生成开始时**：从标准均匀分布中采样一个随机向量 $\vec{\epsilon} \sim U(0, 1)^C$
-2. **在生成过程中**：对每个位置 $i$，使用**相同的** $\vec{\epsilon}$ 计算：
-   $$u_i = \text{loc}_{U_i} + \text{scale}_{U_i} \odot \tan\left(\pi \left(\vec{\epsilon} - 0.5\right)\right)$$
-
-#### 共享的含义与范围
-
-**关键理解**：$\vec{\epsilon}$ 在**单个回复/句子的整个生成过程中保持不变**
-
-- **共享范围**：生成一个完整回复时，从第一个词到最后一个词，都使用同一个 $\vec{\epsilon}$
-- **不共享范围**：生成下一个回复时，会重新采样一个新的 $\vec{\epsilon}$
-
-**数学直觉**：
-- $\vec{\epsilon}$ 代表了"说话者的固有特质"（如性格、情绪、风格）
-- $\text{loc}_{U_i}$ 和 $\text{scale}_{U_i}$ 代表了"根据上下文的动态调整"
-- 最终的 $u_i$ 是"固有特质"与"上下文适应"的结合
-
-#### 与人类行为的类比
-
-想象一个人在说一句话：
-- **固定的部分**（$\vec{\epsilon}$）：这个人的性格、当前情绪、说话习惯
-- **变化的部分**（$\text{loc}_{U_i}$, $\text{scale}_{U_i}$）：根据句子进展选择合适的词汇
-
-就像一个开朗的人（固定特质）在整句话中都会保持开朗的语气，但具体用词会根据语境变化。
-
-#### 实际例子
+### 3.3 Top-k/Top-p 采样实现
 
 ```python
-# 生成一个句子
-def generate_sentence(prompt):
-    # 步骤1：为这个句子采样一个"个性"
-    epsilon = torch.rand(hidden_size)  # 只采样一次！
+def traditional_sampling(loc_S, scale_S=None, C_ovr=None, temperature=1.0, top_k=50, top_p=0.9):
+    """
+    传统的 top-k/top-p 采样，兼容标准语言模型
     
-    tokens = []
-    for position in range(max_length):
-        # 步骤2：每个位置使用相同的 epsilon
-        loc_U, scale_U = abduction_network(context)
-        u = loc_U + scale_U * torch.tan(math.pi * (epsilon - 0.5))
+    Args:
+        loc_S: [B, S, V_full] - 分类位置参数（可视为 logits）
+        scale_S: [B, S, V_full] - 分类尺度参数（可选）
+        C_ovr: OvR 阈值（可选）
+        temperature: 温度参数
+        top_k: top-k 采样的 k
+        top_p: nucleus 采样的 p
+    
+    Returns:
+        sampled_tokens: [B, S] - 采样的词元
+    """
+    B, S, V = loc_S.shape
+    
+    # 方法一：直接使用 loc_S 作为 logits
+    if scale_S is None or C_ovr is None:
+        logits = loc_S / temperature
+        probs = F.softmax(logits, dim=-1)
+    else:
+        # 方法二：基于 OvR 概率
+        z = (loc_S - C_ovr.unsqueeze(0).unsqueeze(0)) / scale_S
+        P_ovr = 0.5 + torch.atan(z) / math.pi
+        # 归一化
+        probs = P_ovr / P_ovr.sum(dim=-1, keepdim=True)
+    
+    # 应用 top-k
+    if top_k > 0:
+        top_k_probs, top_k_indices = torch.topk(probs, min(top_k, V), dim=-1)
+        # 创建掩码
+        mask = torch.zeros_like(probs).scatter_(-1, top_k_indices, 1)
+        probs = probs * mask
+        probs = probs / probs.sum(dim=-1, keepdim=True)
+    
+    # 应用 top-p (nucleus sampling)
+    if top_p < 1.0:
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+        cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
         
-        # 步骤3：基于固定的 u 生成词元
-        next_token = action_network(u)
-        tokens.append(next_token)
+        # 找到累积概率超过 p 的位置
+        nucleus_mask = cumsum_probs <= top_p
+        # 确保至少包含一个词元
+        nucleus_mask[..., 0] = True
         
-        if next_token == EOS:
+        # 应用掩码
+        sorted_probs = sorted_probs * nucleus_mask.float()
+        sorted_probs = sorted_probs / sorted_probs.sum(dim=-1, keepdim=True)
+        
+        # 恢复原始顺序
+        _, reverse_indices = torch.sort(sorted_indices, dim=-1)
+        probs = torch.gather(sorted_probs, -1, reverse_indices)
+    
+    # 采样
+    sampled_tokens = torch.multinomial(probs.view(-1, V), 1).view(B, S)
+    
+    return sampled_tokens
+```
+
+## 4. 高级序列因果采样
+
+这是 CausalQwen 最独特的推理模式，允许对生成过程中的随机性进行精细控制。
+
+### 4.1 两种模式对比图
+
+```mermaid
+graph LR
+    subgraph "传统采样"
+        T1["每步独立采样"] --> T2["随机性无记忆"]
+        T2 --> T3["风格不一致"]
+    end
+    
+    subgraph "高级因果采样"
+        A1["分解随机性来源"] --> A2["固定其中一个"]
+        A2 --> A3["观察交互作用"]
+        A3 --> Mode1["模式一：固定个体"]
+        A3 --> Mode2["模式二：固定噪声"]
+    end
+    
+    style A1 fill:#fff3e0,stroke:#e65100,stroke-width:2px
+```
+
+### 4.2 模式一：共享个体选择因子
+
+**研究目标**：观察同一个体在面对逐词元独立的随机噪声时的行为。
+
+#### 详细流程图
+
+```mermaid
+graph TB
+    Init["初始化：采样固定的个体选择因子<br>ε_seed ~ U(0,1)^C"] 
+    
+    Init --> Loop["开始生成循环 t=1,2,..."]
+    
+    Loop --> Forward["前向传播<br>得到 loc_U_t, scale_U_t"]
+    
+    Forward --> Individual["使用固定因子计算个体<br>u_t = loc_U_t + scale_U_t ⊙ tan(π(ε_seed - 0.5))"]
+    
+    Individual --> Explain1["同一个 ε_seed → 同一个体身份<br>但在不同上下文有不同表现"]
+    
+    Explain1 --> Noise["构建输入分布<br>U'_input_t ~ Cauchy(u_t, |b_noise|)"]
+    
+    Noise --> Explain2["噪声保持分布形式<br>代表不可控的环境扰动"]
+    
+    Explain2 --> Decision["解析计算决策<br>loc_S = W_cls·u_t + b_cls<br>scale_S = |W_cls|·|b_noise|"]
+    
+    Decision --> NextToken["生成下一词元"]
+    
+    NextToken --> Check{结束?}
+    Check -->|否| Loop
+    Check -->|是| End["输出序列"]
+    
+    style Individual fill:#fbe9e7,stroke:#e65100,stroke-width:2px
+    style Noise fill:#fff3e0,stroke:#ff6f00,stroke-width:2px
+```
+
+**数学推导**：
+
+1. **初始化**：采样固定的个体选择因子
+   $$\vec{\epsilon}_{\text{seed}} \sim U(0,1)^C$$
+
+2. **生成循环**：对于每个时间步 $t$：
+   
+   a) 计算当前位置的 U 分布参数（基于前向传播）：
+      $$\text{loc}_{U_t}, \text{scale}_{U_t} = \text{AbductionNetwork}(z_t)$$
+   
+   b) 使用固定因子计算具体个体：
+      $$u_t = \text{loc}_{U_t} + \text{scale}_{U_t} \odot \tan(\pi(\vec{\epsilon}_{\text{seed}} - 0.5))$$
+      
+      其中 $\odot$ 表示逐元素乘法。
+   
+   c) 构建包含噪声的输入分布：
+      $$U'_{\text{input},t} \sim \text{Cauchy}(u_t, |b_{\text{noise}}|)$$
+   
+   d) 解析计算决策分布（以分类为例）：
+      $$\text{loc}_{S_{k,t}} = W_{\text{cls},k} \cdot u_t + b_{\text{cls},k}$$
+      $$\text{scale}_{S_{k,t}} = |W_{\text{cls},k}| \cdot |b_{\text{noise}}|$$
+   
+   e) 计算 OvR 概率并选择下一词元：
+      $$P_{k,t} = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,t}} - C_k}{\text{scale}_{S_{k,t}}}\right)$$
+      $$\text{next\_token} = \arg\max_k P_{k,t}$$
+
+**关键洞察**：
+- $\vec{\epsilon}_{\text{seed}}$ 固定 → 个体身份在整个序列中保持一致
+- 噪声分布 $|b_{\text{noise}}|$ → 每步都面对新的不确定性
+
+**实现代码**：
+```python
+def advanced_causal_sampling_mode1(model, input_ids, max_length=100):
+    """
+    高级因果采样模式一：共享个体选择因子
+    
+    核心机制：
+    - 在序列开始时固定一个"个体选择因子"
+    - 整个序列生成过程中使用同一个因子
+    - 观察同一个体在不同上下文中的表现
+    
+    Args:
+        model: CausalQwen 模型
+        input_ids: [1, prompt_length] - 初始输入
+        max_length: 最大生成长度
+    
+    Returns:
+        generated_ids: 生成的完整序列
+        u_trajectory: 个体轨迹 [seq_length, C]
+    """
+    device = input_ids.device
+    C = model.config.hidden_size  # 假设 C = H
+    
+    # Step 1: 采样固定的个体选择因子
+    epsilon_seed = torch.rand(C, device=device)
+    epsilon_seed = torch.clamp(epsilon_seed, 1e-7, 1 - 1e-7)
+    tan_factor = torch.tan(math.pi * (epsilon_seed - 0.5))  # [C]
+    
+    generated_ids = input_ids.clone()
+    numeric_values = torch.zeros_like(input_ids, dtype=torch.float)
+    u_trajectory = []
+    
+    for t in range(max_length):
+        # 前向传播得到当前的 U 分布
+        with torch.no_grad():
+            outputs = model(
+                input_ids=generated_ids,
+                numeric_values=numeric_values,
+                return_dict=True
+            )
+            loc_U_t = outputs.loc_U[:, -1, :]  # [1, C]
+            scale_U_t = outputs.scale_U[:, -1, :]  # [1, C]
+        
+        # Step 2: 使用固定因子计算具体个体
+        u_t = loc_U_t + scale_U_t * tan_factor.unsqueeze(0)  # [1, C]
+        u_trajectory.append(u_t.squeeze(0))
+        
+        # Step 3 & 4: 计算决策分布
+        # 分类
+        W_cls = model.action_network.classification_head.weight  # [V_full, C]
+        b_cls = model.action_network.classification_head.bias  # [V_full]
+        b_noise = torch.abs(model.action_network.b_noise)  # [C]
+        
+        loc_S_t = torch.matmul(u_t, W_cls.T) + b_cls.unsqueeze(0)  # [1, V_full]
+        scale_S_t = torch.matmul(b_noise.unsqueeze(0), torch.abs(W_cls).T)  # [1, V_full]
+        
+        # Step 5: OvR 概率计算
+        C_ovr = model.config.C_ovr if hasattr(model.config, 'C_ovr') else 100.0
+        z = (loc_S_t - C_ovr) / scale_S_t
+        P_ovr = 0.5 + torch.atan(z) / math.pi
+        
+        # 选择下一个词元
+        next_token = torch.argmax(P_ovr, dim=-1)  # [1]
+        
+        # 处理数值词元
+        if next_token.item() == model.config.num_token_id:
+            # 计算回归值
+            W_reg = model.action_network.regression_head.weight  # [C]
+            b_reg = model.action_network.regression_head.bias  # scalar
+            loc_Y_t = torch.matmul(u_t, W_reg) + b_reg  # [1]
+            
+            # 更新序列
+            generated_ids = torch.cat([generated_ids, next_token.unsqueeze(0)], dim=1)
+            new_numeric_value = loc_Y_t.squeeze()
+            numeric_values = torch.cat([
+                numeric_values, 
+                new_numeric_value.unsqueeze(0).unsqueeze(0)
+            ], dim=1)
+        else:
+            # 标准词元
+            generated_ids = torch.cat([generated_ids, next_token.unsqueeze(0)], dim=1)
+            numeric_values = torch.cat([
+                numeric_values, 
+                torch.zeros(1, 1, device=device)
+            ], dim=1)
+        
+        # 检查结束条件
+        if next_token.item() == model.config.eos_token_id:
             break
     
-    return tokens
-
-# 不同的句子会有不同的 epsilon
-sentence1 = generate_sentence("你好")  # epsilon_1
-sentence2 = generate_sentence("再见")  # epsilon_2 (重新采样)
+    return generated_ids, torch.stack(u_trajectory)
 ```
 
-### 2.2 似然截断 (Likelihood Truncation)
+### 4.3 模式二：共享系统性噪声实例
 
-类似于传统的 top-k/top-p 采样，我们可以通过似然截断来控制多样性：
+**研究目标**：观察不确定的个体分布在固定的系统性偏差下的行为。
 
-只保留概率密度满足以下条件的 $u_i$：
-$$p_{U_i}(u_i) \geq \tau \cdot \frac{1}{\pi \text{scale}_{U_i}}$$
-
-其中 $\tau \in (0, 1]$ 是截断阈值，$\frac{1}{\pi \text{scale}_{U_i}}$ 是柯西分布的最大密度。
-
-## 3. 兼容传统采样 (Compatibility with Traditional Sampling)
-
-CausalQwen 完全兼容传统语言模型的 `top-k`/`top-p` 采样方法。
+#### 详细流程图
 
 ```mermaid
-graph TD
-    B["分类分布 S<br>loc_S: [B, S, V_full]"];
-    B --> H["Softmax(loc_S)"];
-    H --> I["<b>Top-k / Top-p 采样</b>"];
-    I --> J["预测词元 ŷ_cls"];
+graph TB
+    Init["初始化：采样固定的噪声实例<br>ε_noise ~ Cauchy(0, I_C)"]
     
-    style J fill:#fce4ec,stroke:#880e4f
+    Init --> Loop["开始生成循环 t=1,2,..."]
+    
+    Loop --> Forward["前向传播<br>得到 loc_U_t, scale_U_t"]
+    
+    Forward --> ApplyNoise["应用固定噪声到位置参数<br>loc_U'_t = loc_U_t + |b_noise| ⊙ ε_noise<br>scale_U'_t = scale_U_t"]
+    
+    ApplyNoise --> Explain1["固定噪声 → 系统性偏差<br>影响所有时刻的决策"]
+    
+    Explain1 --> UDistrib["形成偏移后的分布<br>U'_input_t ~ Cauchy(loc_U'_t, scale_U'_t)"]
+    
+    UDistrib --> Explain2["个体仍是分布<br>保持不确定性"]
+    
+    Explain2 --> Decision["解析计算决策<br>loc_S = W_cls·loc_U'_t + b_cls<br>scale_S = |W_cls|·scale_U'_t"]
+    
+    Decision --> NextToken["生成下一词元"]
+    
+    NextToken --> Check{结束?}
+    Check -->|否| Loop
+    Check -->|是| End["输出序列"]
+    
+    style ApplyNoise fill:#fbe9e7,stroke:#e65100,stroke-width:2px
+    style UDistrib fill:#fff3e0
 ```
 
-行动网络输出的决策位置参数 `loc_S` 可以直接作为 logits 使用：
-$$P_{\text{softmax}}(y_i=k|x) = \frac{\exp(\text{loc}_{S_{k,i}})}{\sum_{j=1}^{V_{\text{full}}} \exp(\text{loc}_{S_{j,i}})}$$
+**数学推导**：
 
-## 4. 三种推理模式对比
+1. **初始化**：采样固定的噪声实例
+   $$\vec{\epsilon}_{\text{noise}} \sim \text{Cauchy}(0, I_C)$$
+   
+   其中 $I_C$ 是 $C$ 维单位矩阵。
+
+2. **生成循环**：对于每个时间步 $t$：
+   
+   a) 计算当前位置的 U 分布参数：
+      $$\text{loc}_{U_t}, \text{scale}_{U_t} = \text{AbductionNetwork}(z_t)$$
+   
+   b) 应用固定噪声到位置参数：
+      $$\text{loc}_{U'_t} = \text{loc}_{U_t} + |b_{\text{noise}}| \odot \vec{\epsilon}_{\text{noise}}$$
+      $$\text{scale}_{U'_t} = \text{scale}_{U_t}$$
+      
+      因此：$$U'_{\text{input},t} \sim \text{Cauchy}(\text{loc}_{U'_t}, \text{scale}_{U'_t})$$
+   
+   c) 解析计算决策分布（以分类为例）：
+      $$\text{loc}_{S_{k,t}} = W_{\text{cls},k} \cdot \text{loc}_{U'_t} + b_{\text{cls},k}$$
+      $$\text{scale}_{S_{k,t}} = |W_{\text{cls},k}| \cdot \text{scale}_{U'_t}$$
+   
+   d) 计算 OvR 概率并选择下一词元（同模式一）。
+
+**关键洞察**：
+- $\vec{\epsilon}_{\text{noise}}$ 固定 → 系统性偏差贯穿始终
+- U 分布变化 → 个体不确定性随上下文演化
+
+**实现代码**：
+```python
+def advanced_causal_sampling_mode2(model, input_ids, max_length=100):
+    """
+    高级因果采样模式二：共享系统性噪声实例
+    
+    核心机制：
+    - 在序列开始时采样一个固定的噪声实例
+    - 这个噪声代表整个生成过程中的系统性偏差
+    - 观察不同（不确定的）个体在相同偏差下的表现
+    
+    Args:
+        model: CausalQwen 模型
+        input_ids: [1, prompt_length] - 初始输入
+        max_length: 最大生成长度
+    
+    Returns:
+        generated_ids: 生成的完整序列
+        loc_U_trajectory: 位置参数轨迹
+    """
+    device = input_ids.device
+    C = model.config.hidden_size
+    
+    # Step 1: 采样固定的噪声实例
+    # 使用标准柯西分布采样
+    epsilon_uniform = torch.rand(C, device=device)
+    epsilon_uniform = torch.clamp(epsilon_uniform, 1e-7, 1 - 1e-7)
+    epsilon_noise = torch.tan(math.pi * (epsilon_uniform - 0.5))  # [C]
+    
+    generated_ids = input_ids.clone()
+    numeric_values = torch.zeros_like(input_ids, dtype=torch.float)
+    loc_U_trajectory = []
+    
+    for t in range(max_length):
+        # 前向传播
+        with torch.no_grad():
+            outputs = model(
+                input_ids=generated_ids,
+                numeric_values=numeric_values,
+                return_dict=True
+            )
+            loc_U_t = outputs.loc_U[:, -1, :]  # [1, C]
+            scale_U_t = outputs.scale_U[:, -1, :]  # [1, C]
+        
+        loc_U_trajectory.append(loc_U_t.squeeze(0))
+        
+        # Step 2: 应用固定噪声到位置参数
+        b_noise = torch.abs(model.action_network.b_noise)  # [C]
+        loc_U_prime = loc_U_t + b_noise.unsqueeze(0) * epsilon_noise.unsqueeze(0)  # [1, C]
+        scale_U_prime = scale_U_t  # 尺度不变
+        
+        # Step 3: 计算决策分布
+        W_cls = model.action_network.classification_head.weight
+        b_cls = model.action_network.classification_head.bias
+        
+        loc_S_t = torch.matmul(loc_U_prime, W_cls.T) + b_cls.unsqueeze(0)
+        scale_S_t = torch.matmul(scale_U_prime, torch.abs(W_cls).T)
+        
+        # OvR 概率
+        C_ovr = model.config.C_ovr if hasattr(model.config, 'C_ovr') else 100.0
+        z = (loc_S_t - C_ovr) / scale_S_t
+        P_ovr = 0.5 + torch.atan(z) / math.pi
+        
+        # 选择下一个词元
+        next_token = torch.argmax(P_ovr, dim=-1)
+        
+        # 处理数值词元（类似模式一）
+        if next_token.item() == model.config.num_token_id:
+            W_reg = model.action_network.regression_head.weight
+            b_reg = model.action_network.regression_head.bias
+            loc_Y_t = torch.matmul(loc_U_prime, W_reg) + b_reg
+            
+            generated_ids = torch.cat([generated_ids, next_token.unsqueeze(0)], dim=1)
+            new_numeric_value = loc_Y_t.squeeze()
+            numeric_values = torch.cat([
+                numeric_values, 
+                new_numeric_value.unsqueeze(0).unsqueeze(0)
+            ], dim=1)
+        else:
+            generated_ids = torch.cat([generated_ids, next_token.unsqueeze(0)], dim=1)
+            numeric_values = torch.cat([
+                numeric_values, 
+                torch.zeros(1, 1, device=device)
+            ], dim=1)
+        
+        if next_token.item() == model.config.eos_token_id:
+            break
+    
+    return generated_ids, torch.stack(loc_U_trajectory)
+```
+
+### 4.4 两种模式的对比总结
+
+| 维度 | 模式一 | 模式二 |
+|------|--------|--------|
+| **固定什么** | 个体选择因子 $\vec{\epsilon}_{\text{seed}} \in [0,1]^C$ | 噪声实例 $\vec{\epsilon}_{\text{noise}} \sim \text{Cauchy}(0,I_C)$ |
+| **个体表征** | $u_t$ 是确定的数值向量 | $U_t$ 保持分布形式 |
+| **U 的有效分布** | $U'_t \sim \text{Cauchy}(u_t, \|b_\text{noise}\|)$ | $U'_t \sim \text{Cauchy}(\text{loc}_{U_t} + \|b_{\text{noise}}\| \odot \vec{\epsilon}_{\text{noise}}, \text{scale}_{U_t})$ |
+| **决策尺度** | $\propto \|b_{\text{noise}}\|$ | $\propto \text{scale}_{U_t}$ |
+| **物理意义** | 同一个体的多次决策 | 不同个体在相同偏差下的表现 |
+| **应用场景** | 个性化生成、风格保持 | 系统性偏差分析、鲁棒性测试 |
+
+## 5. 自回归序列生成
+
+### 5.1 完整生成流程
 
 ```mermaid
-graph TD
-    A["<b>个体因果表征 U</b><br>Uᵢ ~ Cauchy(loc, scale)"];
-
-    subgraph "行动网络 (Action Network)"
-        A -- "分类行动决策" --> B["分类分布 S"];
-        A -- "回归行动决策" --> C["回归分布 Y"];
-    end
-
-    subgraph "模式一：确定性推理 (默认)"
-        B -- "计算 OvR 概率" --> D["<b>分类预测 ŷ_cls </b><br> argmax_k P(S_{k,i} > C_k)"];
-        C -- "取位置参数" --> E["<b>回归预测 ŷ_reg </b><br> loc_{Y_i}"];
-    end
-    subgraph "模式二：兼容传统采样"
-        B -- "取 loc_S 作为 logits" --> H["Softmax(loc_S)"];
-        H --> I["<b>Top-k / Top-p 采样预测</b> <br> ŷ_cls"];
-    end
-
-    subgraph "模式三：因果采样"
-        A -- "采样(部分)**原因**" --> F["得到具体个体 uᵢ"];
-        F -- "传入'行动网络'" --> G["<b>确定性的分类/回归预测</b> <br> ŷ_cls, ŷ_reg"];
-    end
-
-    style A fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    style D fill:#fce4ec,stroke:#880e4f
-    style E fill:#fce4ec,stroke:#880e4f
-    style G fill:#fce4ec,stroke:#880e4f
-    style I fill:#fce4ec,stroke:#880e4f
-```
-
-## 5. 自回归生成详解
-
-自回归生成是语言模型最核心的能力——逐词生成连贯的文本。CausalQwen 在这方面不仅继承了 Qwen 的所有能力，还通过独特的双通道设计实现了对数值的精确生成。
-
-
-### 4.1 核心概念：序列对 (Sequence Pair)
-
-与标准语言模型只处理词元序列不同，CausalQwen 在整个生成过程中维护一个**序列对**：
-
-```python
-# 标准语言模型
-input_ids = [token1, token2, ..., tokenN]
-
-# CausalQwen 序列对
-input_ids = [token1, token2, <NUM_ID>, token4, ...]
-numeric_values = [0.0, 0.0, 123.45, 0.0, ...]
-```
-
-这种设计的精妙之处在于：
-- **位置严格对齐**：每个词元都有对应的数值槽位
-- **自然退化**：非数值位置的值为 0，不影响词元嵌入
-- **统一处理**：模型内部使用相同的计算路径
-
-### 4.2 生成流程的数学细节
-
-#### 步骤 1：初始化
-给定用户输入（prompt）`"计算 19 + 23 的结果"`：
-
-```python
-# 分词器处理
-tokens = tokenizer("计算 19 + 23")
-# 结果: ['计算', '<NUM>', '+', '<NUM>', '的', '结果']
-
-# 构建初始序列对
-input_ids = [1234, NUM_ID, 567, NUM_ID, 890, 456]
-numeric_values = [0.0, 19.0, 0.0, 23.0, 0.0, 0.0]
-```
-
-#### 步骤 2：迭代生成
-在时间步 $t$，模型已生成前 $t-1$ 个词元，现在要预测第 $t$ 个词元：
-
-1. **前向传播**：
-   ```python
-   # 将当前序列对送入模型
-   outputs = model(input_ids[:t], numeric_values[:t])
-   
-   # 获取最后一个位置的预测
-   loc_S_t = outputs.loc_S[-1]      # 分类 logits [V_full]
-   scale_S_t = outputs.scale_S[-1]   # 分类尺度 [V_full]
-   loc_Y_t = outputs.loc_Y[-1]       # 回归位置 (标量)
-   scale_Y_t = outputs.scale_Y[-1]   # 回归尺度 (标量)
-   ```
-
-2. **分类决策**（选择下一个词元）：
-   
-   **确定性模式**：
-   $$\hat{y}_{\text{cls},t} = \arg\max_k P(S_{k,t} > C_k)$$
-   
-   **传统采样模式**：
-   $$P_{\text{softmax}} = \text{Softmax}(\text{loc}_{S_t})$$
-   $$\hat{y}_{\text{cls},t} \sim \text{Categorical}(P_{\text{softmax}})$$
-   
-   **因果采样模式**：
-   $$u_t = \text{loc}_{U_t} + \text{scale}_{U_t} \odot \tan(\pi(\epsilon - 0.5))$$
-   $$\hat{y}_{\text{cls},t} = \arg\max_k (W_{\text{cls},k} \cdot u_t + b_{\text{cls},k})$$
-
-3. **条件分支**：
-   ```python
-   if predicted_token == NUM_ID:
-       # 情况1：预测为数值词元
-       # 使用回归通道获取具体数值
-       if inference_mode == "deterministic":
-           predicted_value = loc_Y_t  # 使用中位数
-       else:
-           # 从柯西分布采样
-           predicted_value = sample_cauchy(loc_Y_t, scale_Y_t)
-       
-       # 更新序列对
-       input_ids.append(NUM_ID)
-       numeric_values.append(predicted_value)
-       
-       # 生成文本（将数值转为字符串）
-       generated_text += str(predicted_value)
-   else:
-       # 情况2：预测为普通词元
-       input_ids.append(predicted_token)
-       numeric_values.append(0.0)
-       
-       # 生成文本
-       generated_text += tokenizer.decode(predicted_token)
-   ```
-
-#### 步骤 3：终止条件
-生成过程在以下情况之一时终止：
-- 生成了结束词元（EOS）
-- 达到最大长度限制
-- 用户设置的其他停止条件
-
-### 4.3 自回归生成流程图和实际生成示例
-
-
-```mermaid
-graph TD
-    A["<b>开始：初始输入 (Prompt)</b>"] --> B{"Tokenize"};
-    B --> C["<b>生成初始序列对</b><br>词元序列: [x_1, ..., x_T]<br> 数值序列: [v_1, ..., v_T]"];
-    C --> D["<b>进入循环</b>"] --> Loop;
-
-    subgraph "自回归循环 (t = T, T+1, ...)"
-        Loop["<b>1.将当前<u>序列对</u>送入模型</b><br> input_ids, numeric_values"];
-        Loop --> E["<b>2.模型前向传播</b>"];
-        E --> F["<b>3.获取下一词元(t+1)的预测</b><br>ŷ_cls (预测词元ID)<br>ŷ_reg (预测回归值)"];
+graph TB
+    Start["初始输入文本<br>(Prompt)"] --> Tokenize["分词处理<br>input_ids, numeric_values"]
+    
+    Tokenize --> Loop["开始自回归循环<br>t = 1, 2, ..."]
+    
+    subgraph "自回归生成主循环"
+        Loop --> Embed["数值感知嵌入<br>e_t = base_embed + φ(v_t)"]
         
-        F --> G{"预测词元ŷ_cls是NUM词元？"};
-
-        G -- "<b>是 (Yes)</b>" --> H["<b>更新序列对:</b><br>input_ids.append(&lt;NUM_ID&gt;)<br>numeric_values.append(<b>ŷ_reg</b>)"];
-        H --> I["(同时，将数值 ŷ_reg 转为文本追加到生成结果)"];
-
-        G -- "<b>否 (No)</b>" --> J["<b>更新序列对:</b><br>input_ids.append(ŷ_cls)<br>numeric_values.append(<b>0.0</b>)"];
-        J --> I["(同时，将词元ŷ_cls转为文本追加到生成结果)"];
+        Embed --> Qwen["Qwen Transformer<br>z_t = QwenTransformer(e_1:t)"]
         
-        I --> K{"是EOS词元或<br>已达最大长度？"};
+        Qwen --> Abduction["归因推断<br>U_t ~ Cauchy(loc_U_t, scale_U_t)"]
         
-        K -- "否 (No), 继续循环" --> L["t = t + 1"];
-        L --> Loop;
+        Abduction --> Branch{选择推理模式}
+
+        Branch -->|标准推理| Std["U'_t ~ Cauchy(loc_{U_t}, scale_{U_t} + |b_noise|)<br>↓<br>计算 P_k,t 和 loc_Y_t"]
+        Branch -->|因果采样| Causal["采样 u_t ~ U_t<br>U'_t ~ Cauchy(u_t, |b_noise|)<br>↓<br>计算 P_k,t 和 loc_Y_t"]
+        Branch -->|传统方法| Trad["使用 loc_S_t 作为 logits<br>↓<br>Softmax + Top-k/Top-p"]
+        
+        Std --> Predict["预测下一词元"]
+        Causal --> Predict
+        Trad --> Predict
+        
+        Predict --> IsNum{预测为&lt;NUM&gt;?}
+        
+        IsNum -->|是| NumPath["<b>数值输出</b>:<br>token: input_ids.append(&lt;NUM_ID&gt;)<br>value: numeric_values.append(loc_{Y_t})<br>text: 生成文本.append(str(loc_{Y_t}))"]
+        IsNum -->|否| TextPath["<b>文本输出</b>:<br>token: input_ids.append(pred_token_id)<br>value: numeric_values.append(0.0)<br>text: 生成文本.append(token_text)"]
+        
+        NumPath --> Check{"结束条件?<br>(EOS或最大长度)"}
+        TextPath --> Check
+        
+        Check -->|否| Next["t = t + 1"]
+        Check -->|是| End["输出完整序列:<br>- token序列: input_ids<br>- 数值序列: numeric_values<br>- 文本: decode(input_ids, numeric_values)"]
+        
+        Next --> Loop
     end
     
-    K -- "是 (Yes), 结束循环" --> M["<b>结束：输出完整生成文本</b>"];
-
-    style C fill:#e8f5e9,stroke:#1b5e20
-    style H fill:#fff3e0,stroke:#e65100
-    style J fill:#e3f2fd,stroke:#1b5e20
-    style M fill:#e8f5e9,stroke:#1b5e20
+    style Start fill:#e8f5e9
+    style End fill:#e8f5e9
+    style IsNum fill:#fff3e0
+    style NumPath fill:#fbe9e7,stroke:#e65100,stroke-width:2px
+    style TextPath fill:#e3f2fd
 ```
 
-让我们通过一个具体例子展示整个过程：
+### 5.2 数值预测的特殊处理
 
-**输入**: "小明有 5 个苹果，小红给了他 3 个，他现在有"
-
-**生成过程**：
-```
-时刻 t=0: 
-  输入: "小明有 5 个苹果，小红给了他 3 个，他现在有"
-  序列对: 
-    input_ids: [小明, 有, <NUM>, 个, 苹果, ..., 有]
-    numeric_values: [0, 0, 5, 0, 0, ..., 0]
-
-时刻 t=1:
-  模型预测: P(<NUM>) = 0.85 (最高)
-  选择: <NUM> 词元
-  回归预测: loc_Y = 8.02, scale_Y = 0.15
-  生成数值: 8
-  更新序列对:
-    input_ids: [..., 有, <NUM>]
-    numeric_values: [..., 0, 8]
-  累积输出: "8"
-
-时刻 t=2:
-  模型预测: P(个) = 0.92 (最高)
-  选择: "个" 词元
-  更新序列对:
-    input_ids: [..., <NUM>, 个]
-    numeric_values: [..., 8, 0]
-  累积输出: "8个"
-
-时刻 t=3:
-  模型预测: P(苹果) = 0.88 (最高)
-  选择: "苹果" 词元
-  累积输出: "8个苹果"
-
-时刻 t=4:
-  模型预测: P(。) = 0.76 (最高)
-  选择: "。" 词元
-  累积输出: "8个苹果。"
-  
-时刻 t=5:
-  模型预测: P(<EOS>) = 0.95 (最高)
-  终止生成
-```
-
-**最终输出**: "8个苹果。"
-
-### 4.4 关键设计优势
-
-1. **数值精度**：回归通道直接预测数值，避免了分词导致的精度损失
-   - 传统模型: "3.14159" → ["3", ".", "14", "15", "9"] (可能生成错误)
-   - CausalQwen: "3.14159" → [<NUM>] → 3.14159 (精确值)
-
-2. **语义连贯**：数值作为单一词元参与注意力计算
-   - 传统模型: 每个数字字符独立计算注意力
-   - CausalQwen: 整个数值作为语义单元
-
-3. **计算效率**：长数值不会占用过多序列长度
-   - 传统模型: "123456789.987654321" 占用 19 个位置
-   - CausalQwen: 仅占用 1 个位置
-
-### 4.5 高级特性：共享随机性的实际效果
-
-在因果采样模式下，通过在**单个句子生成过程中**固定 $\epsilon$ 或者其部分分量，我们实现了风格的内在一致性：
+当模型预测 `<NUM>` 词元时，需要特殊处理：
 
 ```python
-# 例子：生成一个数学解答
-prompt = "计算 15 + 27 的结果："
-
-# 采样一个 epsilon（代表这次回答的"风格"）
-epsilon = torch.rand(hidden_size)
-
-# 生成过程（所有词元共享这个 epsilon）
-# 可能的输出："首先，我们将15和27相加。15加27等于42。因此，答案是42。"
-
-# 如果重新生成（新的 epsilon）
-epsilon_new = torch.rand(hidden_size)
-# 可能的输出："15 + 27 = 42"
-
-# 不同的 epsilon 导致不同的表达风格，但同一句子内部保持一致
+def handle_numeric_prediction(model, u_or_loc_U, scale_U=None, b_noise=None, is_sampled=False):
+    """
+    处理数值预测的统一接口
+    
+    重要：必须同时返回词元ID和数值，才能正确还原文本
+    
+    Args:
+        model: CausalQwen 模型
+        u_or_loc_U: [B, C] - 采样的个体 u 或位置参数 loc_U
+        scale_U: [B, C] - 尺度参数（当 is_sampled=False 时需要）
+        b_noise: [C] - 噪声参数
+        is_sampled: 是否已经采样了具体个体
+    
+    Returns:
+        token_id: [B] - 预测的词元ID（这里是 <NUM> 的ID）
+        numeric_value: [B] - 预测的数值
+    """
+    W_reg = model.action_network.regression_head.weight  # [C]
+    b_reg = model.action_network.regression_head.bias  # scalar
+    
+    if is_sampled:
+        # 已经有具体个体 u
+        loc_Y = torch.matmul(u_or_loc_U, W_reg) + b_reg
+        scale_Y = torch.matmul(torch.abs(b_noise), torch.abs(W_reg))
+    else:
+        # 标准推理：使用 loc_U 和完整的尺度计算
+        loc_Y = torch.matmul(u_or_loc_U, W_reg) + b_reg
+        scale_Y = torch.matmul(scale_U + torch.abs(b_noise), torch.abs(W_reg))
+    
+    # 返回 <NUM> 的token ID 和预测的数值
+    token_id = torch.full_like(loc_Y, model.config.num_token_id, dtype=torch.long)
+    
+    return token_id, loc_Y
 ```
 
-**效果分析**：
-- 第一个 epsilon 可能对应"详细解释型"的风格
-- 第二个 epsilon 可能对应"简洁直接型"的风格
-- 但无论哪种风格，在整个句子中都保持一致
+### 5.3 文本还原示例
 
-这种设计更符合人类的语言生成模式：
-- 传统采样：每个词都可能"变换性格"
-- 因果采样：整句话保持统一的"性格特征"
+```python
+def decode_with_numeric_values(tokenizer, input_ids, numeric_values):
+    """
+    将token序列和数值序列还原为完整文本
+    
+    Args:
+        tokenizer: 分词器
+        input_ids: [S] - token ID序列
+        numeric_values: [S] - 对应的数值序列
+    
+    Returns:
+        text: 还原的完整文本
+    """
+    tokens = []
+    for i, (token_id, num_val) in enumerate(zip(input_ids, numeric_values)):
+        if token_id == tokenizer.num_token_id:
+            # 这是一个数值位置，使用numeric_values中的值
+            tokens.append(str(num_val.item()))
+        else:
+            # 普通词元，使用tokenizer解码
+            tokens.append(tokenizer.decode([token_id]))
+    
+    return ''.join(tokens)
 
-### 4.6 实现建议
+# 使用示例
+# 生成的序列：
+# input_ids = [12345, 67890, <NUM_ID>, 11111]  # "价格是<NUM>元"
+# numeric_values = [0.0, 0.0, 99.9, 0.0]
+# 
+# 还原结果：
+# text = "价格是99.9元"
+```
 
-为了获得最佳的生成效果，建议：
+## 6. 数值稳定性考虑
 
-1. **温度调节**：
-   ```python
-   # 对于需要创造性的任务
-   temperature = 0.8
-   loc_S_scaled = loc_S / temperature
-   
-   # 对于需要准确性的任务（如数学计算）
-   temperature = 0.1  # 接近确定性
-   ```
+### 6.1 避免数值问题
 
-2. **数值后处理**：
-   ```python
-   # 根据上下文调整数值精度
-   if context_requires_integer:
-       value = round(predicted_value)
-   elif context_requires_percentage:
-       value = min(100, max(0, predicted_value))
-   ```
+```python
+def stable_cauchy_cdf(loc, scale, x, eps=1e-6):
+    """
+    数值稳定的柯西 CDF 计算
+    """
+    # 避免 scale 过小
+    scale = torch.clamp(scale, min=eps)
+    
+    # 计算标准化值
+    z = (x - loc) / scale
+    
+    # 限制 z 的范围避免 arctan 的数值问题
+    z = torch.clamp(z, min=-1e6, max=1e6)
+    
+    # 计算 CDF
+    cdf = 0.5 + torch.atan(z) / math.pi
+    
+    return cdf
 
-3. **混合策略**：
-   ```python
-   # 对文本使用传统采样，对数值使用确定性
-   if next_token == NUM_ID:
-       use_deterministic = True
-   else:
-       use_sampling = True
-   ```
+def stable_cauchy_sampling(loc, scale, shape, device, eps=1e-7):
+    """
+    数值稳定的柯西分布采样
+    """
+    # 生成均匀分布
+    u = torch.rand(shape, device=device)
+    
+    # 避免极端值
+    u = torch.clamp(u, eps, 1 - eps)
+    
+    # 逆变换采样
+    x = loc + scale * torch.tan(math.pi * (u - 0.5))
+    
+    # 可选：限制输出范围
+    # x = torch.clamp(x, min=-1e6, max=1e6)
+    
+    return x
+```
+
+### 6.2 完整的生成管道示例
+
+```python
+def generate_with_causalqwen(
+    model, 
+    tokenizer, 
+    prompt, 
+    max_length=100,
+    mode='standard',  # 'standard', 'causal', 'traditional', 'advanced_mode1', 'advanced_mode2'
+    temperature=1.0,
+    top_k=50,
+    top_p=0.9
+):
+    """
+    CausalQwen 的统一生成接口
+    
+    重要：返回的是完整的token序列和数值序列，需要配合使用才能还原文本
+    
+    Args:
+        model: CausalQwen 模型
+        tokenizer: 分词器
+        prompt: 输入提示
+        max_length: 最大生成长度
+        mode: 推理模式
+        temperature, top_k, top_p: 传统采样参数
+    
+    Returns:
+        generated_text: 生成的文本
+        metadata: 生成过程的元数据，包含:
+            - input_ids: 完整的token序列
+            - numeric_values: 对应的数值序列
+            - trajectory: 轨迹信息（如果适用）
+    """
+    # 编码输入
+    inputs = tokenizer(prompt, return_tensors='pt')
+    input_ids = inputs['input_ids'].to(model.device)
+    numeric_values = torch.zeros_like(input_ids, dtype=torch.float)
+    
+    if mode == 'standard':
+        # 标准确定性推理
+        outputs = model.generate(
+            input_ids=input_ids,
+            numeric_values=numeric_values,
+            max_length=max_length,
+            do_sample=False
+        )
+        # outputs 包含 (generated_ids, generated_numeric_values)
+        generated_ids, generated_numeric_values = outputs
+    elif mode == 'causal':
+        # 因果采样
+        outputs = model.generate(
+            input_ids=input_ids,
+            numeric_values=numeric_values,
+            max_length=max_length,
+            do_sample=True,
+            sampling_mode='causal'
+        )
+        generated_ids, generated_numeric_values = outputs
+    elif mode == 'traditional':
+        # 传统 top-k/top-p
+        outputs = model.generate(
+            input_ids=input_ids,
+            numeric_values=numeric_values,
+            max_length=max_length,
+            do_sample=True,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p
+        )
+        generated_ids, generated_numeric_values = outputs
+    elif mode.startswith('advanced'):
+        # 高级因果采样
+        if mode == 'advanced_mode1':
+            generated_ids, trajectory = advanced_causal_sampling_mode1(
+                model, input_ids, max_length
+            )
+        else:
+            generated_ids, trajectory = advanced_causal_sampling_mode2(
+                model, input_ids, max_length
+            )
+        
+        # 对于高级模式，需要提取生成的numeric_values
+        # （这在advanced_causal_sampling函数内部已经处理）
+        generated_numeric_values = trajectory.get('numeric_values', None)
+        
+        # 解码生成的文本
+        generated_text = decode_with_numeric_values(
+            tokenizer, generated_ids[0], generated_numeric_values[0]
+        )
+        
+        return generated_text, {
+            'input_ids': generated_ids,
+            'numeric_values': generated_numeric_values,
+            'trajectory': trajectory
+        }
+    
+    # 标准解码：结合token和数值
+    generated_text = decode_with_numeric_values(
+        tokenizer, generated_ids[0], generated_numeric_values[0]
+    )
+    
+    return generated_text, {
+        'input_ids': generated_ids,
+        'numeric_values': generated_numeric_values
+    }
+```
+
+## 总结
+
+CausalQwen 的推理系统提供了从简单到复杂的多层次方法：
+
+1. **效率优先**：标准推理提供最快的确定性预测，完全基于解析计算
+2. **因果探索**：因果采样揭示个体差异，通过采样个体实现多样性
+3. **向后兼容**：支持传统采样方法，可以无缝替代标准语言模型
+4. **深度分析**：高级模式支持反事实研究，精细控制随机性来源
+
+每种模式都有清晰的数学基础和高效的代码实现，确保了理论的严谨性和实践的可行性。特别是柯西分布的使用，使得整个推理过程可以在很大程度上保持解析计算，避免了昂贵的采样操作。
+
+**关键要点**：
+- 模型的输出始终是**词元ID和数值**的配对
+- 只有结合两者才能正确还原生成的文本
+- 这种设计使得模型能够在单一架构中同时处理文本生成和数值预测

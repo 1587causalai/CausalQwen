@@ -6,9 +6,9 @@
 
 ## 符号约定
 
-我们用 B 代表批次大小, S 代表序列长度, H 代表模型核心维度 (即词嵌入和隐藏层维度), C 代表因果表征维度, K 代表基座模型 Qwen 的已用词汇表大小, V_full代表总词汇表大小, CausalQwen 的已用词汇表大小为 K+1 (K+1 包含基座模型 Qwen 的已用词汇表大小 K 和 CausalQwen 的额外词汇 `<NUM>`)
+我们用 B 代表批次大小, S 代表序列长度, H 代表模型隐藏维度, C 代表因果表征维度, K 代表基座模型 Qwen 的已用词汇表大小, V_full 代表扩展后的总词汇表大小（V_full = K + 271，其中 271 是 Qwen 的预留词汇空间）, CausalQwen 使用其中的 K+1 个词汇（包含新增的 `<NUM>` 词元）
 
-> **设计决策**: 在当前实现中，我们设定因果表征维度 `C` 与模型隐藏层维度 `H` 相等，即 **`C = H`**。这方便了我们进行归因推断网络的初始化。
+> **设计决策**: 在当前实现中，我们设定因果表征维度 `C` 与模型隐藏层维度 `H` 相等，即 **`C = H`**。这简化了归因推断网络的初始化。
 
 ## 前向传播总览
 
@@ -41,7 +41,7 @@ graph TD
     C --> E["词元嵌入层"];
     E --> F["基础嵌入<br>base_embeddings"];
     
-    D --> G["数值编码函数<br>φ(v) = sign(v)·ln(1+|v|)·ê"];
+    D --> G["数值编码函数<br>φ(v) = sign(v)·ln(1+|v|)·w_num"];
     
     F & G --> H["融合: e_i = base_embed_i + φ(v_i)"];
     H --> I["<b>增强嵌入 e</b><br>[B, S, H]"];
@@ -79,8 +79,8 @@ graph TD
 -   **处理**: 对每个位置 $i$，计算增强嵌入：
     $$e_i = \text{base\_embed}_i + \phi(v_i)$$
     数值编码函数：
-    $$\phi(v) = \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{e}$$
-    其中 $v_i$ 是位置 $i$ 的数值（非数值位置为 0），$\vec{e}$ 是归一化的方向向量，$\|\vec{e}\| = 1$。
+    $$\phi(v) = \text{sign}(v) \cdot \ln(1 + |v|) \cdot \vec{w}_{\text{num}}$$
+    其中 $v_i$ 是位置 $i$ 的数值（非数值位置为 0），$\vec{w}_{\text{num}} \in \mathbb{R}^H$ 是数值感知嵌入模块的可学习参数向量。
 -   **输出**: 
     - `e`: 增强嵌入张量 (形状: `[B, S, H]`)
 
@@ -98,7 +98,7 @@ numeric_values: [0.0, 0.0, 99.9, 0.0]
      ↓ (嵌入层)
 base_embeddings: [[e1], [e2], [e3], [e4]]  # 每个ei是H维向量
      ↓ (数值编码)
-φ(numeric_values): [[φ(0)], [φ(0)], [φ(99.9)], [φ(0)]]  # φ(99.9) = ln(100.9) * ê
+φ(numeric_values): [[φ(0)], [φ(0)], [φ(99.9)], [φ(0)]]  # φ(99.9) = ln(100.9) * w_num
      ↓ (融合)
 enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 ```
@@ -129,7 +129,7 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 
 ## 3. 模块三：归因推断网络 (Abduction Network)
 
-该模块从上下文特征中推断出每个位置的、更深层次的个体因果表征。这对应着"你是谁？"的归因过程。
+该模块从上下文特征中推断出每个位置的个体因果表征分布。
 
 -   **输入**: 
     - `z`: 上下文特征张量 (形状: `[B, S, H]`)
@@ -150,77 +150,84 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
     - `loc_U`: 因果表征分布的位置参数 (形状: `[B, S, C]`)
     - `scale_U`: 因果表征分布的尺度参数 (形状: `[B, S, C]`)
 
-**初始化后的具体计算**：根据初始化策略（$W_{\text{loc}} = I$, $b_{\text{loc}} = 0$, $W_{\text{scale}} = 0$, $b_{\text{scale}} = \text{softplus}^{-1}(\gamma)$）：
+**初始化后的具体计算**：根据初始化策略（$W_{\text{loc}} = I$, $b_{\text{loc}} = 0$, $W_{\text{scale}} = 0$, $b_{\text{scale}} = \sigma_{\text{init}}$）：
 
 $$\text{loc}_{U_i} = I \cdot z_i + 0 = z_i$$
-$$\text{scale}_{U_i} = \text{softplus}(0 \cdot z_i + \text{softplus}^{-1}(\gamma)) = \text{softplus}(\text{softplus}^{-1}(\gamma)) = \gamma$$
+$$\text{scale}_{U_i} = \text{softplus}(0 \cdot z_i + \sigma_{\text{init}}) = \text{softplus}(\sigma_{\text{init}}) = \gamma_0 \cdot \mathbf{1}_C$$
 
 因此，初始化后每个位置的因果表征服从：
-$$U_i \sim \text{Cauchy}(z_i, \gamma)$$
+$$U_i \sim \text{Cauchy}(z_i, \gamma_0 \cdot \mathbf{1}_C)$$
 
-> **数值稳定性优势**：相比 exp 函数，softplus 在输入为负数时不会产生极小的正数（可能导致数值下溢），在输入为正数时增长速度更缓慢（避免数值上溢）。
+其中 $\gamma_0 = \text{softplus}(\sigma_{\text{init}})$，$\mathbf{1}_C$ 是 C 维的全 1 向量。
 
 ## 4. 模块四：行动决策网络 (Action Network)
 
-该模块基于推断出的因果表征分布，进行并行的分类和回归决策。
+该模块是模型的核心决策单元。其内部包含一个可学习的噪声参数 $b_{\text{noise}} \in \mathbb{R}^C$，工作流程分为两步：
 
-### 4.1 分类决策
+1.  **噪声注入 (Noise Infusion)**：网络将上游推断出的个体表征分布 $U_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$ 与代表不可控随机性的外生噪声分布 $\epsilon \sim \text{Cauchy}(0, |b_{\text{noise}}|)$ 进行逐元素的独立叠加，形成融合输入分布：
+    $$U'_{i} \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i} + |b_{\text{noise}}|)$$
+    
+    这里 $|b_{\text{noise}}|$ 表示对 $b_{\text{noise}} \in \mathbb{R}^C$ 逐元素取绝对值。
 
-对于词汇表中的每个词汇 $k$：
+2.  **并行决策 (Parallel Decision Making)**：基于包含两种不确定性的融合输入分布，进行分类和回归决策。
 
-**一般形式**：
-$$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k}$$
-$$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot \text{scale}_{U_i}$$
-
-其中 $W_{\text{cls},k}$ 是第 $k$ 个词汇对应的权重向量（形状：`[C]`），$|W_{\text{cls},k}|$ 表示对每个元素取绝对值。
-
-**初始化后的计算**：由于 $W_{\text{cls}} = W_{\text{Qwen\_lm\_head}}$，$b_{\text{cls}} = 0$，且 $\text{loc}_{U_i} = z_i$：
-
-$$\text{loc}_{S_{k,i}} = W_{\text{Qwen},k} \cdot z_i + 0 = W_{\text{Qwen},k} \cdot z_i$$
-
-这正是原始 Qwen 的 logits！同时：
-$$\text{scale}_{S_{k,i}} = |W_{\text{Qwen},k}| \cdot \gamma$$
-
-因此，每个词汇的决策分数服从：
-$$S_{k,i} \sim \text{Cauchy}(W_{\text{Qwen},k} \cdot z_i, |W_{\text{Qwen},k}| \cdot \gamma)$$
-
-### 4.2 回归决策
-
-**一般形式**：
-$$\text{loc}_{Y_i} = W_{\text{reg}} \cdot \text{loc}_{U_i} + b_{\text{reg}}$$
-$$\text{scale}_{Y_i} = \|W_{\text{reg}}\|_1 \cdot \text{scale}_{U_i}$$
-
-其中 $\|W_{\text{reg}}\|_1 = \sum_j |W_{\text{reg},j}|$ 是权重向量的 L1 范数。
-
-**初始化后的计算**：使用标准初始化（如 Xavier），$W_{\text{reg}}$ 的元素较小，因此：
-
-$$\text{loc}_{Y_i} = W_{\text{reg}} \cdot z_i + b_{\text{reg}} \approx b_{\text{reg}} \approx 0$$
-$$\text{scale}_{Y_i} = \|W_{\text{reg}}\|_1 \cdot \gamma \approx \epsilon \cdot \gamma$$
-
-其中 $\epsilon$ 是一个小值。回归输出服从近似以 0 为中心的宽泛分布：
-$$Y_i \sim \text{Cauchy}(0, \epsilon \cdot \gamma)$$
-
-### 4.3 柯西分布的线性稳定性验证
-
-这里我们验证为什么线性变换保持柯西分布的性质。如果 $U \sim \text{Cauchy}(\mu, \gamma)$，对于线性变换 $Y = aU + b$：
-
-1. **位置参数变换**：
-   $$E[\tan(\pi(F_Y(y) - 0.5))] = E[\tan(\pi(F_U(\frac{y-b}{a}) - 0.5))] = \frac{\mu a + b - y}{a} \cdot \frac{a}{\gamma} = \frac{a\mu + b - y}{|a|\gamma}$$
-
-2. **尺度参数变换**：
-   由累积分布函数的变换关系：
-   $$F_Y(y) = F_U\left(\frac{y-b}{a}\right)$$
-   
-   可得 $Y \sim \text{Cauchy}(a\mu + b, |a|\gamma)$。
-
-这就是为什么我们可以直接在参数空间进行计算，而无需采样。
+-   **输入**: `loc_U` (形状: `[B, S, C]`), `scale_U` (形状: `[B, S, C]`)
+-   **处理**: 
+    - **分类**：每个词汇 $k$ 有独立的线性变换：
+      $$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k}$$
+      $$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$$
+      
+      其中 $W_{\text{cls},k} \in \mathbb{R}^C$ 是词汇 $k$ 对应的权重向量，$\cdot$ 表示内积运算，$|W_{\text{cls},k}|$ 表示对权重向量逐元素取绝对值。
+      
+    - **回归**：单一的线性变换：
+      $$\text{loc}_{Y_i} = W_{\text{reg}} \cdot \text{loc}_{U_i} + b_{\text{reg}}$$
+      $$\text{scale}_{Y_i} = |W_{\text{reg}}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$$
+      
+      其中 $W_{\text{reg}} \in \mathbb{R}^C$ 是回归权重向量，$|W_{\text{reg}}|$ 表示对权重向量逐元素取绝对值。
 
 -   **输出**:
     - 分类决策分布参数: `loc_S` (形状: `[B, S, V_full]`), `scale_S` (形状: `[B, S, V_full]`)
     - 回归决策分布参数: `loc_Y` (形状: `[B, S]`), `scale_Y` (形状: `[B, S]`)
 
-> **核心引擎：柯西分布的线性稳定性**
-> 如果 $U \sim \text{Cauchy}(\mu, \gamma)$，那么线性变换后 $Y = aU + b \sim \text{Cauchy}(a\mu + b, |a|\gamma)$。这让我们可以直接在参数空间计算，无需采样。
+### 4.1 分类决策
+
+对于词汇表中的每个词汇 $k$：
+
+**融合噪声后的决策分布**：
+基于融合输入分布 $U'_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i} + |b_{\text{noise}}|)$，经过权重向量 $W_{\text{cls},k} \in \mathbb{R}^C$ 的线性变换（内积）后：
+
+$$S_{k,i} = W_{\text{cls},k} \cdot U'_i + b_{\text{cls},k} \sim \text{Cauchy}(\text{loc}_{S_{k,i}}, \text{scale}_{S_{k,i}})$$
+
+其中：
+$$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k}$$
+$$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$$
+
+这里 $|W_{\text{cls},k}|$ 表示对权重向量逐元素取绝对值，然后与尺度向量进行内积。
+
+**初始化后的计算**：由于 $W_{\text{cls}} = W_{\text{Qwen\_lm\_head}}$，$b_{\text{cls}} = 0$，且 $\text{loc}_{U_i} = z_i$：
+
+$$\text{loc}_{S_{k,i}} = W_{\text{Qwen},k} \cdot z_i$$
+
+这正是原始 Qwen 的 logits！同时：
+$$\text{scale}_{S_{k,i}} = |W_{\text{Qwen},k}| \cdot (\gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|)$$
+
+### 4.2 回归决策
+
+**融合噪声后的决策分布**：
+基于融合输入分布 $U'_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i} + |b_{\text{noise}}|)$，经过回归权重向量 $W_{\text{reg}} \in \mathbb{R}^C$ 的线性变换：
+
+$$Y_i = W_{\text{reg}} \cdot U'_i + b_{\text{reg}} \sim \text{Cauchy}(\text{loc}_{Y_i}, \text{scale}_{Y_i})$$
+
+其中：
+$$\text{loc}_{Y_i} = W_{\text{reg}} \cdot \text{loc}_{U_i} + b_{\text{reg}}$$
+$$\text{scale}_{Y_i} = |W_{\text{reg}}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$$
+
+这里 $|W_{\text{reg}}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$ 表示先对权重向量逐元素取绝对值，再与融合后的尺度向量进行内积。
+
+**初始化后的计算**：使用标准初始化（如 Xavier），$W_{\text{reg}}$ 的元素较小，因此：
+
+$$\text{loc}_{Y_i} = W_{\text{reg}} \cdot z_i + b_{\text{reg}}$$
+$$\text{scale}_{Y_i} = |W_{\text{reg}}| \cdot (\gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|)$$
 
 ## 5. 模块五：损失计算 (Loss Calculation)
 
@@ -233,23 +240,24 @@ graph TD
     subgraph "输入"
         A["<b>loc_S</b><br>形状: [B, S, V_full]"]
         B["<b>scale_S</b><br>形状: [B, S, V_full]"]
-        C["<b>真实类别标签 (y)</b><br>形状: [B, S]"]
-        D["<b>attention_mask</b><br>形状: [B, S]"]
+        C["<b>C_k 阈值参数</b><br>形状: [V_full]"]
+        D["<b>真实标签 labels</b><br>形状: [B, S]"]
     end
 
-    D --> E["创建有效位置掩码<br>valid_mask = (y != ignore_index)"]
-    
-    subgraph "计算过程"
-        A & B --> F["计算 OvR 概率 P<br>形状: [B, S, V_full]"]
-        C --> G["One-hot 编码<br>y_onehot: [B, S, V_full]"]
-        F & G --> H["计算 OvR 二元交叉熵<br>对每个类别独立计算"]
-        H -- "对词汇表维度求和" --> I["L_cls: [B, S]"]
+    subgraph "OvR 概率计算"
+        A & B & C --> E["对每个词汇 k 计算:<br>P_{k,i} = 1/2 + (1/π)arctan((loc_S_{k,i} - C_k)/scale_S_{k,i})"]
+        E --> F["<b>OvR 概率张量 P</b><br>形状: [B, S, V_full]"]
     end
     
-    I & E --> J["应用掩码<br>L_cls = L_cls * valid_mask"]
-    J --> K["<b>有效分类损失 L_cls</b><br>形状: [B, S]"]
+    subgraph "损失计算"
+        D --> G["转换为 one-hot 编码 y<br>形状: [B, S, V_full]"]
+        F & G --> H["计算二元交叉熵:<br>-[y·log(P) + (1-y)·log(1-P)]"]
+        H --> I["对词汇维度求和"]
+    end
+
+    I --> J["<b>分类损失 L_cls</b><br>形状: [B, S]"]
     
-    style K fill:#e3f2fd,stroke:#1b5e20,stroke-width:2px
+    style J fill:#e3f2fd,stroke:#1b5e20,stroke-width:2px
 ```
 
 我们不使用标准的 Softmax，而是对每个类别进行独立的"一对多"（One-vs-Rest, OvR）判断。
@@ -276,6 +284,8 @@ graph TD
 
 3. **计算 OvR 概率**：
    $$P_{k,i} = P(S_{k,i} > C_k) = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$$
+
+   这里利用了柯西分布的 CDF 简洁形式。
 
 4. **计算二元交叉熵损失**：
    $$\mathcal{L}_{\text{bce}, k, i} = -[y_{\text{onehot}, k, i} \log P_{k,i} + (1-y_{\text{onehot}, k, i}) \log (1 - P_{k,i})]$$
@@ -364,23 +374,22 @@ graph TD
     subgraph "输入"
         A["<b>loc_Y</b><br>形状: [B, S]"]
         B["<b>scale_Y</b><br>形状: [B, S]"]
-        C["<b>真实数值</b><br>形状: [B, S]"]
-        D["<b>P_&lt;NUM&gt; 概率</b><br>(来自 L_cls 计算过程)<br>形状: [B, S]"]
-        E["<b>数值位置掩码 (m)</b><br>形状: [B, S]"]
+        C["<b>numeric_values</b><br>(真实数值)<br>形状: [B, S]"]
+        D["<b>P_&lt;NUM&gt;</b><br>(来自分类)<br>形状: [B, S]"]
+        E["<b>num_mask</b><br>(labels == NUM_TOKEN_ID)<br>形状: [B, S]"]
     end
 
-    subgraph "路径 A：计算基础回归损失"
-        A & B & C --> F["计算柯西负对数似然"]
+    subgraph "路径 A：柯西负对数似然"
+        A & B & C --> F["L_nll = log(π·scale_Y) +<br>log(1 + ((v_true - loc_Y)/scale_Y)²)"]
         F --> G["<b>基础回归损失 L_nll</b><br>形状: [B, S]"]
     end
 
-    subgraph "路径 B：计算门控权重"
-        D & E --> H["计算门控权重<br>Gate = m * (α + (1-α)P_&lt;NUM&gt;)"]
+    subgraph "路径 B：门控权重计算"
+        D & E --> H["Gate = num_mask ×<br>(α + (1-α)·P_&lt;NUM&gt;)"]
         H --> I["<b>门控权重 Gate</b><br>形状: [B, S]"]
     end
 
-    J[逐元素相乘]
-    G & I --> J
+    G & I --> J["L_reg_gated = Gate × L_nll<br>(逐元素相乘)"]
     J --> K["<b>门控回归损失 L_reg_gated</b><br>形状: [B, S]"]
 
     style K fill:#fff3e0,stroke:#e65100,stroke-width:2px
@@ -390,12 +399,13 @@ graph TD
 
 -   **输入**: 
     - 回归决策分布参数: `loc_Y`, `scale_Y` (形状: `[B, S]`)
-    - 真实数值: `true_numeric_values` (形状: `[B, S]`)
+    - 真实数值: `numeric_values` (形状: `[B, S]`)
     - `<NUM>`词元的预测概率: $P_{\text{<NUM>},i}$
+    - 数值位置掩码: `num_mask` (形状: `[B, S]`)
 -   **处理**： 
     
     柯西分布的负对数似然：
-    $$\mathcal{L}_{\text{nll},i} = \log(\pi \cdot \text{scale}_{Y_i}) + \log\left(1 + \left(\frac{y_{\text{true},i} - \text{loc}_{Y_i}}{\text{scale}_{Y_i}}\right)^2\right)$$
+    $$\mathcal{L}_{\text{nll},i} = \log(\pi \cdot \text{scale}_{Y_i}) + \log\left(1 + \left(\frac{v_{\text{true},i} - \text{loc}_{Y_i}}{\text{scale}_{Y_i}}\right)^2\right)$$
     
     门控机制（$\alpha$ 默认为0）：
     $$\text{gate}_i = m_i \cdot \left(\alpha + (1-\alpha) \cdot P_{\text{<NUM>},i}\right)$$
@@ -409,29 +419,29 @@ graph TD
 
 ```mermaid
 graph TD
-    subgraph "Inputs"
-        A["<b>分类损失 L_cls</b><br>[B, S]"]
-        B["<b>门控回归损失 L_reg_gated</b><br>[B, S]"]
-        C["<b>注意力掩码 attention_mask</b><br>[B, S]"]
-        D["<b>数值位置掩码 m</b><br>[B, S]"]
+    subgraph "损失张量输入"
+        A["<b>L_cls</b><br>分类损失<br>[B, S]"]
+        B["<b>L_reg_gated</b><br>门控回归损失<br>[B, S]"]
+        C["<b>cls_mask</b><br>(= attention_mask)<br>[B, S]"]
+        D["<b>num_mask</b><br>(labels == NUM_TOKEN_ID & attention_mask)<br>[B, S]"]
     end
 
-    subgraph "分类损失路径"
-        A & C --> E["带掩码的分类损失<br>L_cls * attention_mask"]
-        E -- "求和后除以 attention_mask.sum()" --> F["<b>平均分类损失 L_cls_mean</b><br>(标量)"]
+    subgraph "分类损失归约"
+        A & C --> E["L_cls_masked = L_cls × cls_mask"]
+        E --> F["sum(L_cls_masked) / sum(cls_mask)"]
+        F --> G["<b>L_cls_mean</b><br>平均分类损失<br>(标量)"]
     end
 
-    subgraph "回归损失路径"
-        B & D --> G["门控回归损失<br>(已包含掩码 m)"]
-        G -- "求和后除以 m.sum()" --> H["<b>有效回归损失 L_reg_eff</b><br>(标量)"]
+    subgraph "回归损失归约"
+        B --> H["注意: L_reg_gated 已包含 num_mask"]
+        H --> I["sum(L_reg_gated) / sum(num_mask)"]
+        I --> J["<b>L_reg_effective</b><br>有效回归损失<br>(标量)"]
     end
 
-    subgraph "合并"
-        F & H --> I["加权求和<br>L_total = L_cls_mean + λ * L_reg_eff"]
-        I --> J["<b>最终总损失 L_total</b><br>(标量)"]
-    end
+    G & J --> K["L_total = L_cls_mean + λ × L_reg_effective"]
+    K --> L["<b>L_total</b><br>最终总损失<br>(标量)"]
 
-    style J fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    style L fill:#fce4ec,stroke:#880e4f,stroke-width:2px
     style C fill:#f1f8e9
     style D fill:#f1f8e9
 ```
@@ -439,7 +449,7 @@ graph TD
 最终的总损失由平均分类损失和有效的平均回归损失加权构成。
 
 1.  **平均分类损失**：对所有有效词元的分类损失求平均
-    $$\mathcal{L}_{\text{cls\_mean}} = \frac{\sum_{i \in \text{valid}} L_{\text{cls}, i}}{\sum_{i} \text{valid\_mask}_i}$$
+    $$\mathcal{L}_{\text{cls\_mean}} = \frac{\sum_{i \in \text{valid}} L_{\text{cls}, i}}{\sum_{i} \text{cls\_mask}_i}$$
 
 2.  **有效回归损失**：只对数值词元的回归损失求平均
     $$\mathcal{L}_{\text{reg\_eff}} = \frac{\sum_{i} \mathcal{L}_{\text{reg\_gated},i}}{\sum_{i} m_{i}}$$
