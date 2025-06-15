@@ -299,7 +299,7 @@ $$W_{\text{cls}} \leftarrow W_{\text{Qwen\_lm\_head}}, \quad b_{\text{cls}} = 0$
 - 融合输入分布（加入噪声）：
   $$U'_i \sim \text{Cauchy}(z_i, \gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|)$$
   
-  其中 $\gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|$ 表示逐元素相加。
+  其中 $\gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|$ 表示对逐元素相加。
   
 - 对于词汇 $k$，经过权重向量 $W_{\text{cls},k} \in \mathbb{R}^C$ 的线性变换（内积）后：
   $$S_{k,i} = W_{\text{cls},k} \cdot U'_i + b_{\text{cls},k} \sim \text{Cauchy}\left(W_{\text{cls},k} \cdot z_i, |W_{\text{cls},k}| \cdot (\gamma_0 \cdot \mathbf{1}_C + |b_{\text{noise}}|)\right)$$
@@ -603,99 +603,112 @@ graph TD
     subgraph "输入"
         A["<b>loc_S</b><br>形状: [B, S, V_full]"]
         B["<b>scale_S</b><br>形状: [B, S, V_full]"]
-        C["<b>真实类别标签 (y)</b><br>形状: [B, S, V_full]"]
+        C["<b>C_k 阈值参数</b><br>形状: [V_full]"]
+        D["<b>真实标签 labels</b><br>形状: [B, S]"]
     end
 
-    D[计算 OvR 概率 P]
-    A & B --> D
+    subgraph "OvR 概率计算"
+        A & B & C --> E["对每个词汇 k 计算:<br>P_{k,i} = 1/2 + (1/π)arctan((loc_S_{k,i} - C_k)/scale_S_{k,i})"]
+        E --> F["<b>OvR 概率张量 P</b><br>形状: [B, S, V_full]"]
+    end
     
-    subgraph "计算过程"
-        direction LR
-        D --> E["<b>概率张量 P</b><br>形状: [B, S, V_full]"]
-        E & C --> F["计算 OvR 二元交叉熵"]
-        F -- "对词汇表维度(V_full)求和" --> G
+    subgraph "损失计算"
+        D --> G["转换为 one-hot 编码 y<br>形状: [B, S, V_full]"]
+        F & G --> H["计算二元交叉熵:<br>-[y·log(P) + (1-y)·log(1-P)]"]
+        H --> I["对词汇维度求和"]
     end
 
-    G["<b>分类损失 L_cls</b><br>形状: [B, S]"]
+    I --> J["<b>分类损失 L_cls</b><br>形状: [B, S]"]
     
-    style G fill:#e3f2fd,stroke:#1b5e20,stroke-width:2px
+    style J fill:#e3f2fd,stroke:#1b5e20,stroke-width:2px
 ```
-* **解读**：模型输出的 `loc_S` 和 `scale_S` 首先被用来计算词汇表中每个词的 OvR 概率，得到一个形状为 `[B, S, V_full]` 的概率张量 `P`。然后，这个概率张量与同样形状的真实标签 `y` 一起计算交叉熵损失。最后，将每个位置上所有词汇的损失相加（在 `V_full` 维度上求和），最终得到一个形状为 `[B, S]` 的张量 `L_cls`，代表了批次中每个序列在每个位置的分类损失。
+
+**关键点**：
+- 使用 OvR（One-versus-Rest）方法，每个词汇独立计算二元分类概率
+- 引入可学习的阈值参数 `C_k`，允许模型为不同词汇学习不同的决策边界
+- 最终损失是所有词汇的二元交叉熵之和
 
 ---
 
 #### 图 5.2：门控回归损失 (`L_reg_gated`) 的计算
 
-这张图是整个损失计算中最精巧的部分，详细解释了门控机制的数据流。
+这张图详细展示了门控机制如何结合分类概率和回归损失。
 
 ```mermaid
 graph TD
     subgraph "输入"
         A["<b>loc_Y</b><br>形状: [B, S]"]
         B["<b>scale_Y</b><br>形状: [B, S]"]
-        C["<b>真实数值</b><br>形状: [B, S]"]
-        D["<b>P_&lt;NUM&gt; 概率</b><br>(来自 L_cls 计算过程)<br>形状: [B, S]"]
-        E["<b>数值位置掩码 (m)</b><br>形状: [B, S]"]
+        C["<b>numeric_values</b><br>(真实数值)<br>形状: [B, S]"]
+        D["<b>P_&lt;NUM&gt;</b><br>(来自分类)<br>形状: [B, S]"]
+        E["<b>num_mask</b><br>(labels == NUM_TOKEN_ID)<br>形状: [B, S]"]
     end
 
-    subgraph "路径 A：计算基础回归损失"
-        A & B & C --> F["计算柯西负对数似然"]
+    subgraph "路径 A：柯西负对数似然"
+        A & B & C --> F["L_nll = log(π·scale_Y) +<br>log(1 + ((y_true - loc_Y)/scale_Y)²)"]
         F --> G["<b>基础回归损失 L_nll</b><br>形状: [B, S]"]
     end
 
-    subgraph "路径 B：计算门控权重"
-        D & E --> H["计算门控权重<br>Gate = m * (α + (1-α)P_&lt;NUM&gt;)"]
+    subgraph "路径 B：门控权重计算"
+        D & E --> H["Gate = num_mask ×<br>(α + (1-α)·P_&lt;NUM&gt;)"]
         H --> I["<b>门控权重 Gate</b><br>形状: [B, S]"]
     end
 
-    J[逐元素相乘]
-    G & I --> J
+    G & I --> J["L_reg_gated = Gate × L_nll<br>(逐元素相乘)"]
     J --> K["<b>门控回归损失 L_reg_gated</b><br>形状: [B, S]"]
-
 
     style K fill:#fff3e0,stroke:#e65100,stroke-width:2px
 ```
-* **解读**：此流程有两个并行的路径。**路径 A** 使用回归分布参数和真实数值计算出一个基础的回归损失张量 `L_nll`。**路径 B** 利用分类任务中得到的 `<NUM>` 词元概率，结合一个指示真实标签是否为数值的掩码 `m`，计算出一个同样形状的 `Gate` 张量。最后，将 `L_nll` 和 `Gate` **逐元素相乘**，得到最终的门控回归损失 `L_reg_gated`。这种设计（默认 $\alpha=0$）确保了只有在真实标签是数值 `(m=1)` 且模型有一定把握认为是数值 `(P_<NUM> > 0)` 的位置，回归损失才会被有效计算。
+
+**门控机制解释**（当 α=0 时）：
+- `Gate = num_mask × P_<NUM>` 
+- 只有当真实标签是数值（`num_mask=1`）且模型预测为数值的概率高时，回归损失才被充分计算
+- 这种软门控避免了硬性的 0/1 切换，使梯度流更加平滑
 
 ---
 
 #### 图 5.3：总损失 (`L_total`) 的合并
 
-这张最终的图展示了如何将前两步计算出的损失张量合并，并得到最终用于反向传播的标量损失值。
+这张图展示了如何正确地将分类损失和回归损失合并为最终的训练目标。
 
 ```mermaid
 graph TD
-    subgraph "Inputs"
-        A["<b>分类损失 L_cls</b><br>[B, S]"]
-        B["<b>门控回归损失 L_reg_gated</b><br>[B, S]"]
-        C["<b>注意力掩码 attention_mask</b><br>[B, S]"]
-        D["<b>数值位置掩码 m</b><br>[B, S]"]
+    subgraph "损失张量输入"
+        A["<b>L_cls</b><br>分类损失<br>[B, S]"]
+        B["<b>L_reg_gated</b><br>门控回归损失<br>[B, S]"]
+        C["<b>cls_mask</b><br>(= attention_mask)<br>[B, S]"]
+        D["<b>num_mask</b><br>(labels == NUM_TOKEN_ID & attention_mask)<br>[B, S]"]
     end
 
-    subgraph "分类损失路径"
-        A & C --> E["带掩码的分类损失<br>L_cls * attention_mask"]
-        E -- "求和后除以 attention_mask.sum()" --> F["<b>平均分类损失 L_cls_mean</b><br>(标量)"]
+    subgraph "分类损失归约"
+        A & C --> E["L_cls_masked = L_cls × cls_mask"]
+        E --> F["sum(L_cls_masked) / sum(cls_mask)"]
+        F --> G["<b>L_cls_mean</b><br>平均分类损失<br>(标量)"]
     end
 
-    subgraph "回归损失路径"
-        B & D --> G["门控回归损失<br>(已包含掩码 m)"]
-        G -- "求和后除以 m.sum()" --> H["<b>有效回归损失 L_reg_eff</b><br>(标量)"]
+    subgraph "回归损失归约"
+        B --> H["注意: L_reg_gated 已包含 num_mask"]
+        H --> I["sum(L_reg_gated) / sum(num_mask)"]
+        I --> J["<b>L_reg_effective</b><br>有效回归损失<br>(标量)"]
     end
 
-    subgraph "合并"
-        F & H --> I["加权求和<br>L_total = L_cls_mean + λ * L_reg_eff"]
-        I --> J["<b>最终总损失 L_total</b><br>(标量)"]
-    end
+    G & J --> K["L_total = L_cls_mean + λ × L_reg_effective"]
+    K --> L["<b>L_total</b><br>最终总损失<br>(标量)"]
 
-    style J fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    style L fill:#fce4ec,stroke:#880e4f,stroke-width:2px
     style C fill:#f1f8e9
     style D fill:#f1f8e9
 ```
-* **关键修正与解读**：我们**不能**简单地将 `L_cls` 和 `L_reg_gated` 逐元素相加再求平均。由于数值 (`<NUM>`) 词元在文本中是**稀疏**的，`L_reg_gated` 张量中绝大部分元素为零。如果直接求平均，回归损失的信号会被严重"稀释"，无法有效指导模型优化。
-* **正确流程**：正确的做法是分别对两个损失进行归约，然后再合并：
-   1.  **分类损失**：对 `L_cls` 张量应用 `attention_mask` 来排除填充词元，然后求平均，得到一个标量 `L_cls_mean`。
-   2.  **回归损失**：对 `L_reg_gated` 张量应用掩码 `m`，只对真实数值词元求和再求平均，得到一个标量 `L_reg_eff`。
-   3.  **总损失**：将 `L_cls_mean` 和 `L_reg_eff` 进行加权求和，得到最终的标量损失 `L_total`。
+
+**关键设计决策**：
+1. **分类损失**：在所有有效词元上平均（使用 `cls_mask`）
+2. **回归损失**：仅在数值词元上平均（使用 `num_mask`），避免稀疏性导致的信号稀释
+3. **加权系数 λ**：平衡两个任务的重要性，是一个重要的超参数
+
+这种设计确保了：
+- 分类任务覆盖所有词元，保持语言建模能力
+- 回归任务专注于数值预测，不被非数值位置稀释
+- 两个任务通过门控机制协同学习
 
 ## 7. 核心洞察与总结
 
