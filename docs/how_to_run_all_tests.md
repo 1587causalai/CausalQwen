@@ -233,6 +233,7 @@ def test_weight_copying():
 - 成功继承Qwen2ForCausalLM
 - 参数量正确 (944,464)
 - 四大模块 (Qwen→Abduction→Action→OvR) 正确连接
+
 - 支持预训练权重复制
 
 **数值鲁棒性**: 
