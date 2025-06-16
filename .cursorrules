@@ -1,29 +1,49 @@
 ## 项目核心文档
 
-design-docs/math/mathematical_foundations.md 是整个项目详细数学原理的文档. docs/mathematical_foundations.md 是数学文档的简化版本. 请优先使用简化版本.
+design-docs/causal_qwen.md 是完整的设计文档，937行详细理论与实现。
 
-design-docs/core-design.md 是严格依照数学内核设计的架构文档.
+docs/mvp_design.md 是当前MVP阶段的设计文档和进度跟踪。
 
-design-docs/U_deep_dive.md 是因果表征变量 U 的深度解读文档.
+docs/implementation_plan.md 是技术实现指南。
 
-docs/testing_guide.md 是测试指南文档.
+docs/mathematical_foundations.md 是数学原理文档
+
+## 项目当前状态 (2025-06-16)
+
+**当前分支**: causal-mvp  
+**版本**: MVP v0.1.0  
+**状态**: 核心框架验证完成，测试6/6通过
+
+### 已实现
+- 核心架构：AbductionNetwork + ActionNetwork + OvRClassifier + CausalQwenMVPForCausalLM
+- 推理模式：标准/因果/兼容三种模式全部验证
+- 继承架构：成功继承Qwen2ForCausalLM
+- 测试框架：scripts/check_everything_works.py 全部通过
+
+### 进行中 (v0.2.0)
+- Cauchy分布数值稳定性优化
+- 从真实Qwen2模型复制权重的初始化策略
 
 
 ## 项目目录结构
 
-~/models/Qwen2.5-0.5B 是 Qwen 的模型文件，请注意这个路径是默认路径.
+~/models/Qwen2.5-0.5B 是 Qwen 的模型文件，请注意这个路径是默认路径。
 
-design-docs/PROJECT_BLUEPRINT.md 是项目目录结构的文档.
+src/causal_qwen_mvp/ 是当前核心实现目录。
 
-各种功能的快速脚本应该放在 scripts 目录下.
+scripts/ 目录放各种功能的快速脚本。
 
-非强相关的背景知识应该放在 docs/background 目录下，保持我们项目目录的整洁.
+archive/ 目录放已清理的旧代码，保持项目目录整洁。
+
+非强相关的背景知识应该放在 docs/background 目录下。
 
 
-## 偏好设置
+## 技术偏好设置
 
-所有 python 画图都要使用英文图标避免字体问题和方便分享
+所有 python 画图都要使用英文图标避免字体问题和方便分享。
 
-Qwen 的已用词汇表大小为K， CausalQwen 的已用词汇表大小为K+1, 其中新增的 <NUM> 词元用于表示数值预测。请注意 Qwen 中有271个保留词汇，我们使用第一个保留词汇来表示<NUM> 词元。
+AbductionNetwork 是用于归因推断而不是因果推断这个模糊表述。
 
-AbductionNetwork 是用于归因推断而不是因果推断这个模糊表述
+**核心数学框架**: Y = f(U, ε)，其中U是个体选择变量，ε是外生噪声，f是普适因果机制。
+
+**柯西分布使用原则**: 利用线性稳定性实现解析计算，避免采样开销。
