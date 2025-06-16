@@ -840,8 +840,7 @@ $$\mathcal{L} = \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ \frac{1}{|S|} \sum_{i
 
 - **核心损失指标** (`train/*`)
   - `train/accuracy`: 分类准确率
-  - `train/total_loss`: 总优化目标
-  - `train/cls_loss_mean`: 平均分类损失
+  - `train/loss`: 总优化目标
 
 - **内部状态分布** (`dist/*`)
   - `dist/U_loc_*`: 个体表征位置参数统计
