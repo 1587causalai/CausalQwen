@@ -204,51 +204,60 @@ $$\mathcal{L}_{\text{total}} = \underbrace{\frac{\sum_i L_{\text{cls}, i} \cdot 
 
 行动网络输出的决策位置参数 `loc_S` (形状: `[B, S, V_full]`) 可以被直接视作标准语言模型输出的 logits。通过对 `loc_S` 应用 `Softmax` 函数，我们可以得到一个归一化的词汇表概率分布：
 $$
-P_{\text{softmax}}(y_i=k|x) = \frac{\exp(\text{loc}_{S_{k,i}})}{\sum_{j=1}^{V_{\text{full}}} \exp(\text{loc}_{S_{j,i}})}
+P_{\text{softmax}}(y_{\text{cls},i} =k|x) = \frac{\exp(\text{loc}_{S_{k,i}})}{\sum_{j=1}^{V_{\text{full}}} \exp(\text{loc}_{S_{j,i}})}
 $$
 随后，便可在这组概率上执行标准的 `top-k`/`top-p` 采样, 这保证了 CausalQwen 可以作为 Qwen 的一个直接替代和功能超集来使用。
 
-另一种可选的归一化方法是直接对所有类别的 OvR 概率进行求和，并以此为分母进行归一化，这为评估模型提供了不同的视角
+另一种可选的归一化方法是直接对所有类别的 OvR 概率进行求和，并以此为分母进行归一化，这为评估模型提供了不同的视角.
+
+#### 3.3.1 预训练对齐：高效的知识迁移
+
+为了让 CausalQwen 在正式训练前就能很好地继承基座 Qwen 模型的"语言直觉"，我们设计了一个高效的预训练对齐阶段。其核心思想是，让 CausalQwen 学会模仿 Qwen 的预测行为，但我们采用了一种比在线训练更高效的**离线特征蒸馏**策略。
+
+该策略分为两个阶段：
+
+1.  **离线数据生成**：我们首先一次性地将一个大型语料库喂给固定的 Qwen 模型，并为每个位置记录下 Qwen 输出的**特征向量 (logits前的`last_hidden_state`)** 以及其**Top-K预测概率**。这样我们就获得了一个大规模的`(特征, Top-K概率)`的映射数据集。
+
+2.  **高效对齐训练**：然后，我们只训练 CausalQwen 的新模块（归因网络和行动网络），让它们学习如何根据离线数据集中记录的`特征`，复现出对应的`Top-K概率`。因为这个阶段不再需要运行庞大的Qwen主干，训练速度得到了极大的提升。
+
+通过这种方式，CausalQwen 的 `OvR` 概率输出的预测模式，能够与 Qwen 的 `Softmax` 预测模式在 Top-K 的层面上高度对齐，为后续的微调提供了一个非常高质量的起点。
 
 ### 3.4 高级（序列）因果采样：分解并固定随机性来源
 
-CausalQwen 的设计允许我们对生成过程中的“随机性”进行前所未有的精细控制。传统的采样（如 top-k）在每一步都从一个临时的概率分布中抽取结果，导致随机性是无记忆、逐词元独立的。
+CausalQwen 的设计允许我们对生成过程中的"随机性"进行前所未有的精细控制。传统的采样（如 top-k）在每一步都从一个临时的概率分布中抽取结果，导致随机性是无记忆、逐词元独立的。
 
 高级（序列）因果采样模式则基于一个核心思想：**在一次完整的生成任务中，将模型两大不确定性来源（个体 `U` 或噪声 `noise`）之一的随机实例固定下来，并观察其在整个生成过程中如何持续地与另一不确定性来源相互作用。** 这使得我们能进行两种深刻的反事实探究。
 
-
 #### 3.4.1 模式一：共享"个体选择因子" (Fixing the Individual, Observing its Interaction with Noise)
 
-* **研究目标**：此模式旨在回答：“如果我们预先选定**一个确切的个体**，然后观察这个个体在面对一系列**不可预测的、逐-词元-独立的随机噪声**时，其行为会如何展开？”
+* **研究目标**：此模式旨在回答："如果我们预先选定**一个确切的个体**，然后观察这个个体在面对一系列**不可预测的、逐-词元-独立的随机噪声**时，其行为会如何展开？"
 * **实现机制**:
 
-  1. **采样个体**: 在生成任务开始时，采样一个固定的“个体选择因子” $\vec{\epsilon}_{\text{seed}} \sim U(0, 1)^C$。在第 $i$ 步，我们用它计算出该上下文中的**具体个体表征** $u_i$：
+  1. **采样个体**: 在生成任务开始时，采样一个固定的"个体选择因子" $\vec{\epsilon}_{\text{seed}} \sim U(0, 1)^C$。在第 $i$ 步，我们用它计算出该上下文中的**具体个体表征** $u_i$：
      $$
      u_i = \text{loc}_{U_i} + \text{scale}_{U_i} \odot \tan\left(\pi \left(\vec{\epsilon}_{\text{seed}} - 0.5\right)\right)
      $$
-  2. **构建决策输入分布**: 这个确定的个体 $u_i$ 随即进入一个充满不确定性的“决策情境”。其有效的输入心智状态不再是一个确定的向量，而是一个**包含了外生随机噪声的分布**：
+  2. **构建决策输入分布**: 这个确定的个体 $u_i$ 随即进入一个充满不确定性的"决策情境"。其有效的输入心智状态不再是一个确定的向量，而是一个**包含了外生随机噪声的分布**：
      $$
      U'_{\text{input}, i} \sim \text{Cauchy}(u_i, |b_{noise}|)
      $$
   3. **解析决策**: 我们将这个**输入分布** $U'_{\text{input}, i}$ 传入行动网络。由于柯西分布的线性稳定性，我们可以**解析地**计算出最终的分类和回归决策分布，并取其位置参数（中位数）作为该步骤的最终预测。
 
-* 随机性的来源被分解：代表“个体选择”的随机性（来自 $U$）在任务开始时被一次性固定。而代表“不可控扰动”的随机性（来自 `noise`）则在**每一步的决策中都保持其分布形态**，代表了每一token 生成决策时都会遇到的、全新的、不可预测的微小扰动。
-
+* 随机性的来源被分解：代表"个体选择"的随机性（来自 $U$）在任务开始时被一次性固定。而代表"不可控扰动"的随机性（来自 `noise`）则在**每一步的决策中都保持其分布形态**，代表了每一token 生成决策时都会遇到的、全新的、不可预测的微小扰动。
 
 #### 3.4.2 模式二：共享"系统性噪声实例" (Fixing the Noise, Observing the Uncertain Individual)
 
-* **研究目标**：此模式旨在回答：“如果一个系统存在一种**持续不变的、系统性的随机影响**，那么一个本身具有内在不确定性的**个体（一个分布，而非一个实体）** 在这种影响下，其行为会如何展开？”
+* **研究目标**：此模式旨在回答："如果一个系统存在一种**持续不变的、系统性的随机影响**，那么一个本身具有内在不确定性的**个体（一个分布，而非一个实体）** 在这种影响下，其行为会如何展开？"
 * **实现机制**:
 
-  1. **采样噪声**: 在生成任务开始时，采样一个固定的“系统性噪声实例” $\vec{\epsilon}_{\text{noise}} \sim \text{Cauchy}(0, I)$。
+  1. **采样噪声**: 在生成任务开始时，采样一个固定的"系统性噪声实例" $\vec{\epsilon}_{\text{noise}} \sim \text{Cauchy}(0, I)$。
   2. **构建受扰动的心智分布**: 在第 $i$ 步，我们不选定具体个体，而是取其完整的**个体因果表征分布** $U_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$。然后，我们将固定的噪声实例作用于这个分布的定位上。根据柯西分布的加法稳定性，我们得到一个新的、被系统性偏移的输入分布：
      $$
      U'_{\text{input}, i} \sim \text{Cauchy}(\text{loc}_{U_i} + |b_{\text{noise}}| \cdot \vec{\epsilon}_{\text{noise}}, \text{scale}_{U_i})
      $$
   3. **解析决策**: 同样，我们将这个新的**输入分布** $U'_{\text{input}, i}$ 传入行动网络，解析地计算出最终决策分布，并取其位置参数作为预测。
 
-* 随机性的来源被再次分解：代表“不可控扰动”的随机性被一次性采样并固定下来，成为一种贯穿始终的“风格”或“偏差”。而代表“个体选择”的随机性则在**每一步都保持其完整的分布形态**（由变化的 `loc_U` 和 `scale_U` 定义），代表了个体在不同上下文归因推断的不确定性。
-
+* 随机性的来源被再次分解：代表"不可控扰动"的随机性被一次性采样并固定下来，成为一种贯穿始终的"风格"或"偏差"。而代表"个体选择"的随机性则在**每一步都保持其完整的分布形态**（由变化的 `loc_U` 和 `scale_U` 定义），代表了个体在不同上下文归因推断的不确定性。
 
 ## 4.初始化策略：知识迁移
 
@@ -273,8 +282,8 @@ CausalQwen 的设计允许我们对生成过程中的“随机性”进行前所
   这样 $\text{loc}_{U_i} = z_i$，即因果表征的位置参数直接等于 Qwen 的输出特征。
 
 - **尺度网络**：设置为产生常数尺度
-  $$W_{\text{scale}} \leftarrow 0, \quad b_{\text{scale}} \leftarrow \sigma_{\text{init}}$$
-  其中 $\sigma_{\text{init}} = 1.0$ 或类似的正数。这样 $\gamma_i = \text{softplus}(\sigma_{\text{init}})$ 是一个与输入无关的常数，提供了宽泛的先验分布。
+  $$W_{\text{scale}} \leftarrow 0, \quad b_{\text{scale}} \leftarrow \gamma_{\text{init}}$$
+  其中 $\gamma_{\text{init}} = 1.0$ 或类似的正数。这样 $\gamma_i = \text{softplus}(\gamma_{\text{init}})$ 是一个与输入无关的常数，提供了宽泛的先验分布。
 
 > **关键洞察**: 这种初始化策略确保了：
 > 1. 因果表征的位置参数完全继承了 Qwen 的知识表示
@@ -284,7 +293,7 @@ CausalQwen 的设计允许我们对生成过程中的“随机性”进行前所
 **数学推导**：在初始化状态下，对于位置 $i$：
 - 归因推断网络输出：
   $$\text{loc}_{U_i} = W_{\text{loc}} \cdot z_i + b_{\text{loc}} = I_H \cdot z_i + 0 = z_i$$
-  $$\text{scale}_{U_i} = \text{softplus}(W_{\text{scale}} \cdot z_i + b_{\text{scale}}) = \text{softplus}(0 \cdot z_i + \sigma_{\text{init}}) = \text{softplus}(\sigma_{\text{init}}) \cdot \mathbf{1}_C = \gamma_0 \cdot \mathbf{1}_C$$
+  $$\text{scale}_{U_i} = \text{softplus}(W_{\text{scale}} \cdot z_i + b_{\text{scale}}) = \text{softplus}(0 \cdot z_i + \gamma_{\text{init}}) = \text{softplus}(\gamma_{\text{init}}) \cdot \mathbf{1}_C = \gamma_0 \cdot \mathbf{1}_C$$
   
 - 因此，初始的因果表征分布为：
   $$U_i \sim \text{Cauchy}(z_i, \gamma_0 \cdot \mathbf{1}_C)$$
@@ -327,7 +336,7 @@ $$\gamma_{\text{reg},i} = |W_{\text{reg}}| \cdot (\gamma_0 \cdot \mathbf{1}_C + 
 
 通过上述初始化步骤，CausalQwen 在训练开始时具有以下性质：
 
--   **因果表征**: 对于每个位置 $i$，因果表征 $U_i$ 服从分布 $U_i \sim \text{Cauchy}(z_i, \gamma_0 \cdot \mathbf{1}_C)$，其中 $z_i \in \mathbb{R}^C$ 是 Qwen 的输出特征，$\gamma_0 = \text{softplus}(\sigma_{\text{init}})$ 是初始的常数尺度。
+-   **因果表征**: 对于每个位置 $i$，因果表征 $U_i$ 服从分布 $U_i \sim \text{Cauchy}(z_i, \gamma_0 \cdot \mathbf{1}_C)$，其中 $z_i \in \mathbb{R}^C$ 是 Qwen 的输出特征，$\gamma_0 = \text{softplus}(\gamma_{\text{init}})$ 是初始的常数尺度。
 -   **分类决策**: 由于完整复制了 Qwen 的 lm_head 权重，分类输出的位置参数与 Qwen 完全一致：$\text{loc}_{S_{k,i}} = W_{\text{Qwen},k} \cdot z_i$，对所有 $k \in [0, V_{\text{full}})$。
 -   **回归决策**: 位置参数 $\mu_{\text{reg},i} = W_{\text{reg}} \cdot z_i + b_{\text{reg}}$ 接近零均值，尺度参数由权重向量与尺度向量的内积决定。
 -   **知识保持**: 当使用兼容性采样（基于 `loc_S` 的 softmax）时，模型的输出分布与原始 Qwen 完全相同，确保了知识的完美迁移。

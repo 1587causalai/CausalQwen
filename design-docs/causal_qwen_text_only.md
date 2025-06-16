@@ -821,20 +821,54 @@ class ActionNetwork(nn.Module):
 
 ## 8. 训练策略
 
-### 8.1 训练目标
+### 8.1 预训练对齐阶段：高效离线特征蒸馏
+
+虽然第 7.3 节的静态初始化提供了一个良好的起点，但我们通过一个专门的预训练对齐阶段，可以更高效、更鲁棒地将教师模型（Qwen）的知识迁移到CausalQwen的学生模块中。我们采纳一种**两阶段离线特征蒸馏**的范式，它将预训练转化为一个高度优化的监督学习问题，专门训练 `AbductionNetwork` 和 `ActionNetwork`。
+
+#### 8.1.1 阶段一：离线数据生成
+
+此阶段一次性地创建一个高质量的蒸馏数据集。我们选取一个大型通用语料库，将其输入固定的Qwen教师模型。对于语料库中的每个词元位置，我们抽取出两样东西：
+1.  **输入特征 `z`**: Qwen最后一层Transformer的输出 `last_hidden_state`。
+2.  **输出目标**: 教师的`lm_head`所预测的**Top-K**词元索引及其对应的Softmax概率。
+
+最终，我们获得一个大规模的 `(z, Top-K_Probs)` 映射数据集，该数据集将用于下一阶段的训练。
+
+#### 8.1.2 阶段二：高效对齐训练
+
+在这个阶段，我们不再需要运行庞大的教师模型。训练循环直接从离线数据集中采样批次的 `(z, Top-K_Probs)` 对。
+- 特征 `z` 被直接送入 `AbductionNetwork`。
+- CausalQwen的模块进行前向传播，计算出OvR概率。
+- 使用Top-K对齐损失函数进行反向传播。
+
+#### 8.1.3 Top-K 对齐损失函数
+
+对齐是通过优化以下损失函数来实现的，该函数旨在最小化学生和教师在教师最自信的K个词元上的概率差异：
+
+$$ \mathcal{L}_{\text{Top-K}} = \sum_{i \in \text{batch}} \sum_{k \in \mathcal{K}_{\text{teacher}, i}} \left( P_{\text{student}, i,k}^{\text{OvR}} - P_{\text{teacher}, i,k}^{\text{Softmax}} \right)^2 $$
+
+其中 $\mathcal{K}_{\text{teacher}, i}$ 是教师模型在位置 $i$ 预测的Top-K词元索引集。
+
+#### 8.1.4 预期成果与优化目标
+
+通过在此目标上训练，CausalQwen的学生模块（`AbductionNetwork` 和 `ActionNetwork`）将学会模仿教师的决策逻辑。这种方法不仅保证了Top-K预测行为上的一致性，还传递了更丰富的"暗知识"。
+
+此阶段的优化目标包括**`AbductionNetwork`和`ActionNetwork`的所有权重，以及可训练的外生噪声参数 `b_noise` 和全局OvR决策阈值 `C_ovr`**。这为下游的主要因果目标微调提供了一个经过充分对齐和校准的、高质量的初始化模型。
+
+
+### 8.2 训练目标
 
 CausalQwen 基于 OvR 分类损失进行端到端训练，优化期望损失：
 
-$$\mathcal{L} = \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ \frac{1}{|S|} \sum_{i=1}^{|S|} L_{\text{cls}}(y_i | x_{<i}) \right]$$
+$$ \mathcal{L} = \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ \frac{1}{|S|} \sum_{i=1}^{|S|} L_{\text{cls}}(y_i | x_{<i}) \right] $$
 
-### 8.2 优化目标
+### 8.3 优化目标
 
 训练过程同时优化：
 1. **归因推断能力**：学习从上下文推断合理的个体分布
 2. **决策一致性**：学习个体到输出的稳定映射
 3. **不确定性校准**：学习何时应该有高/低确定性
 
-### 8.3 训练监控指标
+### 8.4 训练监控指标
 
 参考 [`mathematical_foundations.md`](./mathematical_foundations.md) 第5节的监控体系：
 
