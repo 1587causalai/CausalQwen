@@ -197,7 +197,7 @@ graph TD
     subgraph "子群体描述"
         L1 --> LOC["群体典型代表<br>μ = W_loc·z + b_loc<br>[B, S, C]"]
         L2 --> PRE["多样性预激活<br>W_scale·z + b_scale"]
-        PRE --> SCALE["群体内部多样性<br>σ = softplus(...)<br>[B, S, C]"]
+        PRE --> SCALE["群体内部多样性<br>γ = softplus(...)<br>[B, S, C]"]
     end
     
     subgraph "个体子群体分布"
@@ -283,9 +283,9 @@ class AbductionNetwork(nn.Module):
 ```mermaid
 graph TB
     subgraph "Step 1: 外生噪声注入"
-        U["个体群体<br>U ~ Cauchy(μ, σ)"] --> Fusion["噪声融合"]
+        U["个体群体<br>U ~ Cauchy(μ, γ)"] --> Fusion["噪声融合"]
         Epsilon["外生噪声<br>ε ~ Cauchy(0, |b_noise|)"] --> Fusion
-        Fusion --> U_prime["融合分布<br>U' ~ Cauchy(μ, σ + |b_noise|)"]
+        Fusion --> U_prime["融合分布<br>U' ~ Cauchy(μ, γ + |b_noise|)"]
     end
     
     subgraph "Step 2: 普适线性因果律"
@@ -429,7 +429,7 @@ $$\mathcal{L} = \frac{\sum_{i=1}^S L_{\text{cls},i}}{\sum_{i=1}^S \text{mask}_i}
 ### 5.1 标准推理（期望决策）
 
 ```mermaid
-graph TD
+graph LR
     subgraph "输入：分布参数"
         A1["loc_S_k, scale_S_k<br>每个词汇的决策分布"]
         A2["OvR 阈值 C_ovr"]
@@ -476,7 +476,7 @@ graph LR
 CausalQwen 完全兼容传统语言模型的采样方法：
 
 ```mermaid
-graph TD
+graph LR
     A["loc_S<br>[B, S, V]"] --> B["Softmax"]
     B --> C["传统概率分布"]
     C --> D["Top-k / Top-p 采样"]
@@ -497,9 +497,9 @@ $$P_{\text{softmax}}(y_i=k|x) = \frac{\exp(\text{loc}_{S_{k,i}})}{\sum_{j=1}^{V}
 graph LR
     Prompt["Prompt"] --> Forward["前向传播<br>获得 U_t"]
     Forward --> Mode{推理模式}
-    Mode -->|标准| Std["期望决策"]
-    Mode -->|因果| Causal["个体采样"]
-    Mode -->|传统| Trad["Softmax"]
+    Mode -->|standard inference| Std["期望决策"]
+    Mode -->|causal sampling| Causal["因果采样"]
+    Mode -->|traditional inference| Trad["传统推理"]
     Std --> Next["下一词元"]
     Causal --> Next
     Trad --> Next
@@ -512,38 +512,67 @@ graph LR
     style Done fill:#e8f5e9
 ```
 
-高级序列因果采样模式
+### 6.2 高级(序列)因果采样模式
+
+高级因果采样模式在生成的过程中，共享随机性实例或者共享个体选择因子，从而实现一致性生成。
+
 
 ```mermaid
-graph LR
-    start_point["共享随机性实例生成<br>（个体选择因子或噪声实例）"]
-
-    start_point --> C1
-    start_point --> C2
-
-    subgraph "模式一：共享个体选择因子<br>ε_seed ~ U(0,1)^C"
-        C1["循环: t=1,2,..."]
-        C1 --> D1["计算 U_t 分布<br>U_t ~ Cauchy(loc_U_t, scale_U_t)"]
-        D1 --> E1["使用固定因子计算个体<br>u_t = loc_U_t + scale_U_t ⊙ tan(π(ε_seed - 0.5))"]
-        E1 --> F1["U'_t ~ Cauchy(u_t, |b_noise|)"]
-        F1 --> G1["生成下一词元"]
-        G1 --> H1{继续生成?}
+graph TB
+    %% 改进的流程图布局 - 从上到下的方向更清晰
+    
+    start_point["共享随机性实例生成"]:::startNode
+    
+    start_point --> |"ε_seed ~ U(0,1)^C"| mode1
+    start_point --> |"ε_noise ~ Cauchy(0, I)"| mode2
+    
+    subgraph mode1 ["模式一：共享个体选择因子"]
+        direction TB
+        C1["循环: t=1,2,..."]:::processNode
+        D1["归因推断U_t~Cauchy(μ,γ)"]:::processNode
+        E1["使用ε_seed计算个体表征<br>u_t = μ + γ⊙tan(π(ε_seed - 0.5))"]:::highlightNode
+        F1["注入噪声<br>U'_t ~ Cauchy(u_t, |b_noise|)"]:::processNode
+        G1["生成下一词元"]:::outputNode
+        H1{"继续生成?"}:::decisionNode
+        I1["结束"]:::endNode
+        
+        C1 --> D1
+        D1 --> E1
+        E1 --> F1
+        F1 --> G1
+        G1 --> H1
         H1 -->|是| C1
-        H1 -->|否| I1["结束"]
+        H1 -->|否| I1
     end
     
-    subgraph "模式二：共享外生噪声实例<br>ε_noise ~ Cauchy(0, I)"
-        C2["循环: t=1,2,..."]
-        C2 --> D2["计算 U_t 分布<br>U_t ~ Cauchy(loc_U_t, scale_U_t)"]
-        D2 --> E2["U'_t ~ Cauchy(loc_U_t + |b_noise|·ε_noise, scale_U_t)"]
-        E2 --> F2["生成下一词元"]
-        F2 --> H2{继续生成?}
+    subgraph mode2 ["模式二：共享外生噪声实例"]
+        direction TB
+        C2["循环: t=1,2,..."]:::processNode
+        D2["归因推断U_t~Cauchy(μ,γ)"]:::processNode
+        E2["融合噪声<br>U'_t ~ Cauchy(μ + |b_noise|·ε_noise, γ)"]:::highlightNode
+        F2["生成下一词元"]:::outputNode
+        H2{"继续生成?"}:::decisionNode
+        I2["结束"]:::endNode
+        
+        C2 --> D2
+        D2 --> E2
+        E2 --> F2
+        F2 --> H2
         H2 -->|是| C2
-        H2 -->|否| I2["结束"]
+        H2 -->|否| I2
     end
     
-    style E1 fill:#fbe9e7
-    style E2 fill:#fbe9e7
+    
+    
+    %% 定义节点样式
+    classDef startNode fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1,font-weight:bold
+    classDef endNode fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
+    classDef processNode fill:#f5f5f5,stroke:#9e9e9e,stroke-width:1px
+    classDef decisionNode fill:#fff8e1,stroke:#ffa000,stroke-width:1px,color:#ff6f00
+    classDef highlightNode fill:#fbe9e7,stroke:#d84315,stroke-width:2px,color:#bf360c,font-weight:bold
+    classDef outputNode fill:#e0f7fa,stroke:#00acc1,stroke-width:1px,color:#006064
+    classDef descriptionNode fill:#f3e5f5,stroke:#8e24aa,stroke-width:1px,color:#4a148c,font-style:italic
+    classDef noteNode fill:#fffde7,stroke:#fbc02d,stroke-width:1px,color:#f57f17,font-style:italic,stroke-dasharray:5 5
 ```
 
 **深层含义**：
@@ -553,9 +582,9 @@ graph LR
 这两种模式为反事实分析和因果推理提供了强大的工具。
 
 
-### 6.2 与传统语言模型的对比
+### 6.3 与传统语言模型的对比
 
-#### 6.2.1 生成哲学对比
+#### 6.3.1 生成哲学对比
 
 | 方面 | 传统 LM (如 GPT/Qwen) | CausalQwen |
 |------|----------------------|---------------------|
@@ -567,7 +596,7 @@ graph LR
 #### 6.2.2 数学框架对比
 
 ```mermaid
-graph TD
+graph
     subgraph "传统 LM"
         X1["上下文 X"] --> P1["P(Y|X)"]
         P1 --> Sample1["采样"]
@@ -585,7 +614,7 @@ graph TD
     style F2 fill:#e8f5e9
 ```
 
-#### 6.2.3 一致性生成对比
+#### 6.3.3 一致性生成对比
 
 | 生成模式 | 随机性来源 | 一致性保证 | 示例特点 |
 |---------|-----------|-----------|---------|
@@ -632,7 +661,7 @@ graph LR
 #### 7.3.1 初始化总览
 
 ```mermaid
-graph TD
+graph LR
     Start["开始初始化"] --> Qwen["加载预训练 Qwen 模型"]
     
     Qwen --> Module1["模块1: 词元嵌入"]
