@@ -411,14 +411,202 @@ def test_training_components(model, modules):
         print_error(f"梯度计算测试失败: {e}")
         traceback.print_exc()
 
+def test_text_generation_comparison(model=None, causal_config=None):
+    """文本生成对比测试"""
+    print_section("第九部分：文本生成对比验证")
+    
+    print_step(1, "加载Qwen模型和分词器")
+    try:
+        from transformers import AutoTokenizer, Qwen2Config
+        from causal_qwen_mvp import CausalQwenMVPForCausalLM, CausalQwen2Config
+        
+        qwen_path = os.path.expanduser('~/models/Qwen2.5-0.5B')
+        
+        # 加载分词器
+        tokenizer = AutoTokenizer.from_pretrained(qwen_path)
+        print_success("Qwen分词器加载成功")
+        
+        # 加载Qwen配置
+        qwen_config = Qwen2Config.from_pretrained(qwen_path)
+        print_success("Qwen配置加载成功")
+        
+        # 创建CausalQwen模型 (使用默认设置)
+        causal_config = CausalQwen2Config(
+            vocab_size=qwen_config.vocab_size,
+            hidden_size=qwen_config.hidden_size,
+            intermediate_size=qwen_config.intermediate_size,
+            num_hidden_layers=qwen_config.num_hidden_layers,
+            num_attention_heads=qwen_config.num_attention_heads,
+            num_key_value_heads=getattr(qwen_config, 'num_key_value_heads', qwen_config.num_attention_heads),
+            max_position_embeddings=qwen_config.max_position_embeddings,
+            causal_size=qwen_config.hidden_size  # C = H (默认设置)
+        )
+        
+        test_model = CausalQwenMVPForCausalLM(causal_config)
+        print_success("CausalQwen模型创建成功")
+        
+    except Exception as e:
+        print_error(f"模型加载失败: {e}")
+        return
+    
+    print_step(2, "测试中文文本")
+    test_texts = ["今天天气很好", "人工智能的发展", "2024年是一个", "科技改变世界"]
+    
+    for i, test_text in enumerate(test_texts):
+        print_info(f"测试文本 {i+1}: '{test_text}'")
+        
+        try:
+            # 文本转token ids
+            input_ids = tokenizer.encode(test_text, return_tensors='pt')
+            print_info(f"Token IDs: {input_ids.tolist()}")
+                
+            print_step(2.1, f"文本 {i+1}: 个体因果表征推断")
+            with torch.no_grad():
+                # 获取个体因果表征
+                causal_output = test_model.inference(input_ids, mode='causal')
+                
+            print_info(f"个体表征: {causal_output.loc_U.shape}, 均值={causal_output.loc_U.mean().item():.3f}, 不确定性={causal_output.scale_U.mean().item():.3f}")
+            
+            # 诊断尺度参数为0的问题
+            if causal_output.scale_U.mean().item() < 1e-6:
+                print_warning("检测到尺度参数接近0，诊断模型配置：")
+                print_info(f"gamma_init设置: {test_model.config.gamma_init}")
+                print_info(f"scale_net.bias值: {test_model.abduction_network.scale_net.bias.mean().item():.6f}")
+                
+                # 测试softplus函数
+                test_input = test_model.abduction_network.scale_net.bias.mean()
+                softplus_output = torch.nn.functional.softplus(test_input)
+                print_info(f"softplus({test_input.item():.6f}) = {softplus_output.item():.6f}")
+                
+                # 检查scale_net的权重
+                weight_norm = test_model.abduction_network.scale_net.weight.norm().item()
+                print_info(f"scale_net权重范数: {weight_norm:.6f}")
+                
+                if weight_norm < 1e-6:
+                    print_info("权重接近0，这是设计的恒等映射初始化")
+                else:
+                    print_warning("权重不为0，可能有问题")
+            
+            print_step(2.2, f"文本 {i+1}: 三种推理模式测试")
+            
+            # 创建推理引擎
+            from causal_qwen_mvp import CausalInferenceEngine
+            engine = CausalInferenceEngine(test_model)
+            
+            # 标准推理（确定性OvR）
+            standard_output = engine.inference(input_ids, mode='standard')
+            # 使用inference.py中的标准逻辑（内部计算OvR概率）
+            standard_next_token = torch.argmax(standard_output.loc_S[0, -1]).item()  # 简化获取token
+            
+            # 因果推理（个体具现）
+            causal_output = engine.inference(input_ids, mode='causal', temperature=1.0)
+            # 使用inference.py返回的结果（已经采样过个体）
+            causal_next_token = torch.argmax(causal_output.loc_S[0, -1]).item()
+            
+            # 兼容推理（传统Softmax采样）
+            compatible_output = engine.inference(input_ids, mode='compatible', 
+                                               do_sample=True, top_k=50, top_p=0.9, temperature=1.0)
+            if hasattr(compatible_output, 'next_token_ids') and compatible_output.next_token_ids is not None:
+                compatible_next_token = compatible_output.next_token_ids[0].item()
+            else:
+                compatible_next_token = torch.argmax(compatible_output.loc_S[0, -1]).item()
+            
+            # 解码回文本（如果可能）
+            try:
+                if tokenizer:
+                    standard_text = tokenizer.decode([standard_next_token])
+                    causal_text = tokenizer.decode([causal_next_token])
+                    compatible_text = tokenizer.decode([compatible_next_token])
+                    
+                    print_info(f"预测结果: 标准='{standard_text}' | 因果='{causal_text}' | 兼容='{compatible_text}'")
+                    
+                    # 简化的一致性检查
+                    modes_different = len(set([standard_next_token, causal_next_token, compatible_next_token]))
+                    if modes_different == 3:
+                        print_success("三种模式产生不同输出（理想状态）")
+                    elif modes_different == 2:
+                        print_info("部分模式输出不同（正常）") 
+                    else:
+                        print_warning("所有模式输出相同（需检查）")
+                else:
+                    print_warning(f"跳过文本 {i+1} 的详细测试（无分词器）")
+                        
+            except Exception as decode_e:
+                print_warning(f"文本解码失败: {decode_e}")
+                
+        except Exception as e:
+            print_error(f"文本 {i+1} 测试失败: {e}")
+            # traceback.print_exc()
+    
+    print_step(3, "生成序列对比测试")
+    try:
+        # 创建最小模型用于序列生成测试
+        from causal_qwen_mvp import CausalQwenMVPForCausalLM, CausalQwen2Config, CausalInferenceEngine
+        
+        mini_config = CausalQwen2Config(
+            vocab_size=100,
+            hidden_size=32,
+            intermediate_size=128,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            num_key_value_heads=2,
+            max_position_embeddings=512,
+            causal_size=32
+        )
+        
+        mini_model = CausalQwenMVPForCausalLM(mini_config)
+        mini_engine = CausalInferenceEngine(mini_model)
+        
+        # 使用已实现的生成方法
+        initial_seq = torch.randint(0, 100, (1, 3))
+        print_info(f"初始序列: {initial_seq.tolist()}")
+        
+        # 使用generate_step_by_step方法
+        with torch.no_grad():
+            generated_standard = mini_engine.generate_step_by_step(
+                initial_seq, max_new_tokens=3, mode='standard'
+            )
+            
+            generated_causal = mini_engine.generate_step_by_step(
+                initial_seq, max_new_tokens=3, mode='causal', temperature=1.0
+            )
+            
+            generated_compatible = mini_engine.generate_step_by_step(
+                initial_seq, max_new_tokens=3, mode='compatible_sample',
+                temperature=1.0, top_k=50, top_p=0.9
+            )
+        
+        # 分析差异
+        print_info(f"标准生成: {generated_standard}")
+        print_info(f"因果生成: {generated_causal}")
+        print_info(f"兼容生成: {generated_compatible}")
+        
+        # 比较序列差异
+        std_vs_causal = sum(1 for a, b in zip(generated_standard.tolist()[0][3:], generated_causal.tolist()[0][3:]) if a != b)
+        std_vs_compat = sum(1 for a, b in zip(generated_standard.tolist()[0][3:], generated_compatible.tolist()[0][3:]) if a != b)
+        
+        print_info(f"标准vs因果差异: {std_vs_causal}/3 个位置")
+        print_info(f"标准vs兼容差异: {std_vs_compat}/3 个位置")
+        
+        if std_vs_causal > 0 or std_vs_compat > 0:
+            print_success("不同推理模式体现了各自特点")
+        else:
+            print_warning("所有模式输出相同（小模型可能出现）")
+        
+        print_success("序列生成对比测试完成")
+        
+    except Exception as e:
+        print_error(f"序列生成测试失败: {e}")
+        traceback.print_exc()
+
 def test_end_to_end():
     """端到端功能测试"""
-    print_section("第九部分：端到端功能验证")
+    print_section("第十部分：端到端功能验证")
     
     print_step(1, "创建最小示例")
     try:
         # 重新创建一个小模型用于快速测试
-        from causal_qwen_mvp import CausalQwenMVPForCausalLM, CausalQwen2Config
+        from causal_qwen_mvp import CausalQwenMVPForCausalLM, CausalQwen2Config, CausalInferenceEngine
         
         mini_config = CausalQwen2Config(
             vocab_size=100,
@@ -436,11 +624,12 @@ def test_end_to_end():
         
         # 快速功能测试
         test_ids = torch.randint(0, 100, (1, 5))
+        mini_engine = CausalInferenceEngine(mini_model)
         
         with torch.no_grad():
-            output1 = mini_model.inference(test_ids, mode='standard')
-            output2 = mini_model.inference(test_ids, mode='causal')
-            output3 = mini_model.inference(test_ids, mode='compatible')
+            output1 = mini_engine.inference(test_ids, mode='standard')
+            output2 = mini_engine.inference(test_ids, mode='causal', temperature=1.0)
+            output3 = mini_engine.inference(test_ids, mode='compatible', do_sample=True)
         
         print_success("三种模式都能正常运行")
         print_info("端到端测试完成")
@@ -502,7 +691,10 @@ def main():
     # 第八部分：训练组件测试
     test_training_components(model, modules)
     
-    # 第九部分：端到端测试
+    # 第九部分：文本生成对比测试
+    test_text_generation_comparison(model, causal_config)
+    
+    # 第十部分：端到端测试
     test_end_to_end()
     
     # 测试总结

@@ -23,6 +23,7 @@ class CausalMVPOutput(ModelOutput):
     past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
+    next_token_ids: Optional[torch.LongTensor] = None  # 用于兼容模式的采样结果
 
 
 class CausalQwen2Config(Qwen2Config):
@@ -143,9 +144,11 @@ class ActionNetwork(nn.Module):
         else:
             print("❌ 源模型没有lm_head，使用标准初始化...")
         
-    def forward(self, loc_U, scale_U):
+    def forward(self, loc_U, scale_U=None):
         """前向传播，严格实现柯西分布线性稳定性"""
         # Step 1: 外生噪声融合（添加到尺度参数）
+        if scale_U is None:
+            scale_U = torch.zeros_like(loc_U)  # Cauchy 分布尺度参数为0 时，scale_U=0
         scale_U_noisy = scale_U + torch.abs(self.b_noise)
         
         # Step 2: 位置参数的线性变换

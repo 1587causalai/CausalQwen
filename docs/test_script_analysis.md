@@ -456,7 +456,225 @@ if output.loss is not None:
 ℹ️  action_network.lm_head.weight: 梯度范数=0.003456
 ```
 
-## 第九部分：端到端功能验证
+## 第九部分：文本生成对比验证
+
+### 测试目的
+通过真实文本输入，完整展示从原始文本到个体因果表征再到生成输出的全流程，并对比CausalQwen三种推理模式与传统Qwen的差异。
+
+### 9.1 分词器加载与文本处理
+
+#### 代码验证
+```python
+from transformers import AutoTokenizer
+qwen_path = os.path.expanduser('~/models/Qwen2.5-0.5B')
+tokenizer = AutoTokenizer.from_pretrained(qwen_path)
+
+test_texts = [
+    "The quick brown fox",
+    "Once upon a time", 
+    "In the year 2024",
+    "Artificial intelligence is"
+]
+```
+
+**验证内容**：
+- 成功加载Qwen分词器
+- 文本到token_ids的转换
+- 词汇表兼容性检查
+
+### 9.2 个体因果表征推断验证
+
+#### 数学理论基础
+完整展示设计文档第3.3节的归因推断过程：
+
+**步骤1：文本编码**
+$$\text{input\_text} \rightarrow \text{tokenize} \rightarrow \text{input\_ids} \in \mathbb{Z}^S$$
+
+**步骤2：词元嵌入**
+$$\text{input\_ids} \rightarrow \text{embed\_tokens} \rightarrow e \in \mathbb{R}^{S \times H}$$
+
+**步骤3：上下文特征提取**
+$$e \rightarrow \text{QwenTransformer} \rightarrow z \in \mathbb{R}^{S \times H}$$
+
+**步骤4：个体群体推断**
+$$z \rightarrow \text{AbductionNetwork} \rightarrow (\text{loc}_U, \text{scale}_U) \in \mathbb{R}^{S \times C} \times \mathbb{R}^{S \times C}$$
+
+#### 代码验证
+```python
+# 文本转token
+input_ids = tokenizer.encode(test_text, return_tensors='pt')
+# 个体表征推断
+causal_output = mini_model.inference(limited_input_ids, mode='causal')
+```
+
+**关键观察点**：
+- 个体表征维度：`[batch_size, seq_len, causal_size]`
+- 位置参数 `loc_U`：个体群体的典型代表
+- 尺度参数 `scale_U`：个体群体的多样性/不确定性
+- 不同文本产生不同的个体表征分布
+
+### 9.3 三种推理模式对比验证
+
+#### 9.3.1 标准推理模式（期望决策）
+
+这是默认的、最高效的推理模式。它完全基于解析计算，不涉及任何随机采样。目标是给出综合考虑所有不确定性后的期望预测。
+
+**数学原理**：选择OvR概率最高的类别
+$$\hat{y}_{\text{cls},i} = \arg\max_k P_{k,i}$$
+
+其中OvR概率通过标准化得分计算：
+$$P_{k,i} = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_{\text{ovr}}}{\text{scale}_{S_{k,i}}}\right)$$
+
+**核心特点**：基于分布期望的确定性决策，无需采样，计算高效。
+
+#### 9.3.2 因果采样（个体具现）
+
+这是一种混合了随机性与确定性的高级推理模式，深刻体现了模型的因果哲学。过程分为三步：
+
+1. **采样个体**: 从后验分布 $U_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$ 中采样具体的个体表征 $u_i$。
+
+2. **构建决策输入分布**: 将确定的个体 $u_i$ 与噪声分布结合：
+   $$ U'_{\text{input}, i} \sim \text{Cauchy}(u_i, |b_{\text{noise}}|) $$
+
+3. **计算确定性决策**:  $\arg\max_k P_{k,i}$。
+
+**核心思想**: 只在"个体选择"步骤引入随机性，而将"环境噪声"保持为分布形式，实现对不同个体的探索同时保持决策的稳健性。
+
+#### 9.3.3 兼容传统采样
+
+CausalQwen 完全兼容传统语言模型的采样方法：
+
+**兼容性公式**：
+$$P_{\text{softmax}}(y_i=k|x) = \frac{\exp(\text{loc}_{S_{k,i}})}{\sum_{j=1}^{V} \exp(\text{loc}_{S_{j,i}})}$$
+
+这种模式使用标准的Softmax概率分布，支持Top-k/Top-p采样策略，完全兼容传统语言模型的生成方式。
+
+#### 代码验证（基于已实现的inference.py）
+```python
+# 使用CausalInferenceEngine进行推理
+engine = CausalInferenceEngine(mini_model)
+
+# 标准推理（确定性OvR）
+standard_output = engine.inference(limited_input_ids, mode='standard')
+# 内部自动计算OvR概率，无需手动计算
+
+# 因果推理（个体具现三步法）
+causal_output = engine.inference(limited_input_ids, mode='causal', temperature=1.0)
+# 内部实现：
+# 1. 采样个体: u ~ Cauchy(loc_U, temperature * scale_U)
+# 2. ActionNetwork处理: 噪声融合 + 线性稳定性变换
+# 3. 返回更新后的分布参数
+
+# 兼容推理（传统Softmax + Top-k/Top-p采样）
+compatible_output = engine.inference(limited_input_ids, mode='compatible', 
+                                   do_sample=True, top_k=50, top_p=0.9, temperature=1.0)
+# 内部使用loc_S作为logits，应用传统采样策略
+```
+
+### 9.4 序列生成对比测试
+
+#### 数学理论：自回归因果生成
+根据设计文档第6节，CausalQwen支持多种序列生成模式：
+
+**标准序列生成**：
+$$y_t = \arg\max_k P_k(y_t | y_{<t})$$
+
+**因果序列生成**（共享个体）：
+$$u \sim P(U | y_{<t}), \quad y_t = f(u, \epsilon_t)$$
+
+**一致性生成**（固定个体）：
+$$u = \text{fixed}, \quad \forall t: y_t = f(u, \epsilon_t)$$
+
+#### 代码验证（使用已实现的生成方法）
+```python
+initial_seq = torch.randint(0, 100, (1, 3))
+engine = CausalInferenceEngine(mini_model)
+
+# 使用已实现的generate_step_by_step方法
+generated_standard = engine.generate_step_by_step(
+    initial_seq, max_new_tokens=3, mode='standard'
+)
+
+generated_causal = engine.generate_step_by_step(
+    initial_seq, max_new_tokens=3, mode='causal', temperature=1.0
+)
+
+generated_compatible = engine.generate_step_by_step(
+    initial_seq, max_new_tokens=3, mode='compatible_sample',
+    temperature=1.0, top_k=50, top_p=0.9
+)
+
+# 分析差异
+print(f"初始序列: {initial_seq}")
+print(f"标准生成: {generated_standard}")
+print(f"因果生成: {generated_causal}")
+print(f"兼容生成: {generated_compatible}")
+```
+
+### ⚠️ 重要Bug修复说明
+
+在2025-01-17的测试中发现了兼容模式的严重实现错误：
+
+**原始Bug**：`_compatible_sampling` 方法在第79行直接返回CausalQwen原生输出，导致：
+- 兼容模式实际返回 `loc_S`（CausalQwen的OvR输出）
+- 传统Softmax+采样逻辑被bypass
+- 标准模式和兼容模式错误地看起来"一致"
+
+**修复内容**：
+1. 移除早期的 `return outputs` 语句
+2. 实现真正的 `softmax(loc_S/temperature)` + top-k/top-p采样
+3. 兼容模式现在正确模拟传统Qwen的行为
+4. 添加 `next_token_ids` 字段到 `CausalMVPOutput`
+
+**验证要点**：
+- ✅ **兼容模式应该与标准模式输出不同**
+- ✅ **兼容模式使用传统Softmax概率**
+- ✅ **标准模式使用CausalQwen OvR分类**
+
+### 预期验证结果
+
+#### 9.4.1 个体表征验证
+```
+ℹ️  测试文本 1: '今天天气很好'
+ℹ️  Token IDs: [[4170, 6135, 15823, 26620, 4509]]
+ℹ️  个体表征: [1, 5, 64], 均值=0.123, 不确定性=0.567
+```
+
+#### 9.4.2 推理模式对比
+```
+ℹ️  预测结果: 标准='，' | 因果='很' | 兼容='的'
+✅ 三种模式产生不同输出（理想状态）
+```
+
+#### 9.4.3 序列生成对比
+```
+ℹ️  初始序列: [[12, 45, 78]]
+ℹ️  生成对比: 标准[23, 67, 89] vs 因果[24, 68, 91] 
+ℹ️  序列差异: 3/3 个位置
+✅ 因果推理体现了个体差异
+```
+
+### 9.5 关键验证点总结
+
+#### 架构验证
+- [ ] 文本成功转换为token_ids
+- [ ] 个体表征维度正确：`[B, S, C]`
+- [ ] 三种推理模式都能正常运行
+- [ ] **兼容模式与标准模式输出不同**（使用不同的数学框架）
+
+#### 数学验证  
+- [ ] 个体表征分布参数合理（有限值，scale > 0）
+- [ ] 因果采样产生不同输出（体现个体差异）
+- [ ] 序列生成保持自回归特性
+- [ ] OvR概率在[0,1]范围内
+
+#### 行为验证
+- [ ] 不同文本产生不同个体表征
+- [ ] 因果推理的随机性可控
+- [ ] 生成序列具有合理多样性
+- [ ] 与传统LM的兼容性
+
+## 第十部分：端到端功能验证
 
 ### 测试目的
 通过创建最小模型进行快速的端到端功能验证，确保整个流程可正常运行。

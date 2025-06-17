@@ -65,31 +65,59 @@ class CausalInferenceEngine:
                 loc_S=loc_S,
                 scale_S=scale_S,
                 loc_U=u_sampled,
-                scale_U=torch.zeros_like(outputs.scale_U),
+                scale_U=outputs.scale_U,  # 修复：保留原始的不确定性信息
                 past_key_values=outputs.past_key_values,
                 hidden_states=outputs.hidden_states,
                 attentions=outputs.attentions
             )
     
     def _compatible_sampling(self, input_ids, do_sample=True, top_k=50, top_p=0.9, temperature=1.0, **kwargs):
-        """传统兼容采样：支持确定性和随机采样"""
+        """
+        传统兼容采样：模拟传统Qwen的Softmax+采样行为
+        
+        关键修复：使用loc_S作为logits，应用传统的Softmax变换和采样策略
+        这样兼容模式的输出将与传统Qwen保持一致，而非CausalQwen的原生输出
+        """
         with torch.no_grad():
+            # 获取CausalQwen的原生输出
             outputs = self.model(input_ids, **kwargs)
-            # 返回完整的输出结构，包含所有字段
-            return outputs
             
-            # 随机采样：应用top-k过滤
+            # 关键修复：使用loc_S作为传统logits
+            logits = outputs.loc_S / temperature  # 应用温度缩放
+            
+            if not do_sample:
+                # 确定性模式：直接argmax
+                next_token_logits = logits[..., -1, :]  # 获取最后一个位置的logits
+                next_token_ids = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+                
+                # 构造兼容的输出格式
+                from .models import CausalMVPOutput
+                return CausalMVPOutput(
+                    loc_S=logits,  # 返回处理后的logits
+                    scale_S=torch.ones_like(logits),  # 确定性，尺度为1
+                    loc_U=outputs.loc_U,
+                    scale_U=outputs.scale_U,
+                    past_key_values=outputs.past_key_values,
+                    hidden_states=outputs.hidden_states,
+                    attentions=outputs.attentions,
+                    next_token_ids=next_token_ids  # 添加采样结果
+                )
+            
+            # 随机采样模式
+            next_token_logits = logits[..., -1, :].clone()  # [batch_size, vocab_size]
+            
+            # 应用top-k过滤
             if top_k > 0:
-                top_k = min(top_k, logits.size(-1))
-                top_k_logits, top_k_indices = torch.topk(logits, top_k)
+                top_k = min(top_k, next_token_logits.size(-1))
+                top_k_logits, top_k_indices = torch.topk(next_token_logits, top_k)
                 # 将其他位置设为负无穷
-                filtered_logits = torch.full_like(logits, float('-inf'))
+                filtered_logits = torch.full_like(next_token_logits, float('-inf'))
                 filtered_logits.scatter_(-1, top_k_indices, top_k_logits)
-                logits = filtered_logits
+                next_token_logits = filtered_logits
             
             # 应用top-p (nucleus)过滤
             if 0.0 < top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
                 cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
                 
                 # 找到累积概率超过top_p的位置
@@ -100,13 +128,24 @@ class CausalInferenceEngine:
                 
                 # 将需要移除的位置设为负无穷
                 indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-                logits[indices_to_remove] = float('-inf')
+                next_token_logits[indices_to_remove] = float('-inf')
             
             # Softmax并采样
-            probs = F.softmax(logits, dim=-1)
+            probs = F.softmax(next_token_logits, dim=-1)
             next_token_ids = torch.multinomial(probs, 1)
             
-            return next_token_ids
+            # 构造兼容的输出格式
+            from .models import CausalMVPOutput
+            return CausalMVPOutput(
+                loc_S=logits,  # 返回处理后的logits
+                scale_S=torch.ones_like(logits),  # 采样模式，尺度信息不重要
+                loc_U=outputs.loc_U,
+                scale_U=outputs.scale_U,
+                past_key_values=outputs.past_key_values,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
+                next_token_ids=next_token_ids  # 添加采样结果
+            )
     
     def generate_step_by_step(
         self,
@@ -150,7 +189,7 @@ class CausalInferenceEngine:
             if mode in ['compatible_sample', 'compatible_deterministic']:
                 # 兼容模式：使用传统HuggingFace逻辑
                 do_sample = (mode == 'compatible_sample')
-                next_token = self._compatible_sampling(
+                output = self._compatible_sampling(
                     current_ids,
                     do_sample=do_sample,
                     temperature=temperature,
@@ -158,15 +197,22 @@ class CausalInferenceEngine:
                     top_p=top_p,
                     **kwargs
                 )
+                # 从兼容模式输出中提取token
+                if hasattr(output, 'next_token_ids') and output.next_token_ids is not None:
+                    next_token = output.next_token_ids
+                else:
+                    next_token = torch.argmax(output.loc_S[:, -1:], dim=-1)
             else:
                 # CausalQwen模式：standard或causal
-                next_token = self.inference(current_ids, mode=mode, temperature=temperature, **kwargs)
+                output = self.inference(current_ids, mode=mode, temperature=temperature, **kwargs)
+                # 从推理输出中提取下一个token（使用argmax）
+                next_token = torch.argmax(output.loc_S[:, -1:], dim=-1)
             
             # 添加到序列
             current_ids = torch.cat([current_ids, next_token], dim=-1)
             
             # 检查停止条件
-            if next_token[0, -1].item() == eos_token_id:
+            if next_token[0, 0].item() == eos_token_id:  # next_token shape: [batch, 1]
                 break
                 
         return current_ids

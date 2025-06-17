@@ -118,7 +118,7 @@ class ActionNetwork(nn.Module):
 
 ### 2. 因果采样 (Causal Sampling)  
 - 从个体分布采样具体个体: $u \sim \text{Cauchy}(loc_U, scale_U)$
-- 注入环境噪声: $u' \sim \text{Cauchy}(u, |b_{noise}|)$
+- 注入环境噪声: $U' \sim \text{Cauchy}(u, |b_{noise}|)$
 - 基于具体个体进行决策
 
 ### 3. 兼容传统采样

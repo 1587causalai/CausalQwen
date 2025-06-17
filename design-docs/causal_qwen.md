@@ -432,6 +432,9 @@ $$\mathcal{L} = \frac{\sum_{i=1}^S L_{\text{cls},i}}{\sum_{i=1}^S \text{mask}_i}
 
 ### 5.1 标准推理（期望决策）
 
+这是默认的、最高效的推理模式。它完全基于解析计算，不涉及任何随机采样。目标是给出综合考虑所有不确定性后的期望预测。 选择OvR概率最高的类别：
+    $$\hat{y}_{\text{cls},i} = \arg\max_k P_{k,i}$$
+
 ```mermaid
 graph LR
     subgraph "输入：分布参数"
@@ -459,6 +462,16 @@ graph LR
 
 ### 5.2 因果采样（个体具现）
 
+这是一种混合了随机性与确定性的高级推理模式，深刻体现了模型的因果哲学。过程分为三步：
+
+1.  **采样个体**: 从后验分布 $U_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$ 中采样具体的个体表征 $u_i$。
+
+2.  **构建决策输入分布**: 将确定的个体 $u_i$ 与噪声分布结合：
+    $$ U'_{\text{input}, i} \sim \text{Cauchy}(u_i, |b_{\text{noise}}|) $$
+
+3.  **计算确定性决策**: $\arg\max_k P_{k,i}$。
+
+**核心思想**: 只在"个体选择"步骤引入随机性，而将"环境噪声"保持为分布形式，实现对不同个体的探索同时保持决策的稳健性。
 ```mermaid
 graph LR
     Dist["U ~ Cauchy(μ,γ)<br>个体后验分布"] --> Sample["采样个体<br>u = μ + γ·tan(π(ε-0.5))"]
