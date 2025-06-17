@@ -102,10 +102,11 @@ CausalQwen/
 │   ├── test_vs_original_qwen.py            # 与原版Qwen对比
 │   └── TEST_INDEX.md                       # 测试说明
 ├── docs/                         # 核心数学文档
-│   ├── core_mathematical_framework.md      # 核心数学框架
-│   ├── model_inference_position_and_scale.md # 位置vs尺度理论
-│   ├── init_pretraining_alignment.md       # 预训练对齐
-│   └── U_deep_dive.md                      # U变量深入研究
+│   ├── core_mathematical_framework.md                  # CausalLLM 核心数学框架
+│   ├── core_mathematical_framework_num_extended.md     # 同时进行分类和回归的CausalLLM 核心数学框架
+│   ├── model_inference_position_and_scale.md           # 位置vs尺度理论
+│   ├── init_pretraining_alignment.md                   # 预训练对齐
+│   └── U_deep_dive.md                                  # U变量深入研究
 └── README.md                     # 本文档
 ```
 
