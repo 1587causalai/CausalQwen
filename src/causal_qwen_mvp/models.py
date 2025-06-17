@@ -145,34 +145,65 @@ class ActionNetwork(nn.Module):
             print("❌ 源模型没有lm_head，使用标准初始化...")
         
     def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
-        """前向传播，严格实现柯西分布线性稳定性
+        """前向传播 - V2革命性设计：位置vs尺度的精妙差异
+        
+        V2核心创新：噪声对采样/非采样模式的不同影响方式
+        
+        采样模式：噪声影响位置参数
+        ├─ ε ~ Cauchy(0, 1) 标准噪声采样
+        ├─ U' ~ Cauchy(μ + T·|b_noise|·ε, γ) 噪声注入位置参数
+        └─ 扰动个体身份，保持原有不确定性
+        
+        非采样模式：噪声影响尺度参数  
+        ├─ U' ~ Cauchy(μ, γ + |b_noise|) 噪声融合到尺度
+        └─ 保持个体身份，增加决策不确定性
         
         Args:
-            loc_U: 个体表征分布的位置参数
-            scale_U: 个体表征分布的尺度参数
-            temperature: 采样温度参数
+            loc_U: 个体表征分布的位置参数 [B, S, C]
+            scale_U: 个体表征分布的尺度参数 [B, S, C]
+            do_sample: 是否进行采样（决定噪声作用方式）
+            temperature: 采样温度参数（仅在do_sample=True时生效）
         Returns:
-            loc_S: 决策分布的位置参数
-            scale_S: 决策分布的尺度参数
+            loc_S: 决策分布的位置参数 [B, S, V]
+            scale_S: 决策分布的尺度参数 [B, S, V]
         """
+        # 处理默认尺度参数
+        if scale_U is None:
+            scale_U = torch.zeros_like(loc_U)  # 默认为确定性分布
+        
         if do_sample:
-            # Step 1: 采样噪声 Cauchy(0, I)
+            # 🎯 V2采样模式：噪声影响位置参数
+            
+            # Step 1: 采样标准柯西噪声 ε ~ Cauchy(0, I)
             uniform_sample = torch.rand_like(loc_U)
-            u_sampled = torch.tan(torch.pi * (uniform_sample - 0.5)) * temperature * torch.abs(self.b_noise)
-            loc_U_noisy = loc_U + u_sampled
-            # Step 2: 线性决策
+            epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))
+            
+            # Step 2: 温度调节的噪声注入到位置参数
+            # 数学：loc_U_noisy = μ + T·|b_noise|·ε
+            noise_injection = epsilon * temperature * torch.abs(self.b_noise)
+            loc_U_noisy = loc_U + noise_injection
+            
+            # Step 3: 基于扰动后的位置参数进行线性决策
+            # 数学：loc_S = W·(μ + T·|b_noise|·ε) + b
             loc_S = self.lm_head(loc_U_noisy)
-            # Step 3: 尺度参数的线性稳定性变换
+            
+            # Step 4: 尺度参数的线性稳定性变换
+            # 数学：scale_S = γ × |W|^T
             scale_S = scale_U @ torch.abs(self.lm_head.weight).T
 
         else:
-            # Step 1: 外生噪声融合（添加到尺度参数）
-            if scale_U is None:
-                scale_U = torch.zeros_like(loc_U)  # Cauchy 分布尺度参数为0 时，scale_U=0
+            # 🔧 V2非采样模式：噪声影响尺度参数
+            
+            # Step 1: 外生噪声融合到尺度参数
+            # 数学：scale_U_noisy = γ + |b_noise|
             scale_U_noisy = scale_U + torch.abs(self.b_noise)
-            # Step 2: 位置参数的线性变换
+            
+            # Step 2: 位置参数保持确定性的线性变换
+            # 数学：loc_S = W·μ + b
             loc_S = self.lm_head(loc_U)
+            
             # Step 3: 尺度参数的线性稳定性变换
+            # 数学：scale_S = (γ + |b_noise|) × |W|^T
             scale_S = scale_U_noisy @ torch.abs(self.lm_head.weight).T
         
         return loc_S, scale_S
@@ -242,11 +273,22 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
         
         print("权重复制完成！")
     
-    def inference(self, input_ids, mode='standard', **kwargs):
-        """推理接口 - 调用推理引擎"""
+    def generate(self, input_ids, max_new_tokens=20, do_sample=True, temperature=1.0,
+                top_k=50, top_p=0.9, pad_token_id=None, eos_token_id=None, **kwargs):
+        """序列生成 - 完全兼容Qwen.generate()接口"""
         from .inference import CausalInferenceEngine
         engine = CausalInferenceEngine(self)
-        return engine.inference(input_ids, mode=mode, **kwargs)
+        return engine.generate(
+            input_ids=input_ids,
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            pad_token_id=pad_token_id,
+            eos_token_id=eos_token_id,
+            **kwargs
+        )
     
     def forward(
         self,
@@ -260,9 +302,16 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        do_sample: Optional[bool] = False,
+        temperature: Optional[float] = 1.0,
         **kwargs
     ) -> Union[Tuple, CausalMVPOutput]:
-        """前向传播 - 框架实现"""
+        """前向传播 - V2框架实现
+        
+        V2核心特性：
+        - do_sample=False: 非采样模式，噪声影响尺度参数
+        - do_sample=True: 采样模式，噪声影响位置参数
+        """
         
         # 1. 获取Transformer特征
         transformer_outputs = self.model(
@@ -278,9 +327,13 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
         )
         hidden_states = transformer_outputs[0]
         
-        # 2. 因果推理链路
+        # 2. V2因果推理链路
         loc_U, scale_U = self.abduction_network(hidden_states)  # 个体推断
-        loc_S, scale_S = self.action_network(loc_U, scale_U)    # 决策推断
+        loc_S, scale_S = self.action_network(
+            loc_U, scale_U, 
+            do_sample=do_sample, 
+            temperature=temperature
+        )  # V2决策推断
         
         # 3. 损失计算
         loss = None

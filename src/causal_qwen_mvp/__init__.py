@@ -1,27 +1,29 @@
 """
-CausalQwen MVP: 因果语言模型最小可行产品
+CausalQwen: 因果语言模型 - 完全兼容Qwen
 
-这是CausalQwen的MVP实现，使用占位式逻辑快速搭建基础框架。
-核心特性：
-- 继承Qwen2ForCausalLM，最大化复用现有基础设施
-- 实现三种推理模式：标准、因果采样、兼容传统
-- 支持完整的训练和验证流程
-- 模块化设计，便于逐步完善
+核心创新：位置vs尺度的精妙差异
+├─ do_sample=True：噪声影响位置参数，扰动个体身份
+└─ do_sample=False：噪声影响尺度参数，增加决策不确定性
+
+与Qwen完全兼容：
+- 继承Qwen2ForCausalLM，无缝接入
+- 支持所有Qwen参数：do_sample, temperature, top_k, top_p
+- 提供相同的generate()接口
+- 完整的柯西分布数学基础
 
 使用示例：
 ```python
 from causal_qwen_mvp import CausalQwenMVPForCausalLM, CausalQwen2Config
-from causal_qwen_mvp import CausalTrainer, CausalInferenceEngine
 
-# 创建配置
+# 创建模型（与Qwen相同）
 config = CausalQwen2Config.from_pretrained("Qwen/Qwen2.5-0.5B")
-
-# 创建模型
 model = CausalQwenMVPForCausalLM(config)
 
-# 推理测试
-input_ids = torch.tensor([[1, 2, 3, 4, 5]])
-output = model.inference(input_ids, mode='standard')
+# 确定性生成（噪声影响尺度参数）
+output = model.generate(input_ids, do_sample=False)
+
+# 采样生成（噪声影响位置参数）
+output = model.generate(input_ids, do_sample=True, temperature=0.8)
 ```
 """
 
@@ -103,11 +105,12 @@ def get_model_info():
         'description': '因果语言模型最小可行产品',
         'features': [
             '继承Qwen2ForCausalLM',
-            '三种推理模式',
-            '完整训练流程',
-            '模块化设计'
+            '位置vs尺度的精妙差异',
+            'ActionNetwork统一框架',
+            '完整柯西分布数学基础',
+            '与Qwen完全兼容'
         ],
-        'status': 'MVP - 使用占位式逻辑',
+        'status': '正式版 - 与Qwen完全兼容',
         'next_steps': [
             '完善Cauchy分布数学',
             '优化权重初始化',

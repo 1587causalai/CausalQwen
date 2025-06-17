@@ -1,195 +1,103 @@
 """
-CausalQwen MVP: 推理模块实现
-实现三种推理模式：标准、因果采样、兼容传统
+CausalQwen 推理引擎 - 与Qwen完全兼容
+
+V2核心创新：位置vs尺度的精妙差异
+├─ do_sample=True：噪声影响位置参数，扰动个体身份  
+└─ do_sample=False：噪声影响尺度参数，增加决策不确定性
+
+完全兼容Qwen接口：do_sample, temperature, top_k, top_p, max_new_tokens
 """
 
 import torch
 import torch.nn.functional as F
-from typing import Optional, List, Union
-from .models import CausalQwenMVPForCausalLM
+from typing import Optional, Dict, Any
+from .models import CausalQwenMVPForCausalLM, CausalMVPOutput
 
 
 class CausalInferenceEngine:
-    """CausalQwen推理引擎"""
+    """CausalQwen推理引擎 - 与Qwen完全兼容"""
     
     def __init__(self, model: CausalQwenMVPForCausalLM):
         self.model = model
         self.config = model.config
     
-    def inference(self, input_ids, mode='standard', temperature=1.0, **kwargs):
-        """统一推理接口"""
-        if mode == 'standard':
-            return self._standard_inference(input_ids, **kwargs)
-        elif mode == 'causal':  
-            return self._causal_sampling(input_ids, temperature=temperature, **kwargs)
-        elif mode == 'compatible':
-            return self._compatible_sampling(input_ids, temperature=temperature, **kwargs)
-        else:
-            raise ValueError(f"Unknown inference mode: {mode}")
+    def __call__(self, input_ids, **kwargs) -> CausalMVPOutput:
+        """直接调用推理，与Qwen接口兼容"""
+        return self.model(input_ids, **kwargs)
     
-    def _standard_inference(self, input_ids, **kwargs):
-        """标准确定性推理：使用期望值计算"""
-        with torch.no_grad():
-            outputs = self.model(input_ids, **kwargs)
-            # 返回完整的CausalMVPOutput结构
-            return outputs
-    
-    def _causal_sampling(self, input_ids, temperature=1.0, **kwargs):
-        """
-        个体因果采样：个体具现 → 环境噪声 → 线性决策
-        
-        数学框架：
-        1. 采样个体: u_i ~ Cauchy(loc_U_i, temperature * scale_U_i)
-        2. 构建决策输入分布: U'_input ~ Cauchy(u_i, |b_noise|) 
-        3. 解析计算决策: 将决策输入分布传入ActionNetwork线性变换
-        """  
-        with torch.no_grad():
-            outputs = self.model(input_ids, **kwargs)
-            
-            # 步骤1：采样具体个体（温度控制个体采样的不确定性）
-            # 温度越低，scale_U越小，个体采样越确定性
-            temperature_controlled_scale_U = outputs.scale_U * temperature
-            uniform_sample = torch.rand_like(outputs.loc_U)
-            u_sampled = outputs.loc_U + temperature_controlled_scale_U * torch.tan(torch.pi * (uniform_sample - 0.5))
-            
-            # 步骤2-3：构建决策输入分布并解析计算
-            # ActionNetwork将采样的个体u_sampled作为位置参数
-            # 并使用其内置的b_noise作为环境噪声的尺度参数
-            # 这样ActionNetwork内部会计算：U'_input ~ Cauchy(u_sampled, |b_noise|)
-            # 然后解析计算最终的决策分布
-            loc_S, scale_S = self.model.action_network(u_sampled, torch.zeros_like(outputs.scale_U))
-            
-            # 更新输出结构
-            from .models import CausalMVPOutput
-            return CausalMVPOutput(
-                loc_S=loc_S,
-                scale_S=scale_S,
-                loc_U=u_sampled,
-                scale_U=outputs.scale_U,  # 修复：保留原始的不确定性信息
-                past_key_values=outputs.past_key_values,
-                hidden_states=outputs.hidden_states,
-                attentions=outputs.attentions
-            )
-    
-    def _compatible_sampling(self, input_ids, do_sample=True, top_k=50, top_p=0.9, temperature=1.0, **kwargs):
-        """
-        传统兼容采样：模拟传统Qwen的Softmax+采样行为
-        
-        关键修复：使用loc_S作为logits，应用传统的Softmax变换和采样策略
-        这样兼容模式的输出将与传统Qwen保持一致，而非CausalQwen的原生输出
-        """
-        with torch.no_grad():
-            # 获取CausalQwen的原生输出
-            outputs = self.model(input_ids, **kwargs)
-            
-            # 关键修复：使用loc_S作为传统logits
-            logits = outputs.loc_S / temperature  # 应用温度缩放
-            
-            if not do_sample:
-                # 确定性模式：直接argmax
-                next_token_logits = logits[..., -1, :]  # 获取最后一个位置的logits
-                next_token_ids = torch.argmax(next_token_logits, dim=-1, keepdim=True)
-                
-                # 构造兼容的输出格式
-                from .models import CausalMVPOutput
-                return CausalMVPOutput(
-                    loc_S=logits,  # 返回处理后的logits
-                    scale_S=torch.ones_like(logits),  # 确定性，尺度为1
-                    loc_U=outputs.loc_U,
-                    scale_U=outputs.scale_U,
-                    past_key_values=outputs.past_key_values,
-                    hidden_states=outputs.hidden_states,
-                    attentions=outputs.attentions,
-                    next_token_ids=next_token_ids  # 添加采样结果
-                )
-            
-            # 随机采样模式
-            next_token_logits = logits[..., -1, :].clone()  # [batch_size, vocab_size]
-            
-            # 应用top-k过滤
-            if top_k > 0:
-                top_k = min(top_k, next_token_logits.size(-1))
-                top_k_logits, top_k_indices = torch.topk(next_token_logits, top_k)
-                # 将其他位置设为负无穷
-                filtered_logits = torch.full_like(next_token_logits, float('-inf'))
-                filtered_logits.scatter_(-1, top_k_indices, top_k_logits)
-                next_token_logits = filtered_logits
-            
-            # 应用top-p (nucleus)过滤
-            if 0.0 < top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-                
-                # 找到累积概率超过top_p的位置
-                sorted_indices_to_remove = cumulative_probs > top_p
-                # 保留第一个超过阈值的token（重要！）
-                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                sorted_indices_to_remove[..., 0] = 0
-                
-                # 将需要移除的位置设为负无穷
-                indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-                next_token_logits[indices_to_remove] = float('-inf')
-            
-            # Softmax并采样
-            probs = F.softmax(next_token_logits, dim=-1)
-            next_token_ids = torch.multinomial(probs, 1)
-            
-            # 构造兼容的输出格式
-            from .models import CausalMVPOutput
-            return CausalMVPOutput(
-                loc_S=logits,  # 返回处理后的logits
-                scale_S=torch.ones_like(logits),  # 采样模式，尺度信息不重要
-                loc_U=outputs.loc_U,
-                scale_U=outputs.scale_U,
-                past_key_values=outputs.past_key_values,
-                hidden_states=outputs.hidden_states,
-                attentions=outputs.attentions,
-                next_token_ids=next_token_ids  # 添加采样结果
-            )
-    
-    def generate_step_by_step(
-        self,
-        input_ids,
-        max_length=None,
-        max_new_tokens=None,
-        mode='standard',
-        temperature=1.0,
-        top_k=50,
-        top_p=0.9,
-        pad_token_id=None,
-        eos_token_id=None,
-        **kwargs
-    ):
-        """
-        CausalQwen专用的逐步生成方法
+    def generate_next_token(self, input_ids, do_sample=False, temperature=1.0, 
+                          top_k=50, top_p=0.9, **kwargs) -> torch.LongTensor:
+        """生成下一个token - 与Qwen生成接口兼容
         
         Args:
-            mode (str): 推理模式
-                - 'standard': 确定性OvR
-                - 'causal': 因果采样 
-                - 'compatible_sample': 传统采样（HuggingFace兼容）
-                - 'compatible_deterministic': 传统确定性（HuggingFace兼容）
-        """
-        # 参数处理
-        if max_length is None and max_new_tokens is None:
-            max_new_tokens = 50
-        elif max_new_tokens is None:
-            max_new_tokens = max_length - input_ids.shape[-1]
+            input_ids: 输入序列
+            do_sample: 是否采样（V2核心参数）
+            temperature: 温度参数
+            top_k: top-k采样
+            top_p: nucleus采样
             
-        if pad_token_id is None:
-            pad_token_id = getattr(self.config, 'pad_token_id', 0)
-        if eos_token_id is None:
-            eos_token_id = getattr(self.config, 'eos_token_id', 2)
+        Returns:
+            next_token: 下一个token [batch_size, 1]
+        """
+        output = self.model(input_ids, do_sample=do_sample, temperature=temperature, **kwargs)
         
-        # 直接使用当前引擎实例（self已经是CausalInferenceEngine）
+        # 计算OvR概率
+        ovr_probs = self.model.ovr_classifier(output.loc_S, output.scale_S)
+        logits = ovr_probs[:, -1, :]  # 最后一个位置的概率
+        
+        if do_sample:
+            # 采样生成
+            if temperature != 1.0:
+                logits = logits / temperature
+            
+            # Top-k过滤
+            if top_k > 0:
+                top_k = min(top_k, logits.size(-1))
+                indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+                logits[indices_to_remove] = float('-inf')
+            
+            # Top-p过滤
+            if top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                sorted_indices_to_remove = cumulative_probs > top_p
+                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                sorted_indices_to_remove[..., 0] = 0
+                indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+                logits[indices_to_remove] = float('-inf')
+            
+            # 多项分布采样
+            probs = F.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, 1)
+        else:
+            # 贪心生成
+            next_token = torch.argmax(logits, dim=-1, keepdim=True)
+        
+        return next_token
+    
+    def generate(self, input_ids, max_new_tokens=20, do_sample=True, temperature=1.0,
+                top_k=50, top_p=0.9, pad_token_id=None, eos_token_id=None, **kwargs):
+        """序列生成 - 完全兼容Qwen.generate()接口
+        
+        Args:
+            input_ids: 初始序列 [batch_size, seq_len]
+            max_new_tokens: 最大生成token数
+            do_sample: 是否采样
+            temperature: 温度参数  
+            top_k: top-k采样
+            top_p: nucleus采样
+            pad_token_id: padding token id
+            eos_token_id: 结束token id
+            
+        Returns:
+            generated_ids: 完整序列 [batch_size, seq_len + new_tokens]
+        """
+        batch_size = input_ids.shape[0]
         current_ids = input_ids.clone()
         
-        # 逐步生成
-        for step in range(max_new_tokens):
-            if mode in ['compatible_sample', 'compatible_deterministic']:
-                # 兼容模式：使用传统HuggingFace逻辑
-                do_sample = (mode == 'compatible_sample')
-                output = self._compatible_sampling(
+        for _ in range(max_new_tokens):
+            with torch.no_grad():
+                next_token = self.generate_next_token(
                     current_ids,
                     do_sample=do_sample,
                     temperature=temperature,
@@ -197,171 +105,86 @@ class CausalInferenceEngine:
                     top_p=top_p,
                     **kwargs
                 )
-                # 从兼容模式输出中提取token
-                if hasattr(output, 'next_token_ids') and output.next_token_ids is not None:
-                    next_token = output.next_token_ids
-                else:
-                    next_token = torch.argmax(output.loc_S[:, -1:], dim=-1)
-            else:
-                # CausalQwen模式：standard或causal
-                output = self.inference(current_ids, mode=mode, temperature=temperature, **kwargs)
-                # 从推理输出中提取下一个token（使用argmax）
-                next_token = torch.argmax(output.loc_S[:, -1:], dim=-1)
-            
-            # 添加到序列
-            current_ids = torch.cat([current_ids, next_token], dim=-1)
-            
-            # 检查停止条件
-            if next_token[0, 0].item() == eos_token_id:  # next_token shape: [batch, 1]
-                break
+                current_ids = torch.cat([current_ids, next_token], dim=-1)
                 
+                # 检查是否遇到结束token
+                if eos_token_id is not None and (next_token == eos_token_id).any():
+                    break
+        
         return current_ids
-    
-    def batch_generate(self, input_ids_list, mode='standard', **kwargs):
-        """批量生成 - 占位实现"""
-        # TODO: 实现高效的批量生成
-        results = []
-        for input_ids in input_ids_list:
-            if input_ids.dim() == 1:
-                input_ids = input_ids.unsqueeze(0)
-            result = self.generate_step_by_step(input_ids, mode=mode, **kwargs)
-            results.append(result)
-        return results
-
-
-# 为主模型类添加推理方法
-def add_inference_methods(model_class):
-    """为CausalQwenMVPForCausalLM添加推理方法"""
-    
-    def inference(self, input_ids, mode='standard', **kwargs):
-        """统一推理接口"""
-        engine = CausalInferenceEngine(self)
-        return engine.inference(input_ids, mode, **kwargs)
-    
-    def generate_step_by_step(self, input_ids, max_length=50, mode='standard', **kwargs):
-        """自回归生成（CausalQwen专用）"""
-        engine = CausalInferenceEngine(self)
-        return engine.generate_step_by_step(input_ids, max_length=max_length, mode=mode, **kwargs)
-    
-    def generate(self, input_ids=None, attention_mask=None, **kwargs):
-        """
-        HuggingFace compatible generate method with CausalQwen extensions.
-        
-        Design Trade-offs (设计取舍):
-        - Priority: causal_mode > do_sample (因果模式优先级高于传统采样)
-        - Default: 'standard' mode for deterministic behavior (默认确定性模式)
-        - Simplification: Clear separation of three modes, avoiding complex parameter mapping
-          (简化设计：三种模式明确分离，避免复杂参数映射)
-        
-        Args:
-            causal_mode (str): 'standard', 'causal', or 'compatible' 
-            do_sample (bool): Only effective when causal_mode='compatible'
-            temperature (float): Controls sampling randomness
-            top_k (int): Limits vocabulary for sampling  
-            top_p (float): Nucleus sampling threshold
-        """
-        # Extract CausalQwen-specific parameters
-        causal_mode = kwargs.pop('causal_mode', 'standard')  # Default to deterministic
-        
-        # Mode determination with clear priority: causal_mode > do_sample
-        if causal_mode == 'standard':
-            # Deterministic OvR prediction (ignore do_sample)
-            mode = 'standard'
-        elif causal_mode == 'causal':
-            # Individual-based causal sampling (ignore do_sample)  
-            mode = 'causal'
-        elif causal_mode == 'compatible':
-            # Traditional HuggingFace behavior (respect do_sample)
-            do_sample = kwargs.get('do_sample', False)
-            mode = 'compatible_sample' if do_sample else 'compatible_deterministic'
-        else:
-            raise ValueError(f"Invalid causal_mode: {causal_mode}. Must be 'standard', 'causal', or 'compatible'")
-        
-        # Delegate to step-by-step generation with resolved mode
-        return self.generate_step_by_step(
-            input_ids=input_ids,
-            attention_mask=attention_mask, 
-            mode=mode,
-            **kwargs
-        )
-    
-    def batch_generate(self, input_ids_list, mode='standard', **kwargs):
-        """批量生成"""
-        engine = CausalInferenceEngine(self)
-        return engine.batch_generate(input_ids_list, mode, **kwargs)
-    
-    # 动态添加方法到类
-    model_class.inference = inference
-    model_class.generate_step_by_step = generate_step_by_step
-    model_class.generate = generate
-    model_class.batch_generate = batch_generate
-    
-    return model_class
-
-
-# 应用推理方法到主模型类
-CausalQwenMVPForCausalLM = add_inference_methods(CausalQwenMVPForCausalLM)
 
 
 class InferenceValidator:
-    """推理验证工具"""
+    """推理验证器 - 验证V2数学原理"""
     
     def __init__(self, model: CausalQwenMVPForCausalLM):
         self.model = model
-        
-    def validate_inference_consistency(self, input_ids, num_samples=5):
-        """验证不同推理模式的一致性 - 占位实现"""
-        # TODO: 实现更comprehensive的一致性检查
+        self.engine = CausalInferenceEngine(model)
+    
+    def validate_v2_principles(self, input_ids, temperature=1.0):
+        """验证V2数学原理：位置vs尺度差异"""
         results = {}
         
-        # 测试标准推理
-        try:
-            standard_output = self.model.inference(input_ids, mode='standard')
-            results['standard'] = standard_output
-            print(f"Standard inference: {standard_output.shape}")
-        except Exception as e:
-            print(f"Standard inference failed: {e}")
+        with torch.no_grad():
+            # 基础表征
+            transformer_output = self.model.model(input_ids)
+            hidden_states = transformer_output[0]
+            loc_U, scale_U = self.model.abduction_network(hidden_states)
             
-        # 测试因果采样
-        try:
-            causal_outputs = []
-            for i in range(num_samples):
-                causal_output = self.model.inference(input_ids, mode='causal')
-                causal_outputs.append(causal_output)
-            results['causal'] = causal_outputs
-            print(f"Causal sampling: {len(causal_outputs)} samples")
-        except Exception as e:
-            print(f"Causal sampling failed: {e}")
+            # 确定性模式：噪声影响尺度参数
+            det_output = self.model(input_ids, do_sample=False)
             
-        # 测试兼容采样
-        try:
-            compatible_output = self.model.inference(input_ids, mode='compatible')
-            results['compatible'] = compatible_output
-            print(f"Compatible sampling: {compatible_output.shape}")
-        except Exception as e:
-            print(f"Compatible sampling failed: {e}")
+            # 采样模式：噪声影响位置参数
+            samp_output = self.model(input_ids, do_sample=True, temperature=temperature)
             
+            results = {
+                'base_representations': {
+                    'loc_U': loc_U,
+                    'scale_U': scale_U
+                },
+                'deterministic_mode': {
+                    'loc_S': det_output.loc_S,
+                    'scale_S': det_output.scale_S
+                },
+                'sampling_mode': {
+                    'loc_S': samp_output.loc_S,
+                    'scale_S': samp_output.scale_S
+                },
+                'position_difference': torch.abs(det_output.loc_S - samp_output.loc_S).mean(),
+                'scale_difference': torch.abs(det_output.scale_S - samp_output.scale_S).mean()
+            }
+        
         return results
     
-    def test_generation_quality(self, input_ids, max_length=20):
-        """测试生成质量 - 占位实现"""
-        # TODO: 实现质量评估指标
+    def compare_with_qwen(self, input_ids, qwen_model=None):
+        """与原始Qwen模型对比，验证兼容性"""
+        if qwen_model is None:
+            return None
+            
         results = {}
         
-        for mode in ['standard', 'causal', 'compatible']:
-            try:
-                generated = self.model.generate_step_by_step(
-                    input_ids, 
-                    max_length=max_length,
-                    mode=mode
-                )
-                results[mode] = {
-                    'generated_ids': generated,
-                    'length': generated.shape[-1],
-                    'input_length': input_ids.shape[-1]
-                }
-                print(f"{mode} generation: length {generated.shape[-1]}")
-            except Exception as e:
-                print(f"{mode} generation failed: {e}")
-                
-        return results 
+        with torch.no_grad():
+            # CausalQwen确定性输出
+            causal_output = self.model(input_ids, do_sample=False)
+            causal_logits = causal_output.loc_S  # 位置参数作为logits
+            
+            # Qwen确定性输出
+            qwen_output = qwen_model(input_ids)
+            qwen_logits = qwen_output.logits
+            
+            # 对比分析
+            logits_diff = torch.abs(causal_logits - qwen_logits).mean()
+            
+            # 预测一致性
+            causal_pred = torch.argmax(causal_logits[:, -1, :], dim=-1)
+            qwen_pred = torch.argmax(qwen_logits[:, -1, :], dim=-1)
+            pred_match = (causal_pred == qwen_pred).float().mean()
+            
+            results = {
+                'logits_difference': logits_diff.item(),
+                'prediction_match_rate': pred_match.item(),
+                'causal_prediction': causal_pred.tolist(),
+                'qwen_prediction': qwen_pred.tolist()
+            }
+        
+        return results
