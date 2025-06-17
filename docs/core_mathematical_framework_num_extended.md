@@ -469,7 +469,7 @@ graph TB
         Y1 --> Reg1["回归: loc_Y"]
     end
     
-    subgraph "因果采样推理模式"
+    subgraph "因果/采样推理模式"
         Mode2 --> Sample2["采样具体个体<br>u ~ U"]
         Sample2 --> Noise2["构建新分布<br>U' ~ Cauchy(u, |b_noise|)"]
         Noise2 --> Action2["行动网络<br>(分布形式的线性变换)"]
@@ -515,7 +515,7 @@ graph TB
         Forward --> Branch{选择推理模式}
 
         Branch -->|标准推理| Std["U'_t ~ Cauchy(loc_{U_t}, scale_{U_t} + |b_noise|)<br>↓<br>计算 P_k,t 和 loc_Y_t"]
-        Branch -->|因果采样 u_t ~ U_t| Causal["U'_t~Cauchy(u_t, |b_noise|)<br>↓<br>计算 P_k,t 和 loc_Y_t"]
+        Branch -->|因果/采样推理| Causal["U'_t~Cauchy(u_t, |b_noise|)<br>↓<br>计算 P_k,t 和 loc_Y_t"]
         Branch -->|传统方法| Trad["使用 loc_S_t 作为 logits<br>↓<br>Softmax + Top-k/Top-p"]
         
         Std --> Predict["预测下一词元"]
@@ -525,7 +525,7 @@ graph TB
         Predict --> IsNum{预测为&lt;NUM&gt;?}
 
         IsNum -->|是| NumPath["使用回归值loc_{Y_t}:<br>input_ids.append(&lt;NUM_ID&gt;)<br>numeric_values.append(loc_{Y_t})<br>生成文本.append(str(loc_{Y_t}))"]
-        IsNum -->|否| TextPath["使用分类结果:<br>input_ids.append(pred_token_id)<br>numeric_values.append(0.0)<br>生成文本.append(token_text)"]
+        IsNum -->|否| TextPath["使用分类结果:<br>input_ids.append(pred_token_id)<br>numeric_values.append(0.0)<br>生成数值.append(token_text)"]
         
         NumPath --> Check{"结束条件?<br>(EOS或最大长度)"}
         TextPath --> Check
@@ -551,47 +551,58 @@ graph TB
 
 ---
 
-#### 4.3 高级序列因果采样详解
+#### 4.3 序列因果采样：共享外生噪声
 
-为了更好地理解3.4节中描述的高级因果采样模式，这里用流程图展示两种模式的具体实现：
+这张图展示了使用固定外生噪声实例进行序列因果采样的完整流程，探索系统性偏差对生成结果的影响。
 
 ```mermaid
-graph LR
-    start_point["共享随机性实例生哼<br>（个体选择因子或噪声实例）"]
-
-    start_point --> C1
-    start_point --> C2
-
-    subgraph "模式一：共享个体选择因子<br>ε_seed ~ U(0,1)^C"
-        C1["循环: t=1,2,..."]
-        C1 --> D1["计算 U_t 分布<br>U_t ~ Cauchy(loc_U_t, scale_U_t)"]
-        D1 --> E1["使用固定因子计算个体<br>u_t = loc_U_t + scale_U_t ⊙ tan(π(ε_seed - 0.5))"]
-        E1 --> F1["U'_t ~ Cauchy(u_t, |b_noise|)"]
-        F1 --> G1["生成下一词元"]
-        G1 --> H1{继续生成?}
-        H1 -->|是| C1
-        H1 -->|否| I1["结束"]
+graph TB
+    Start["初始化序列生成"] --> Loop["开始自回归循环<br>t = 1, 2, ..."]
+    InitNoise["生成固定噪声实例<br>ε_noise ~ Cauchy(0, I)"]
+    
+    subgraph "因果采样生成主循环"
+        Loop --> Forward["归因推断网络 U_t"]
+        
+        Forward --> NoiseInject["核心：噪声注入<br>U'_t ~ Cauchy(loc_U_t + |b_noise|·ε_noise, scale_U_t)"]
+        
+        NoiseInject --> Action["行动决策网络"]
+        
+        Action --> Classify["OvR分类预测<br>P_k,t = P(S_k,t > C_k)"]
+        Action --> Regress["回归预测<br>pred_value_t = loc_Y_t"]
+        
+        Classify --> Decision{预测词元类型}
+        Regress --> Decision
+        
+        Decision -->|数值| NumUpdate["使用回归值:<br>input_ids.append(NUM token)<br>numeric_values.append(pred_value_t)<br>生成文本.append(str(pred_value_t))"]
+        Decision -->|文本| TextUpdate["使用分类结果:<br>input_ids.append(pred_token_id)<br>numeric_values.append(0.0)<br>生成数值.append(token_text)"]
+        
+        NumUpdate --> Check{"结束条件?<br>(EOS或最大长度)"}
+        TextUpdate --> Check
+        
+        Check -->|否| Next["t = t + 1"]
+        Check -->|是| End["输出完整生成序列"]
+        
+        Next --> Forward
     end
     
-    subgraph "模式二：共享外生噪声实例<br>ε_noise ~ Cauchy(0, I)"
-        C2["循环: t=1,2,..."]
-        C2 --> D2["计算 U_t 分布<br>U_t ~ Cauchy(loc_U_t, scale_U_t)"]
-        D2 --> E2["U'_t ~ Cauchy(loc_U_t + |b_noise|·ε_noise, scale_U_t)"]
-        E2 --> F2["生成下一词元"]
-        F2 --> H2{继续生成?}
-        H2 -->|是| C2
-        H2 -->|否| I2["结束"]
-    end
-    
-    style E1 fill:#fbe9e7
-    style E2 fill:#fbe9e7
+    InitNoise --> NoiseInject
+
+    style Start fill:#e8f5e9
+    style InitNoise fill:#fff3e0,stroke:#ff9800,stroke-width:2px
+    style NoiseInject fill:#fbe9e7,stroke:#e91e63,stroke-width:3px
+    style Decision fill:#e1f5fe
+    style NumUpdate fill:#fbe9e7
+    style TextUpdate fill:#e3f2fd
+    style End fill:#e8f5e9
 ```
 
-**深层含义**：
-- **模式一**：探索同一个体在不同环境扰动下的行为变化
-- **模式二**：探索不同个体在相同系统性偏差下的反应差异
+**关键特点**：
+1. **固定噪声实例**：整个序列使用同一个 `ε_noise`，保证系统性一致
+2. **因果注入机制**：每个位置的 `U'_t` 都受到相同噪声影响
+3. **双通道决策**：同时进行分类和回归预测
+4. **序列一致性**：维持 `input_ids` 和 `numeric_values` 的对齐
 
-这两种模式为反事实分析和因果推理提供了强大的工具。
+**应用场景**：反事实分析、风格一致性生成、因果干预实验。
 
 
 
@@ -692,13 +703,14 @@ graph TD
     end
 
     subgraph "回归损失归约"
-        B --> H["注意: L_reg_gated 已包含 num_mask"]
+        B --> H["L_reg_gated"]
         H --> I["sum(L_reg_gated) / sum(num_mask)"]
         I --> J["<b>L_reg_effective</b><br>有效回归损失<br>(标量)"]
     end
 
     G & J --> K["L_total = L_cls_mean + λ × L_reg_effective"]
     K --> L["<b>L_total</b><br>最终总损失<br>(标量)"]
+    D --> I
 
     style L fill:#fce4ec,stroke:#880e4f,stroke-width:2px
     style C fill:#f1f8e9
