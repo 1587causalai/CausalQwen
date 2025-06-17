@@ -261,16 +261,44 @@ def compare_generation_methods(text, tokenizer, qwen_model, causal_model):
     
     print_step(4, "一致性验证")
     
-    # 验证1：确定性模式一致性
-    qwen_vs_causal_det = (qwen_det_new == causal_det_new)
-    if qwen_vs_causal_det:
-        print_success(f"✅ 确定性模式完全一致！")
-        print_success(f"   Qwen: {qwen_det_new} == CausalQwen: {causal_det_new}")
-    else:
-        det_diff = sum(1 for a, b in zip(qwen_det_new, causal_det_new) if a != b)
-        print_warning(f"⚠️ 确定性模式不一致: {det_diff}/5 位置不同")
-        print_info(f"   Qwen: {qwen_det_new}")
-        print_info(f"   CausalQwen: {causal_det_new}")
+    # 验证1：确定性模式的logits一致性（关键验证）
+    print_info("🎯 验证CausalQwen确定性模式的loc_S与Qwen的logits一致性")
+    
+    # 获取CausalQwen确定性模式的前向传播结果
+    with torch.no_grad():
+        causal_outputs = causal_model(input_ids)
+        # 提取loc_S（决策分布的位置参数）
+        if hasattr(causal_outputs, 'loc_S'):
+            causal_loc_S = causal_outputs.loc_S
+        else:
+            # 如果没有直接的loc_S，通过ActionNetwork获取
+            transformer_out = causal_model.model(input_ids)
+            hidden_states = transformer_out.last_hidden_state
+            loc_U, scale_U = causal_model.abduction_network(hidden_states)
+            causal_loc_S, _ = causal_model.action_network(loc_U, scale_U, do_sample=False)
+        
+        # 获取Qwen的logits
+        qwen_outputs = qwen_model(input_ids)
+        qwen_logits = qwen_outputs.logits
+        
+        # 比较最后一个位置的logits/loc_S
+        last_pos_causal = causal_loc_S[:, -1, :]  # [batch, vocab]
+        last_pos_qwen = qwen_logits[:, -1, :]     # [batch, vocab]
+        
+        logits_diff = torch.abs(last_pos_causal - last_pos_qwen).mean().item()
+        logits_max_diff = torch.abs(last_pos_causal - last_pos_qwen).max().item()
+        
+        print_math(f"loc_S vs Qwen logits平均差异: {logits_diff:.8f}")
+        print_math(f"loc_S vs Qwen logits最大差异: {logits_max_diff:.8f}")
+        
+        if logits_diff < 1e-4:
+            print_success(f"✅ 确定性模式logits一致性验证通过！")
+            print_success(f"   CausalQwen的loc_S与Qwen的logits基本一致")
+            logits_consistent = True
+        else:
+            print_warning(f"⚠️ logits差异较大: {logits_diff:.8f}")
+            print_warning(f"   这可能表明权重复制不完整或ActionNetwork实现有误")
+            logits_consistent = False
     
     # 验证2：采样模式多样性
     all_causal_samp = [output[0] for output in causal_samp_outputs]
@@ -310,7 +338,8 @@ def compare_generation_methods(text, tokenizer, qwen_model, causal_model):
         'qwen_sampling': (qwen_samp_new, qwen_samp_text),
         'causal_deterministic': (causal_det_new, causal_det_text),
         'causal_sampling': causal_samp_outputs,
-        'deterministic_match': qwen_vs_causal_det,
+        'logits_consistent': logits_consistent,
+        'logits_difference': logits_diff,
         'causal_diversity': causal_diversity
     }
 
@@ -410,11 +439,16 @@ def main():
     # 总结报告
     print_section("测试总结报告", Colors.GREEN)
     
-    # 统计一致性验证结果
-    det_consistency_count = sum(1 for result in all_results if result['generation']['deterministic_match'])
+    # 统计logits一致性验证结果（关键指标）
+    logits_consistency_count = sum(1 for result in all_results if result['generation']['logits_consistent'])
     total_cases = len(all_results)
     
-    print_success(f"确定性一致性: {det_consistency_count}/{total_cases} 个案例通过")
+    print_success(f"logits一致性: {logits_consistency_count}/{total_cases} 个案例通过")
+    
+    # 统计平均logits差异
+    if all_results:
+        avg_logits_diff = np.mean([result['generation']['logits_difference'] for result in all_results if 'logits_difference' in result['generation']])
+        print_success(f"平均logits差异: {avg_logits_diff:.8f}")
     
     # 分析多样性
     diversity_scores = [result['generation']['causal_diversity'] for result in all_results]
@@ -433,15 +467,16 @@ def main():
     avg_temp_diversity = np.mean(temp_diversity_scores) if temp_diversity_scores else 0
     print_success(f"平均温度多样性: {avg_temp_diversity:.2f}/5")
     
-    if det_consistency_count == total_cases:
+    if logits_consistency_count == total_cases:
         print_section("🎉 所有测试通过！CausalQwen与Qwen完全兼容！", Colors.GREEN)
-        print_success("✅ 确定性模式与Qwen行为完全一致")
+        print_success("✅ 确定性模式的loc_S与Qwen的logits完全一致")
         print_success("✅ 采样模式体现V2数学原理")
         print_success("✅ 温度参数正确控制生成多样性")
         print_success("✅ 完全兼容Qwen的generate()接口")
     else:
         print_section("⚠️ 部分测试未通过，需要进一步调试", Colors.YELLOW)
-        print_info("请检查权重复制和模型实现")
+        print_info("请检查权重复制和ActionNetwork实现")
+        print_info(f"logits一致性: {logits_consistency_count}/{total_cases} 个案例通过")
     
     print_info("CausalQwen V2核心特性:")
     print_info("├─ do_sample=False: 噪声影响尺度参数，增加决策不确定性")
