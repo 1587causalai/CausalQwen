@@ -274,8 +274,8 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
         print("权重复制完成！")
     
     def generate(self, input_ids, max_new_tokens=20, do_sample=True, temperature=1.0,
-                top_k=50, top_p=0.9, pad_token_id=None, eos_token_id=None, **kwargs):
-        """序列生成 - 完全兼容Qwen.generate()接口"""
+                top_k=None, top_p=None, pad_token_id=None, eos_token_id=None, **kwargs):
+        """序列生成 - CausalQwen专用推理（不使用传统采样）"""
         from .inference import CausalInferenceEngine
         engine = CausalInferenceEngine(self)
         return engine.generate(

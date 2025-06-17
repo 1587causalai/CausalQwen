@@ -174,7 +174,7 @@ def test_temperature_effects(model, input_ids):
     print_section("温度参数效果测试")
     
     try:
-        temperatures = [0.1, 0.5, 1.0, 1.5, 2.0]
+        temperatures = [0.0, 0.1, 0.5, 1.0, 1.5, 2.0]  # 添加温度为零的测试
         results = []
         
         for temp in temperatures:
@@ -190,6 +190,12 @@ def test_temperature_effects(model, input_ids):
             new_tokens = output[0, input_ids.shape[1]:].tolist()
             results.append((temp, new_tokens))
             print_info(f"温度T={temp}: {new_tokens}")
+        
+        # 特别验证温度为零的场景
+        if len(results) > 0 and results[0][0] == 0.0:
+            print_info("🌡️ 温度为零是极其重要的边界条件！")
+            temp_zero_tokens = results[0][1]
+            print_info(f"温度T=0结果: {temp_zero_tokens}")
         
         # 分析温度效果
         unique_sequences = len(set(tuple(result[1]) for result in results))

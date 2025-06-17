@@ -93,7 +93,7 @@ def main():
     
     # 5. 对比不同温度效果
     print("\n🌡️  温度效果对比")
-    temperatures = [0.1, 0.5, 1.0, 1.5, 2.0]
+    temperatures = [0.0, 0.1, 0.5, 1.0, 1.5, 2.0]  # 添加温度为零的测试
     
     for temp in temperatures:
         try:
@@ -108,6 +108,11 @@ def main():
             
             new_tokens = temp_output[0, input_ids.shape[1]:].tolist()
             print(f"   T={temp}: {new_tokens}")
+            
+            # 特别说明温度为零的重要性
+            if temp == 0.0:
+                pass
+                # print("   🌡️ 温度为零是极其重要的边界条件！")
             
         except Exception as e:
             print(f"   T={temp}: 失败 - {e}")

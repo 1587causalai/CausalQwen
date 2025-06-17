@@ -350,7 +350,7 @@ def test_different_temperatures(text, tokenizer, causal_model):
     inputs = tokenizer(text, return_tensors='pt')
     input_ids = inputs['input_ids']
     
-    temperatures = [0.1, 0.5, 1.0, 1.5, 2.0]
+    temperatures = [0.0, 0.1, 0.5, 1.0, 1.5, 2.0]  # 添加温度为零的测试
     temp_results = []
     
     print_info("测试不同温度下的CausalQwen采样生成:")
@@ -369,6 +369,12 @@ def test_different_temperatures(text, tokenizer, causal_model):
             new_text = tokenizer.decode(new_tokens)
             temp_results.append((temp, new_tokens, new_text))
             print_info(f"T={temp}: tokens={new_tokens}, text='{new_text}'")
+    
+    # 特别验证温度为零的场景
+    if len(temp_results) > 0 and temp_results[0][0] == 0.0:
+        print_info("🌡️ 温度为零是极其重要的边界条件！")
+        temp_zero_tokens, temp_zero_text = temp_results[0][1], temp_results[0][2]
+        print_info(f"温度T=0结果: tokens={temp_zero_tokens}, text='{temp_zero_text}'")
     
     # 分析温度效果
     unique_sequences = len(set(tuple(result[1]) for result in temp_results))

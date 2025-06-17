@@ -65,7 +65,10 @@ scale_S = scale_U @ torch.abs(self.lm_head.weight).T
 
 **步骤4：OvR概率计算** - $P_{k,i} = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$
 
-##### V2采样模式流程图
+**步骤5：输出决策** - $\text{argmax}_k P_{k,i}$
+
+
+采样模式流程图
 
 ```mermaid
 graph LR
@@ -100,7 +103,9 @@ scale_S = scale_U_noisy @ torch.abs(self.lm_head.weight).T
 
 **步骤3：OvR概率计算** - $P_{k,i} = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_{k,i}} - C_k}{\text{scale}_{S_{k,i}}}\right)$
 
-##### V2非采样模式流程图
+**步骤4：输出决策** - $\text{argmax}_k P_{k,i}$
+
+非采样模式流程图
 
 ```mermaid
 graph LR
@@ -118,7 +123,7 @@ graph LR
 
 ### V2设计的数学精妙之处
 
-1. **温度参数的选择性作用**：$T$仅在采样模式下起作用，控制噪声对上下文信息的扰动强度
+1. **温度参数的选择性作用**：$T$仅在采样模式下起作用，控制噪声对上下文信息的扰动强度. $T=0$ 时，采样模式退化为非采样模式. 意味着输出的时候假设是无噪声的. 
 2. **噪声作用的分化**：采样时扰动"身份特征"(位置)，非采样时增加"不确定性"(尺度)
 3. **单一随机性来源**：只有环境噪声$\epsilon \sim \text{Cauchy}(0,1)$，无需采样个体
 4. **统一的ActionNetwork输出**：始终输出$(\text{loc}_S, \text{scale}_S)$，由OvR分类器计算概率

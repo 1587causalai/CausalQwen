@@ -26,72 +26,56 @@ class CausalInferenceEngine:
         return self.model(input_ids, **kwargs)
     
     def generate_next_token(self, input_ids, do_sample=False, temperature=1.0, 
-                          top_k=50, top_p=0.9, **kwargs) -> torch.LongTensor:
-        """生成下一个token - 与Qwen生成接口兼容
+                          **kwargs) -> torch.LongTensor:
+        """生成下一个token - CausalQwen专用推理
+        
+        CausalQwen的"采样"是在ActionNetwork内部通过噪声注入实现的，
+        不是传统的多项分布采样！
         
         Args:
             input_ids: 输入序列
-            do_sample: 是否采样（V2核心参数）
-            temperature: 温度参数
-            top_k: top-k采样
-            top_p: nucleus采样
+            do_sample: 是否采样（控制ActionNetwork内部噪声注入方式）
+            temperature: 温度参数（控制噪声强度，在ActionNetwork内部生效）
             
         Returns:
             next_token: 下一个token [batch_size, 1]
         """
+        # CausalQwen推理：ActionNetwork内部已经完成了"采样"
         output = self.model(input_ids, do_sample=do_sample, temperature=temperature, **kwargs)
         
-        # 计算OvR概率
+        # 计算OvR概率：P_k = 1/2 + (1/π) × arctan((loc_S_k - C_k) / scale_S_k)
         ovr_probs = self.model.ovr_classifier(output.loc_S, output.scale_S)
-        logits = ovr_probs[:, -1, :]  # 最后一个位置的概率
         
-        if do_sample:
-            # 采样生成
-            if temperature != 1.0:
-                logits = logits / temperature
-            
-            # Top-k过滤
-            if top_k > 0:
-                top_k = min(top_k, logits.size(-1))
-                indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
-                logits[indices_to_remove] = float('-inf')
-            
-            # Top-p过滤
-            if top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-                sorted_indices_to_remove = cumulative_probs > top_p
-                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                sorted_indices_to_remove[..., 0] = 0
-                indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-                logits[indices_to_remove] = float('-inf')
-            
-            # 多项分布采样
-            probs = F.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, 1)
-        else:
-            # 贪心生成
-            next_token = torch.argmax(logits, dim=-1, keepdim=True)
+        # CausalQwen最终决策：直接argmax，无需传统采样
+        next_token = torch.argmax(ovr_probs[:, -1, :], dim=-1, keepdim=True)
         
         return next_token
     
     def generate(self, input_ids, max_new_tokens=20, do_sample=True, temperature=1.0,
-                top_k=50, top_p=0.9, pad_token_id=None, eos_token_id=None, **kwargs):
-        """序列生成 - 完全兼容Qwen.generate()接口
+                top_k=None, top_p=None, pad_token_id=None, eos_token_id=None, **kwargs):
+        """序列生成 - CausalQwen专用推理
+        
+        CausalQwen不使用传统的top_k/top_p采样！
+        "采样"是在ActionNetwork内部通过噪声注入实现的。
         
         Args:
             input_ids: 初始序列 [batch_size, seq_len]
             max_new_tokens: 最大生成token数
-            do_sample: 是否采样
-            temperature: 温度参数  
-            top_k: top-k采样
-            top_p: nucleus采样
+            do_sample: 是否采样（控制ActionNetwork内部噪声注入方式）
+            temperature: 温度参数（控制噪声强度）
+            top_k: 兼容性参数，CausalQwen中无效
+            top_p: 兼容性参数，CausalQwen中无效
             pad_token_id: padding token id
             eos_token_id: 结束token id
             
         Returns:
             generated_ids: 完整序列 [batch_size, seq_len + new_tokens]
         """
+        # 警告：top_k/top_p在CausalQwen中无效
+        if top_k is not None or top_p is not None:
+            pass 
+            # print("⚠️ Warning: top_k/top_p参数在CausalQwen中无效，采样由ActionNetwork内部噪声控制")
+        
         batch_size = input_ids.shape[0]
         current_ids = input_ids.clone()
         
@@ -101,8 +85,6 @@ class CausalInferenceEngine:
                     current_ids,
                     do_sample=do_sample,
                     temperature=temperature,
-                    top_k=top_k,
-                    top_p=top_p,
                     **kwargs
                 )
                 current_ids = torch.cat([current_ids, next_token], dim=-1)
