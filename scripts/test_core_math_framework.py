@@ -431,12 +431,6 @@ def test_temperature_and_sampling_params():
             temp_results.append((temp, new_tokens))
             print_math(f"温度T={temp}: {new_tokens}")
         
-        # 特别验证温度为零的场景
-        if len(temp_results) > 0 and temp_results[0][0] == 0.0:
-            print_info("🌡️ 温度为零是极其重要的边界条件！")
-            temp_zero_tokens = temp_results[0][1]
-            print_math(f"温度T=0结果: {temp_zero_tokens}")
-        
         # 分析多样性
         unique_sequences = len(set(tuple(result[1]) for result in temp_results))
         print_math(f"不同温度产生的序列多样性: {unique_sequences}/{len(temperatures)}")

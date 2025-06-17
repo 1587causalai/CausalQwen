@@ -1,4 +1,4 @@
-# CausalQwen 因果推理理论演进
+# CausalQwen 的模型推理 
 
 > **📋 文档用途**: 深入阐述CausalQwen推理理论的重大演进和数学原理的根本性变化  
 > **🎯 目标读者**: 理论研究者，需要深入理解因果推理数学原理的开发者  
@@ -203,7 +203,7 @@ def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
 | **温度参数作用** | 控制个体采样方差 | 控制噪声扰动强度 | 无作用 |
 | **ActionNetwork输出** | $(\text{loc}_S, \text{scale}_S)$ | $(\text{loc}_S, \text{scale}_S)$ | $(\text{loc}_S, \text{scale}_S)$ |
 | **计算复杂度** | 高维个体采样 | 标准噪声采样 | 纯解析计算 |
-| **哲学含义** | 个体本身不确定 | 扰动个体身份 | 增加决策不确定性 |
+| **哲学含义** | 个体本身不确定 | 扰动个体因果表征 | 增加决策不确定性 |
 
 ### 数学流程对比
 

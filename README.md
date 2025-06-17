@@ -63,17 +63,17 @@ output = model.generate(
 运行4个核心测试脚本验证数学框架：
 
 ```bash
-# 1. V2数学原理验证
-python scripts/causal_qwen_v2_validation_test.py
+# 1. 核心数学框架验证
+python scripts/test_core_math_framework.py
 
-# 2. Qwen兼容性验证  
-python scripts/qwen_compatibility_test.py
+# 2. Qwen接口兼容性验证  
+python scripts/test_qwen_interface_compatibility.py
 
 # 3. 基本使用演示
-python scripts/simple_demo_v2.py
+python scripts/demo_basic_usage.py
 
-# 4. 端到端对比测试（需要Qwen模型）
-python scripts/end_to_end_comparison_test_v2.py
+# 4. 与原版Qwen对比测试（需要Qwen模型）
+python scripts/test_vs_original_qwen.py
 ```
 
 ### 预期测试结果
@@ -96,13 +96,13 @@ CausalQwen/
 │   ├── inference.py              # 推理引擎  
 │   └── training.py               # 训练工具
 ├── scripts/                      # 核心测试（仅4个）
-│   ├── causal_qwen_v2_validation_test.py    # V2数学验证
-│   ├── qwen_compatibility_test.py           # Qwen兼容性
-│   ├── simple_demo_v2.py                    # 使用演示
-│   └── end_to_end_comparison_test_v2.py     # 端到端对比
+│   ├── test_core_math_framework.py         # 核心数学框架验证
+│   ├── test_qwen_interface_compatibility.py # Qwen接口兼容性测试
+│   ├── demo_basic_usage.py                 # 基本使用演示
+│   └── test_vs_original_qwen.py            # 与原版Qwen对比
 ├── docs/                         # 核心数学文档
-│   ├── causal_qwen_v2_architecture.md      # V2架构
-│   └── causal_qwen_inference_theory.md     # 数学理论
+│   ├── core_mathematical_framework.md     # 核心数学框架
+│   └── position_vs_scale_theory.md        # 位置vs尺度理论
 └── README.md                     # 本文档
 ```
 
@@ -130,8 +130,8 @@ CausalQwen/
 ## 📚 数学理论
 
 详细数学推导请参考：
-- [CausalQwen V2架构](docs/causal_qwen_v2_architecture.md)
-- [因果推理理论](docs/causal_qwen_inference_theory.md)
+- [核心数学框架](docs/core_mathematical_framework.md)
+- [位置vs尺度理论](docs/position_vs_scale_theory.md)
 
 ### ActionNetwork统一框架
 

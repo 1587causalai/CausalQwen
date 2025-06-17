@@ -8,20 +8,20 @@
 
 ## 🔥 核心测试脚本（仅4个）
 
-### 1. V2数学原理验证 ⭐
+### 1. 核心数学框架验证 ⭐
 ```bash
-python scripts/causal_qwen_v2_validation_test.py
+python scripts/test_core_math_framework.py
 ```
-**用途**: 验证CausalQwen V2核心数学原理  
+**用途**: 验证CausalQwen核心数学原理  
 **核心验证**:
 - ✅ 柯西分布线性稳定性 
 - ✅ ActionNetwork双模式（位置vs尺度差异）
 - ✅ do_sample参数控制噪声影响方式
 - ✅ 温度参数选择性生效
 
-### 2. Qwen兼容性验证 ⭐
+### 2. Qwen接口兼容性验证 ⭐
 ```bash
-python scripts/qwen_compatibility_test.py
+python scripts/test_qwen_interface_compatibility.py
 ```
 **用途**: 验证与Qwen的完全兼容性  
 **验证点**: 
@@ -29,9 +29,9 @@ python scripts/qwen_compatibility_test.py
 - ✅ do_sample, temperature, top_k, top_p参数
 - ✅ 批量生成功能
 
-### 3. 端到端对比测试 ⭐
+### 3. 与原版Qwen对比测试 ⭐
 ```bash
-python scripts/end_to_end_comparison_test_v2.py
+python scripts/test_vs_original_qwen.py
 ```
 **用途**: CausalQwen vs 原始Qwen直接对比  
 **需求**: 本地需有Qwen2.5-0.5B模型  
@@ -42,7 +42,7 @@ python scripts/end_to_end_comparison_test_v2.py
 
 ### 4. 基本使用演示 ⭐
 ```bash
-python scripts/simple_demo_v2.py
+python scripts/demo_basic_usage.py
 ```
 **用途**: 展示CausalQwen基本使用方法  
 **特点**: 与Qwen完全相同的使用接口
@@ -53,17 +53,17 @@ python scripts/simple_demo_v2.py
 
 ### 🚀 快速验证（3分钟）
 ```bash
-python scripts/causal_qwen_v2_validation_test.py
-python scripts/simple_demo_v2.py
+python scripts/test_core_math_framework.py
+python scripts/demo_basic_usage.py
 ```
 
 ### 🔬 完整验证（10分钟）
 ```bash
 # 所有核心测试
-python scripts/causal_qwen_v2_validation_test.py
-python scripts/qwen_compatibility_test.py  
-python scripts/simple_demo_v2.py
-python scripts/end_to_end_comparison_test_v2.py  # 需要Qwen模型
+python scripts/test_core_math_framework.py
+python scripts/test_qwen_interface_compatibility.py  
+python scripts/demo_basic_usage.py
+python scripts/test_vs_original_qwen.py  # 需要Qwen模型
 ```
 
 ---
