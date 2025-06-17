@@ -46,7 +46,7 @@ class CauchyMath:
     def cauchy_linear_stable_loc(loc_input, weight, bias=None):
         """Cauchy分布位置参数的线性变换"""
         # 位置参数变换：直接矩阵乘法
-        result = weight @ loc_input
+        result = loc_input @ weight.T
         if bias is not None:
             result = result + bias
         return result
@@ -220,6 +220,12 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
                 print(f"✅ 词汇表大小一致: {actual_vocab_size} (包含预留词汇)")
         
         print("权重复制完成！")
+    
+    def inference(self, input_ids, mode='standard', **kwargs):
+        """推理接口 - 调用推理引擎"""
+        from .inference import CausalInferenceEngine
+        engine = CausalInferenceEngine(self)
+        return engine.inference(input_ids, mode=mode, **kwargs)
     
     def forward(
         self,

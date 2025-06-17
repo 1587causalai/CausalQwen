@@ -31,10 +31,8 @@ class CausalInferenceEngine:
         """标准确定性推理：使用期望值计算"""
         with torch.no_grad():
             outputs = self.model(input_ids, **kwargs)
-            probs = self.model.ovr_classifier(outputs.loc_S, outputs.scale_S)
-            # 简化：选择概率最高的token
-            next_token_ids = torch.argmax(probs, dim=-1)
-            return next_token_ids[:, -1:]  # 返回最后一个位置的预测
+            # 返回完整的CausalMVPOutput结构
+            return outputs
     
     def _causal_sampling(self, input_ids, temperature=1.0, **kwargs):
         """
@@ -61,23 +59,24 @@ class CausalInferenceEngine:
             # 然后解析计算最终的决策分布
             loc_S, scale_S = self.model.action_network(u_sampled, torch.zeros_like(outputs.scale_U))
             
-            # 步骤4：OvR概率计算和确定性选择
-            # 基于解析得到的分布参数计算OvR概率
-            probs = self.model.ovr_classifier(loc_S, scale_S)
-            next_token_ids = torch.argmax(probs, dim=-1, keepdim=True)
-            
-            return next_token_ids[:, -1:]
+            # 更新输出结构
+            from .models import CausalMVPOutput
+            return CausalMVPOutput(
+                loc_S=loc_S,
+                scale_S=scale_S,
+                loc_U=u_sampled,
+                scale_U=torch.zeros_like(outputs.scale_U),
+                past_key_values=outputs.past_key_values,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions
+            )
     
     def _compatible_sampling(self, input_ids, do_sample=True, top_k=50, top_p=0.9, temperature=1.0, **kwargs):
         """传统兼容采样：支持确定性和随机采样"""
         with torch.no_grad():
             outputs = self.model(input_ids, **kwargs)
-            logits = outputs.loc_S[:, -1, :] / temperature  # 温度缩放
-            
-            if not do_sample:
-                # 确定性：简单argmax
-                next_token_ids = torch.argmax(logits, dim=-1, keepdim=True)
-                return next_token_ids
+            # 返回完整的输出结构，包含所有字段
+            return outputs
             
             # 随机采样：应用top-k过滤
             if top_k > 0:
