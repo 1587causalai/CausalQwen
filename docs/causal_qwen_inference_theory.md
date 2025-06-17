@@ -36,7 +36,6 @@ CausalQwen基于因果结构方程建模文本生成：$Y = f(U, \epsilon)$，�
 
 **特点**：双重随机性（个体采样 + 环境噪声），需要显式采样高维个体向量$u_i$。
 
----
 
 ## 第3步：V2革命性设计的数学表述
 
@@ -123,6 +122,71 @@ graph LR
 2. **噪声作用的分化**：采样时扰动"身份特征"(位置)，非采样时增加"不确定性"(尺度)
 3. **单一随机性来源**：只有环境噪声$\epsilon \sim \text{Cauchy}(0,1)$，无需采样个体
 4. **统一的ActionNetwork输出**：始终输出$(\text{loc}_S, \text{scale}_S)$，由OvR分类器计算概率
+
+### V2核心代码实现：ActionNetwork.forward
+
+```python
+def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
+    """前向传播，严格实现柯西分布线性稳定性
+    
+    Args:
+        loc_U: 个体表征分布的位置参数 [B, S, C]
+        scale_U: 个体表征分布的尺度参数 [B, S, C]
+        do_sample: 是否进行采样
+        temperature: 采样温度参数
+    Returns:
+        loc_S: 决策分布的位置参数 [B, S, V]
+        scale_S: 决策分布的尺度参数 [B, S, V]
+    """
+    if do_sample:
+        # 🎯 采样模式：噪声影响位置参数
+        
+        # Step 1: 采样标准柯西噪声 ε ~ Cauchy(0, I)
+        uniform_sample = torch.rand_like(loc_U)
+        epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))
+        
+        # Step 2: 温度调节的噪声注入到位置参数
+        # 数学：loc_U_noisy = μ + T·|b_noise|·ε
+        u_sampled = epsilon * temperature * torch.abs(self.b_noise)
+        loc_U_noisy = loc_U + u_sampled
+        
+        # Step 3: 基于扰动后的位置参数进行线性决策
+        # 数学：loc_S = W·(μ + T·|b_noise|·ε) + b
+        loc_S = self.lm_head(loc_U_noisy)
+        
+        # Step 4: 尺度参数的线性稳定性变换
+        # 数学：scale_S = γ × |W|^T
+        scale_S = scale_U @ torch.abs(self.lm_head.weight).T
+
+    else:
+        # 🔧 非采样模式：噪声影响尺度参数
+        
+        # Step 1: 处理默认尺度参数
+        if scale_U is None:
+            scale_U = torch.zeros_like(loc_U)  # 默认为确定性分布
+            
+        # Step 2: 外生噪声融合到尺度参数
+        # 数学：scale_U_noisy = γ + |b_noise|
+        scale_U_noisy = scale_U + torch.abs(self.b_noise)
+        
+        # Step 3: 位置参数保持确定性的线性变换
+        # 数学：loc_S = W·μ + b
+        loc_S = self.lm_head(loc_U)
+        
+        # Step 4: 尺度参数的线性稳定性变换
+        # 数学：scale_S = (γ + |b_noise|) × |W|^T
+        scale_S = scale_U_noisy @ torch.abs(self.lm_head.weight).T
+    
+    return loc_S, scale_S
+```
+
+**代码设计的精妙之处**：
+
+1. **统一接口**：`do_sample`参数控制两种完全不同的数学流程
+2. **温度选择性**：`temperature`只在采样模式下生效，非采样时无影响
+3. **柯西分布直接生成**：`torch.tan(π×(uniform - 0.5))`直接生成标准柯西分布
+4. **线性稳定性保持**：通过矩阵运算`@ torch.abs(weight).T`实现尺度参数变换
+5. **数学严谨性**：每一行代码都对应明确的数学公式
 
 ---
 
