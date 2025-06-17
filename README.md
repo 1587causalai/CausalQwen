@@ -1,8 +1,7 @@
 # CausalQwen: 革命性因果语言模型
 
 > **🎯 最小可行版本**: 专注核心数学框架，完全兼容Qwen  
-> **🚀 V2数学创新**: 位置vs尺度的精妙差异  
-> **📊 验证状态**: 核心测试100%通过
+> **🚀 数学创新**: 位置vs尺度的精妙差异  
 
 ---
 
@@ -92,17 +91,21 @@ python scripts/test_vs_original_qwen.py
 ```
 CausalQwen/
 ├── src/causal_qwen_mvp/          # 核心实现
+│   ├── __init__.py               # 包初始化
 │   ├── models.py                 # CausalQwen V2模型
 │   ├── inference.py              # 推理引擎  
 │   └── training.py               # 训练工具
-├── scripts/                      # 核心测试（仅4个）
+├── scripts/                      # 核心测试
 │   ├── test_core_math_framework.py         # 核心数学框架验证
 │   ├── test_qwen_interface_compatibility.py # Qwen接口兼容性测试
 │   ├── demo_basic_usage.py                 # 基本使用演示
-│   └── test_vs_original_qwen.py            # 与原版Qwen对比
+│   ├── test_vs_original_qwen.py            # 与原版Qwen对比
+│   └── TEST_INDEX.md                       # 测试说明
 ├── docs/                         # 核心数学文档
-│   ├── core_mathematical_framework.md     # 核心数学框架
-│   └── position_vs_scale_theory.md        # 位置vs尺度理论
+│   ├── core_mathematical_framework.md      # 核心数学框架
+│   ├── model_inference_position_and_scale.md # 位置vs尺度理论
+│   ├── init_pretraining_alignment.md       # 预训练对齐
+│   └── U_deep_dive.md                      # U变量深入研究
 └── README.md                     # 本文档
 ```
 
@@ -131,7 +134,7 @@ CausalQwen/
 
 详细数学推导请参考：
 - [核心数学框架](docs/core_mathematical_framework.md)
-- [位置vs尺度理论](docs/position_vs_scale_theory.md)
+- [位置vs尺度理论](docs/model_inference_position_and_scale.md)
 
 ### ActionNetwork统一框架
 

@@ -537,7 +537,7 @@ class ActionNetwork(nn.Module):
     这是对因果理论最纯粹的表达。当温度为零时，无外生噪声，生成过程完全基于个体自身的因果表征。决策分布完全由 `U ~ Cauchy(μ, γ)` 决定，精确对应了理论公式 **`Y = f(U)`**，即输出完全是个体 `U` 在普适因果律 `f` 下的必然表达。
 
 -   **采样模式 (`temperature > 0`)**:
-    当温度大于零，外生噪声 `ε` 会按温度 `T` 的强度去**扰动个体的因果表征**，以此探索决策空间的多样性。这相当于在探索“如果这个个体的内在状态受到一点随机影响，他会做出什么不同的决策？”。温度越高，扰动越大，生成的多样性越强。
+    当温度大于零，外生噪声 `ε` 会按温度 `T` 的强度去**扰动个体的因果表征**，以此探索决策空间的多样性。这相当于在探索"如果这个个体的内在状态受到一点随机影响，他会做出什么不同的决策？"。温度越高，扰动越大，生成的多样性越强。
     - TODO: 多步预测的时候可以考虑共享噪声 instance，生成某种一致性的结果。
 
 #### 5.3.3 兼容模式 (Compatible Mode)
@@ -870,7 +870,7 @@ $$ \mathcal{L} = \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ \frac{1}{|S|} \sum_{
 
 ### 8.4 训练监控指标
 
-参考 [`mathematical_foundations.md`](./mathematical_foundations.md) 第5节的监控体系：
+参考 [`mathematical_foundations.md`](core_mathematical_framework_num_extended.md) 第5节的监控体系：
 
 - **核心损失指标** (`train/*`)
   - `train/accuracy`: 分类准确率
