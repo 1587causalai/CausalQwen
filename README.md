@@ -18,7 +18,7 @@ do_sample=True:  U' ~ Cauchy(μ + T·|b_noise|·ε, γ) # 噪声影响位置参�
 
 **深层含义**:
 - **确定性模式** (`do_sample=False`): 噪声增加决策的不确定性，但不改变决策中心，因果表征，外生噪声和结构方程共同决定结果。
-- **采样模式** (`do_sample=True`): 噪声扰动个体身份，产生不同的决策个体，进一步温度参数为0时，相当于完全因果表征进行推理。
+- **采样模式** (`do_sample=True`): 噪声扰动个体因果表征，产生不同的决策，进一步温度参数为0时，相当于完全因果表征进行推理。
 
 ---
 
@@ -75,14 +75,6 @@ python scripts/demo_basic_usage.py
 python scripts/test_vs_original_qwen.py
 ```
 
-### 预期测试结果
-```
-🎯 V2核心创新验证：do_sample控制的位置vs尺度差异
-✅ ActionNetwork统一框架：兼容Qwen的所有参数  
-✅ 温度参数选择性生效：仅在do_sample=True时影响噪声强度
-✅ 柯西分布线性稳定性：严格的数学基础实现
-✅ 完全Qwen兼容：generate()接口和所有采样参数
-```
 
 ---
 
@@ -155,16 +147,6 @@ def forward(self, loc_U, scale_U, do_sample=False, temperature=1.0):
     
     return loc_S, scale_S
 ```
-
----
-
-## 🤝 贡献
-
-CausalQwen专注于因果语言模型的核心数学框架研究。欢迎在以下方面贡献：
-- 数学理论完善
-- 性能优化
-- 测试用例增强
-- 文档改进
 
 ---
 
