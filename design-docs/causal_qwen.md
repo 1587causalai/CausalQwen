@@ -430,53 +430,23 @@ $$\mathcal{L} = \frac{\sum_{i=1}^S L_{\text{cls},i}}{\sum_{i=1}^S \text{mask}_i}
 
 ## 5. 推理模式
 
-### 5.1 标准推理（期望决策）
+### 5.1 单步推理
 
-这是默认的、最高效的推理模式。它完全基于解析计算，不涉及任何随机采样。目标是给出综合考虑所有不确定性后的期望预测。 选择OvR概率最高的类别：
-    $$\hat{y}_{\text{cls},i} = \arg\max_k P_{k,i}$$
+1. **采样噪声**: 在生成任务开始时，采样一个固定的"系统性噪声实例" $\vec{\epsilon}_{\text{noise}} \sim \text{Cauchy}(0, I)$, 我们得到一个新的输入分布：
+    $$
+    U'_{\text{input}, i} \sim \text{Cauchy}(\text{loc}_{U_i} + T \cdot |b_{\text{noise}}| \cdot \vec{\epsilon}_{\text{noise}}, \text{scale}_{U_i})
+    $$
+
+我们将这个新的输入分布 $U'_{\text{input}, i}$ 传入行动网络进行线性运算，解析地计算出：
+$$\hat{y}_{\text{cls},i} = \arg\max_k P_{k,i}$$
+
+
 
 ```mermaid
 graph LR
-    subgraph "输入：分布参数"
-        A1["loc_S_k, scale_S_k<br>每个词汇的决策分布"]
-        A2["OvR 阈值 C_ovr"]
-    end
-    
-    subgraph "概率计算"
-        A1 --> B1["计算标准化得分<br>z_k = (loc_S_k - C_ovr) / scale_S_k"]
-        A2 --> B1
-        B1 --> B2["OvR 概率<br>P_k = 0.5 + arctan(z_k)/π"]
-    end
-    
-    subgraph "决策输出"
-        B2 --> C1["选择最高概率<br>y_pred = argmax_k P_k"]
-        C1 --> C2["输出词元"]
-    end
-    
-    style A1 fill:#e3f2fd
-    style B2 fill:#fff3e0
-    style C2 fill:#e8f5e9
-```
-
-**核心特点**：基于分布期望的确定性决策，无需采样，计算高效。
-
-### 5.2 因果采样（个体具现）
-
-这是一种混合了随机性与确定性的高级推理模式，深刻体现了模型的因果哲学。过程分为三步：
-
-1.  **采样个体**: 从后验分布 $U_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$ 中采样具体的个体表征 $u_i$。
-
-2.  **构建决策输入分布**: 将确定的个体 $u_i$ 与噪声分布结合：
-    $$ U'_{\text{input}, i} \sim \text{Cauchy}(u_i, |b_{\text{noise}}|) $$
-
-3.  **计算确定性决策**: $\arg\max_k P_{k,i}$。
-
-**核心思想**: 只在"个体选择"步骤引入随机性，而将"环境噪声"保持为分布形式，实现对不同个体的探索同时保持决策的稳健性。
-```mermaid
-graph LR
-    Dist["U ~ Cauchy(μ,γ)<br>个体后验分布"] --> Sample["采样个体<br>u = μ + γ·tan(π(ε-0.5))"]
-    Sample --> Noise["加入噪声<br>u' ~ Cauchy(u, |b_noise|)"]
-    Noise --> Decision["线性决策<br>S_k = W_k·u' + b_k"]
+    Dist["U ~ Cauchy(μ,γ)<br>个体后验分布"] --> Sample["采样噪声 ε_noise<br>ε_noise ~ Cauchy(0, I)"]
+    Sample --> Noise["加入噪声<br>U' ~ Cauchy(μ + T·|b_noise|·ε_noise, γ)"]
+    Noise --> Decision["线性决策<br>S_k = W_k·U' + b_k"]
     Decision --> Output["OvR 输出<br>argmax_k P_k"]
     
     style Sample fill:#fff3e0,stroke:#e65100,stroke-width:2px
@@ -484,11 +454,9 @@ graph LR
     style Output fill:#e8f5e9
 ```
 
-**三步过程**：个体具现 → 环境噪声 → 线性决策。核心优势是相同个体在相似环境下产生一致的行为模式。
 
 
-
-### 5.3 兼容传统采样
+### 5.2 兼容传统采样
 
 CausalQwen 完全兼容传统语言模型的采样方法：
 

@@ -144,18 +144,36 @@ class ActionNetwork(nn.Module):
         else:
             print("❌ 源模型没有lm_head，使用标准初始化...")
         
-    def forward(self, loc_U, scale_U=None):
-        """前向传播，严格实现柯西分布线性稳定性"""
-        # Step 1: 外生噪声融合（添加到尺度参数）
-        if scale_U is None:
-            scale_U = torch.zeros_like(loc_U)  # Cauchy 分布尺度参数为0 时，scale_U=0
-        scale_U_noisy = scale_U + torch.abs(self.b_noise)
+    def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
+        """前向传播，严格实现柯西分布线性稳定性
         
-        # Step 2: 位置参数的线性变换
-        loc_S = self.lm_head(loc_U)
-        
-        # Step 3: 尺度参数的线性稳定性变换
-        scale_S = scale_U_noisy @ torch.abs(self.lm_head.weight).T
+        Args:
+            loc_U: 个体表征分布的位置参数
+            scale_U: 个体表征分布的尺度参数
+            temperature: 采样温度参数
+        Returns:
+            loc_S: 决策分布的位置参数
+            scale_S: 决策分布的尺度参数
+        """
+        if do_sample:
+            # Step 1: 采样噪声 Cauchy(0, I)
+            uniform_sample = torch.rand_like(loc_U)
+            u_sampled = torch.tan(torch.pi * (uniform_sample - 0.5)) * temperature * torch.abs(self.b_noise)
+            loc_U_noisy = loc_U + u_sampled
+            # Step 2: 线性决策
+            loc_S = self.lm_head(loc_U_noisy)
+            # Step 3: 尺度参数的线性稳定性变换
+            scale_S = scale_U @ torch.abs(self.lm_head.weight).T
+
+        else:
+            # Step 1: 外生噪声融合（添加到尺度参数）
+            if scale_U is None:
+                scale_U = torch.zeros_like(loc_U)  # Cauchy 分布尺度参数为0 时，scale_U=0
+            scale_U_noisy = scale_U + torch.abs(self.b_noise)
+            # Step 2: 位置参数的线性变换
+            loc_S = self.lm_head(loc_U)
+            # Step 3: 尺度参数的线性稳定性变换
+            scale_S = scale_U_noisy @ torch.abs(self.lm_head.weight).T
         
         return loc_S, scale_S
 
