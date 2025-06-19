@@ -358,7 +358,7 @@ def test_qwen_compatible_interface():
         from causal_qwen_mvp import InferenceValidator
         
         validator = InferenceValidator(model)
-        results = validator.validate_v2_principles(input_ids, temperature=1.0)
+        results = validator.validate_causal_principles(input_ids, temperature=1.0)
         
         # 位置参数差异
         pos_diff = results['position_difference'].item()
@@ -510,7 +510,11 @@ def main():
     
     print_theory("V2数学原理验证完成！")
     print_theory("├─ do_sample=True：U' ~ Cauchy(μ + T·|b_noise|·ε, γ)")
-    print_theory("└─ do_sample=False：U' ~ Cauchy(μ, γ + |b_noise|)")
+    print_theory("四种推理模式：")
+    print_theory("├─ Causal模式 (temperature=0): 纯因果生成，无外生噪声")
+    print_theory("├─ Standard模式 (do_sample=False, temperature>0): 噪声增加决策不确定性")  
+    print_theory("├─ Sampling模式 (do_sample=True, temperature>0): 噪声扰动个体身份")
+    print_theory("└─ Compatible模式: 传统Softmax，与原始Qwen兼容")
     print_theory("使用方式与Qwen完全相同：model.generate(input_ids, do_sample=True)")
 
 if __name__ == "__main__":

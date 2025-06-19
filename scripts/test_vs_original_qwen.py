@@ -317,7 +317,7 @@ def compare_generation_methods(text, tokenizer, qwen_model, causal_model):
         from causal_qwen_mvp import InferenceValidator
         
         validator = InferenceValidator(causal_model)
-        results = validator.validate_v2_principles(input_ids)
+        results = validator.validate_causal_principles(input_ids)
         
         pos_diff = results['position_difference'].item()
         scale_diff = results['scale_difference'].item()
@@ -484,9 +484,11 @@ def main():
         print_info("请检查权重复制和ActionNetwork实现")
         print_info(f"logits一致性: {logits_consistency_count}/{total_cases} 个案例通过")
     
-    print_info("CausalQwen V2核心特性:")
-    print_info("├─ do_sample=False: 噪声影响尺度参数，增加决策不确定性")
-    print_info("└─ do_sample=True: 噪声影响位置参数，扰动个体身份")
+    print_info("CausalQwen核心特性:")
+    print_info("├─ Causal模式 (temperature=0): 纯因果生成，无外生噪声")
+    print_info("├─ Standard模式 (do_sample=False, temperature>0): 噪声增加决策不确定性")
+    print_info("├─ Sampling模式 (do_sample=True, temperature>0): 噪声扰动个体身份")
+    print_info("└─ Compatible模式: 传统Softmax，与原始Qwen兼容")
 
 if __name__ == "__main__":
     main()

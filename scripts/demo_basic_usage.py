@@ -123,7 +123,7 @@ def main():
         from causal_qwen_mvp import InferenceValidator
         
         validator = InferenceValidator(model)
-        results = validator.validate_v2_principles(input_ids)
+        results = validator.validate_causal_principles(input_ids)
         
         pos_diff = results['position_difference'].item()
         scale_diff = results['scale_difference'].item()
@@ -171,15 +171,21 @@ def main():
     print("="*50)
     print("CausalQwen核心特性:")
     print("├─ 完全兼容Qwen接口：generate(), do_sample, temperature等")
-    print("├─ V2核心创新：位置vs尺度的精妙差异")
-    print("├─ do_sample=False: 噪声影响尺度参数（确定性+不确定性）")
-    print("├─ do_sample=True: 噪声影响位置参数（扰动个体身份）")
-    print("└─ 完整的柯西分布数学基础")
+    print("├─ 温度统一控制噪声强度，四种推理模式")
+    print("├─ Causal模式 (temperature=0): 纯因果生成，无外生噪声")
+    print("├─ Standard模式 (do_sample=False, temperature>0): 噪声增加决策不确定性")
+    print("├─ Sampling模式 (do_sample=True, temperature>0): 噪声扰动个体身份")
+    print("└─ Compatible模式: 传统Softmax，与原始Qwen兼容")
     
     print("\n使用方法（与Qwen完全相同）:")
     print("```python")
     print("from causal_qwen_mvp import CausalQwenMVPForCausalLM")
     print("model = CausalQwenMVPForCausalLM.from_pretrained('path')")
+    print("# 纯因果模式")
+    print("output = model.generate(input_ids, temperature=0)")
+    print("# 标准模式")
+    print("output = model.generate(input_ids, do_sample=False, temperature=1.0)")
+    print("# 采样模式")
     print("output = model.generate(input_ids, do_sample=True, temperature=0.8)")
     print("```")
 

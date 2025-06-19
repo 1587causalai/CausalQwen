@@ -138,7 +138,7 @@ def test_v2_mathematical_principles(model, input_ids):
         from causal_qwen_mvp import InferenceValidator
         
         validator = InferenceValidator(model)
-        results = validator.validate_v2_principles(input_ids, temperature=1.0)
+        results = validator.validate_causal_principles(input_ids, temperature=1.0)
         
         # 位置参数差异
         pos_diff = results['position_difference'].item()
@@ -301,8 +301,10 @@ def main():
         print_error("⚠️ 部分测试失败，需要进一步调试")
     
     print_info("CausalQwen核心创新：")
-    print_info("├─ do_sample=False: 噪声影响尺度参数，增加决策不确定性")
-    print_info("└─ do_sample=True: 噪声影响位置参数，扰动个体身份")
+    print_info("├─ Causal模式 (temperature=0): 纯因果生成，无外生噪声")
+    print_info("├─ Standard模式 (do_sample=False, temperature>0): 噪声增加决策不确定性")
+    print_info("├─ Sampling模式 (do_sample=True, temperature>0): 噪声扰动个体身份")
+    print_info("└─ Compatible模式: 传统Softmax，与原始Qwen兼容")
 
 if __name__ == "__main__":
     main()
