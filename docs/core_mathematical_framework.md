@@ -496,15 +496,15 @@ class ActionNetwork(nn.Module):
         
         核心创新：温度参数统一控制噪声强度，do_sample控制噪声作用方式
         
-        温度 = 0 (纯因果模式):
+        temperature=0时两种模式都自动退化为纯因果模式:
         ├─ U' ~ Cauchy(μ, γ) 
         └─ 无外生噪声，个体的必然表达
         
-        温度 > 0 且 do_sample=False (标准模式):
+        temperature>0 且 do_sample=False (标准模式):
         ├─ U' ~ Cauchy(μ, γ + T·|b_noise|)
         └─ 噪声增加决策不确定性，保持个体身份
         
-        温度 > 0 且 do_sample=True (采样模式):
+        temperature>0 且 do_sample=True (采样模式):
         ├─ ε ~ Cauchy(0, 1) 标准噪声采样
         ├─ U' ~ Cauchy(μ + T·|b_noise|·ε, γ)
         └─ 噪声扰动个体身份，探索多样性
@@ -512,12 +512,7 @@ class ActionNetwork(nn.Module):
         if scale_U is None:
             scale_U = torch.zeros_like(loc_U)
         
-        if temperature == 0:
-            # 🎯 纯因果模式：无噪声影响
-            loc_U_final = loc_U
-            scale_U_final = scale_U
-            
-        elif do_sample:
+        if do_sample:
             # 🎲 采样模式：噪声影响位置参数
             uniform_sample = torch.rand_like(loc_U)
             epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))
@@ -808,12 +803,7 @@ class ActionNetwork(nn.Module):
         self.b_noise = nn.Parameter(torch.zeros(hidden_size))
     
     def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
-        if temperature == 0:
-            # 🎯 因果模式：无噪声影响
-            loc_U_final = loc_U
-            scale_U_final = scale_U
-            
-        elif do_sample:
+        if do_sample:
             # 🎲 采样模式：噪声影响位置参数
             
             # Step 1: 采样标准柯西噪声 ε ~ Cauchy(0, I)
@@ -928,7 +918,7 @@ graph TB
         C1["个体选择变量 U"]
         C2["因果机制 f(U,ε)"]
         C3["OvR 独立判断"]
-        C4["可控一致生成"]
+        C4["双模式推理"]
     end
     
     T1 --> C1

@@ -1,9 +1,11 @@
 """
 CausalQwen: 因果语言模型 - 完全兼容Qwen
 
-核心机制：位置vs尺度的差异化处理
-├─ do_sample=True：噪声影响位置参数，扰动个体身份
-└─ do_sample=False：噪声影响尺度参数，增加决策不确定性
+核心创新：温度参数统一控制噪声强度，四种推理模式
+├─ Causal模式 (temperature=0): 纯因果生成，无外生噪声
+├─ Standard模式 (do_sample=False, temperature>0): 噪声增加决策不确定性
+├─ Sampling模式 (do_sample=True, temperature>0): 噪声扰动个体身份
+└─ Compatible模式: 传统Softmax，与原始Qwen兼容
 
 与Qwen完全兼容：
 - 继承Qwen2ForCausalLM，无缝接入
@@ -19,10 +21,13 @@ from causal_qwen_mvp import CausalQwenMVPForCausalLM, CausalQwen2Config
 config = CausalQwen2Config.from_pretrained("Qwen/Qwen2.5-0.5B")
 model = CausalQwenMVPForCausalLM(config)
 
-# 确定性生成（噪声影响尺度参数）
-output = model.generate(input_ids, do_sample=False)
+# 纯因果模式 (temperature=0)
+output = model.generate(input_ids, temperature=0)
 
-# 采样生成（噪声影响位置参数）
+# 标准模式 (do_sample=False, temperature>0)  
+output = model.generate(input_ids, do_sample=False, temperature=1.0)
+
+# 采样模式 (do_sample=True, temperature>0)
 output = model.generate(input_ids, do_sample=True, temperature=0.8)
 ```
 """

@@ -114,24 +114,28 @@ class ActionNetwork(nn.Module):
             print("❌ 源模型没有lm_head，使用标准初始化...")
         
     def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
-        """前向传播 - 双模式设计：位置vs尺度的差异化处理
+        """前向传播：温度统一控制噪声强度
         
-        核心机制：噪声对采样/非采样模式的不同影响方式
+        核心创新：温度参数统一控制噪声强度，do_sample控制噪声作用方式
         
-        采样模式：噪声影响位置参数
+        temperature=0时两种模式都自动退化为纯因果模式:
+        ├─ U' ~ Cauchy(μ, γ) 
+        └─ 无外生噪声，个体的必然表达
+        
+        temperature>0 且 do_sample=False (标准模式):
+        ├─ U' ~ Cauchy(μ, γ + T·|b_noise|)
+        └─ 噪声增加决策不确定性，保持个体身份
+        
+        temperature>0 且 do_sample=True (采样模式):
         ├─ ε ~ Cauchy(0, 1) 标准噪声采样
-        ├─ U' ~ Cauchy(μ + T·|b_noise|·ε, γ) 噪声注入位置参数
-        └─ 扰动个体身份，保持原有不确定性
-        
-        非采样模式：噪声影响尺度参数  
-        ├─ U' ~ Cauchy(μ, γ + |b_noise|) 噪声融合到尺度
-        └─ 保持个体身份，增加决策不确定性
+        ├─ U' ~ Cauchy(μ + T·|b_noise|·ε, γ)
+        └─ 噪声扰动个体身份，探索多样性
         
         Args:
             loc_U: 个体表征分布的位置参数 [B, S, C]
             scale_U: 个体表征分布的尺度参数 [B, S, C]
             do_sample: 是否进行采样（决定噪声作用方式）
-            temperature: 采样温度参数（仅在do_sample=True时生效）
+            temperature: 温度参数（统一控制噪声强度）
         Returns:
             loc_S: 决策分布的位置参数 [B, S, V]
             scale_S: 决策分布的尺度参数 [B, S, V]
@@ -141,39 +145,28 @@ class ActionNetwork(nn.Module):
             scale_U = torch.zeros_like(loc_U)  # 默认为确定性分布
         
         if do_sample:
-            # 🎯 采样模式：噪声影响位置参数
+            # 🎲 采样模式：噪声影响位置参数
             
             # Step 1: 采样标准柯西噪声 ε ~ Cauchy(0, I)
             uniform_sample = torch.rand_like(loc_U)
             epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))
             
             # Step 2: 温度调节的噪声注入到位置参数
-            # 数学：loc_U_noisy = μ + T·|b_noise|·ε
-            noise_injection = epsilon * temperature * torch.abs(self.b_noise)
-            loc_U_noisy = loc_U + noise_injection
-            
-            # Step 3: 基于扰动后的位置参数进行线性决策
-            # 数学：loc_S = W·(μ + T·|b_noise|·ε) + b
-            loc_S = self.lm_head(loc_U_noisy)
-            
-            # Step 4: 尺度参数的线性稳定性变换
-            # 数学：scale_S = γ × |W|^T
-            scale_S = scale_U @ torch.abs(self.lm_head.weight).T
+            # 数学：loc_U_final = μ + T·|b_noise|·ε
+            loc_U_final = loc_U + temperature * torch.abs(self.b_noise) * epsilon
+            scale_U_final = scale_U
 
         else:
-            # 🔧 非采样模式：噪声影响尺度参数
+            # 🔧 标准模式：噪声影响尺度参数
             
             # Step 1: 外生噪声融合到尺度参数
-            # 数学：scale_U_noisy = γ + |b_noise|
-            scale_U_noisy = scale_U + torch.abs(self.b_noise)
-            
-            # Step 2: 位置参数保持确定性的线性变换
-            # 数学：loc_S = W·μ + b
-            loc_S = self.lm_head(loc_U)
-            
-            # Step 3: 尺度参数的线性稳定性变换
-            # 数学：scale_S = (γ + |b_noise|) × |W|^T
-            scale_S = scale_U_noisy @ torch.abs(self.lm_head.weight).T
+            # 数学：scale_U_final = γ + T·|b_noise|
+            loc_U_final = loc_U
+            scale_U_final = scale_U + temperature * torch.abs(self.b_noise)
+        
+        # 线性因果律应用
+        loc_S = self.lm_head(loc_U_final)
+        scale_S = scale_U_final @ torch.abs(self.lm_head.weight).T
         
         return loc_S, scale_S
 

@@ -89,11 +89,13 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
         temperature: Optional[float] = 1.0,
         **kwargs
     ) -> Union[Tuple, CausalMVPOutput]:
-        """前向传播 - 双模式框架实现
+        """前向传播：温度统一控制噪声强度
         
-        核心特性：
-        - do_sample=False: 非采样模式，噪声影响尺度参数
-        - do_sample=True: 采样模式，噪声影响位置参数
+        四种推理模式：
+        - Causal模式 (temperature=0): 纯因果生成，无外生噪声
+        - Standard模式 (do_sample=False, temperature>0): 噪声增加决策不确定性
+        - Sampling模式 (do_sample=True, temperature>0): 噪声扰动个体身份
+        - Compatible模式: 传统Softmax，与原始Qwen兼容
         """
         
         # 1. 获取Transformer特征

@@ -1,9 +1,11 @@
 """
 CausalQwen 推理引擎 - 与Qwen完全兼容
 
-核心机制：位置vs尺度的差异化处理
-├─ do_sample=True：噪声影响位置参数，扰动个体身份  
-└─ do_sample=False：噪声影响尺度参数，增加决策不确定性
+核心创新：温度参数统一控制噪声强度，四种推理模式
+├─ Causal模式 (temperature=0): 纯因果生成，无外生噪声
+├─ Standard模式 (do_sample=False, temperature>0): 噪声增加决策不确定性
+├─ Sampling模式 (do_sample=True, temperature>0): 噪声扰动个体身份
+└─ Compatible模式: 传统Softmax，与原始Qwen兼容
 
 完全兼容Qwen接口：do_sample, temperature, top_k, top_p, max_new_tokens
 """
@@ -103,8 +105,8 @@ class InferenceValidator:
         self.model = model
         self.engine = CausalInferenceEngine(model)
     
-    def validate_v2_principles(self, input_ids, temperature=1.0):
-        """验证数学原理：位置vs尺度差异"""
+    def validate_causal_principles(self, input_ids, temperature=1.0):
+        """验证数学原理：温度统一控制噪声强度"""
         results = {}
         
         with torch.no_grad():
