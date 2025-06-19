@@ -72,12 +72,14 @@ pytest tests/test_math_framework.py::TestCauchyMath::test_cauchy_linear_stabilit
 
 ```bash
 # 排除需要Qwen模型的测试
+cd tests
 pytest -m "not requires_qwen"
 ```
 
 ### 只运行快速测试
 
 ```bash
+cd tests
 # 排除慢速测试
 pytest -m "not slow"
 ```
