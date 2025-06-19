@@ -69,7 +69,7 @@ def test_v2_mathematical_framework():
     
     print_step(1, "验证柯西分布数学工具类")
     try:
-        from causal_qwen_mvp.models import CauchyMath
+        from causal_qwen_mvp.components import CauchyMath
         
         # 测试线性稳定性
         batch_size, input_dim, output_dim = 4, 128, 256
@@ -120,7 +120,8 @@ def test_action_network_v2_modes():
     
     print_step(1, "创建测试用ActionNetwork")
     try:
-        from causal_qwen_mvp.models import ActionNetwork, CausalQwen2Config
+        from causal_qwen_mvp.components import ActionNetwork
+        from causal_qwen_mvp.config import CausalQwen2Config
         
         # 创建小型测试配置
         config = CausalQwen2Config(

@@ -45,7 +45,7 @@ class TestCauchyMath:
     
     def test_cauchy_linear_stability_location(self, tolerance):
         """测试柯西分布位置参数的线性稳定性"""
-        from causal_qwen_mvp.models import CauchyMath
+        from causal_qwen_mvp.components import CauchyMath
         
         # 准备测试数据
         batch_size, input_dim, output_dim = 4, 128, 256
@@ -67,7 +67,7 @@ class TestCauchyMath:
     
     def test_cauchy_linear_stability_scale(self, tolerance):
         """测试柯西分布尺度参数的线性稳定性"""
-        from causal_qwen_mvp.models import CauchyMath
+        from causal_qwen_mvp.components import CauchyMath
         
         # 准备测试数据
         batch_size, input_dim, output_dim = 4, 128, 256
@@ -88,7 +88,7 @@ class TestCauchyMath:
     
     def test_combined_linear_transformation(self):
         """测试完整的线性变换（位置和尺度同时）"""
-        from causal_qwen_mvp.models import CauchyMath
+        from causal_qwen_mvp.components import CauchyMath
         
         # 准备数据
         batch_size, input_dim, output_dim = 2, 64, 100

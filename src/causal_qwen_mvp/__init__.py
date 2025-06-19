@@ -1,7 +1,7 @@
 """
 CausalQwen: 因果语言模型 - 完全兼容Qwen
 
-核心创新：位置vs尺度的精妙差异
+核心机制：位置vs尺度的差异化处理
 ├─ do_sample=True：噪声影响位置参数，扰动个体身份
 └─ do_sample=False：噪声影响尺度参数，增加决策不确定性
 
@@ -27,16 +27,26 @@ output = model.generate(input_ids, do_sample=True, temperature=0.8)
 ```
 """
 
-from .models import (
-    CausalQwenMVPForCausalLM,
+# 配置和数据结构
+from .config import (
     CausalQwen2Config,
-    CausalMVPOutput,
+    CausalMVPOutput
+)
+
+# 核心组件
+from .components import (
     CauchyMath,
     AbductionNetwork,
     ActionNetwork,
     OvRClassifier
 )
 
+# 主模型
+from .models import (
+    CausalQwenMVPForCausalLM
+)
+
+# 推理和训练工具
 from .inference import (
     CausalInferenceEngine,
     InferenceValidator
@@ -105,7 +115,7 @@ def get_model_info():
         'description': '因果语言模型最小可行产品',
         'features': [
             '继承Qwen2ForCausalLM',
-            '位置vs尺度的精妙差异',
+            '位置vs尺度的差异化处理',
             'ActionNetwork统一框架',
             '完整柯西分布数学基础',
             '与Qwen完全兼容'
