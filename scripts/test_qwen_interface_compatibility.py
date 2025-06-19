@@ -4,7 +4,7 @@ CausalQwen与Qwen兼容性测试
 
 验证重点：
 1. CausalQwen完全兼容Qwen的生成接口
-2. do_sample参数控制V2核心行为差异
+2. do_sample参数控制因果推理行为差异
 3. 与Qwen相同的参数产生期望的行为
 4. 生成质量和多样性验证
 """
@@ -130,9 +130,9 @@ def test_generation_interface(model, input_ids):
         print_error(f"生成接口测试失败: {e}")
         return False
 
-def test_v2_mathematical_principles(model, input_ids):
-    """测试V2数学原理"""
-    print_section("V2数学原理测试")
+def test_causal_mathematical_principles(model, input_ids):
+    """测试因果数学原理"""
+    print_section("因果数学原理测试")
     
     try:
         from causal_qwen_mvp import InferenceValidator
@@ -148,7 +148,7 @@ def test_v2_mathematical_principles(model, input_ids):
         print_info(f"尺度参数差异: {scale_diff:.6f}")
         
         if pos_diff > 1e-3:
-            print_success("位置参数在不同模式下有显著差异（符合V2设计）")
+            print_success("位置参数在不同模式下有显著差异（符合因果设计）")
         else:
             print_error("位置参数差异过小")
         
@@ -166,7 +166,7 @@ def test_v2_mathematical_principles(model, input_ids):
         return True
         
     except Exception as e:
-        print_error(f"V2数学原理测试失败: {e}")
+        print_error(f"因果数学原理测试失败: {e}")
         return False
 
 def test_temperature_effects(model, input_ids):
@@ -273,7 +273,7 @@ def main():
     # 执行测试
     tests = [
         ("生成接口兼容性", test_generation_interface),
-        ("V2数学原理", test_v2_mathematical_principles),
+        ("因果数学原理", test_causal_mathematical_principles),
         ("温度参数效果", test_temperature_effects),
         ("批量生成", test_batch_generation)
     ]

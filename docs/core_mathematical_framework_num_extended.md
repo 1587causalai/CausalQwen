@@ -182,78 +182,53 @@ $$\mathcal{L}_{\text{total}} = \underbrace{\frac{\sum_i L_{\text{cls}, i} \cdot 
 
 ## 3.推理阶段：生成预测 (Inference)
 
-CausalQwen V2 架构提供了一个统一且强大的推理框架，通过 `do_sample` 和 `temperature` 两个参数的组合，可以实现从完全确定性的预测到高度探索性的生成。所有模式下，分类和回归预测都是同时生成的。
+CausalQwen V2 架构提供了一个统一且强大的推理框架，通过 `do_sample` 和 `temperature` 两个参数的组合，实现了四种核心的因果推理模式。**核心设计原则是：温度参数统一控制噪声强度，`do_sample` 控制噪声作用方式**。
 
-### 3.1 标准模式 (Standard Mode)
+### 3.1 核心思想：温度统一的噪声控制
 
-这是模型的默认模式，用于高效、确定性的预测。
+架构的关键洞察是将**温度参数**作为噪声强度的统一控制器，实现了对称且直观的推理框架：
 
-- **设置**: `do_sample=False`, `temperature` (任意值，不起作用)
-- **数学原理**: 噪声被吸收到尺度参数中，`U' ~ Cauchy(μ, γ + |b_noise|)`。整个计算过程无随机性。
-- **流程**:
-    1.  `ActionNetwork` 在非采样模式下运行，计算出决策分布 `(loc_S, scale_S)` 和 `(loc_Y, scale_Y)`。
-    2.  **分类预测**: 计算所有词汇的 OvR 概率，并选择概率最高的词元。
-        `P_k = 0.5 + arctan((loc_S_k - C_k) / scale_S_k) / π`
-        `pred_token_id = argmax_k(P_k)`
-    3.  **回归预测**: 直接使用回归头输出的位置参数作为预测值（柯西分布的中位数和众数）。
-        `pred_value = loc_Y`
-- **用途**: 用于评估、快速生成和所有需要可复现结果的场景。
+-   **温度 = 0**: 无论 `do_sample` 取值如何，都表示**纯因果生成**，完全没有外生噪声影响
+    -   数学原理: `U' ~ Cauchy(μ, γ)`
+    -   哲学含义: 个体在完全确定的环境下，基于自身因果表征的必然表达
 
-### 3.2 因果/采样模式 (Causal/Sampling Mode)
+-   **温度 > 0**: 根据 `do_sample` 的值选择噪声的作用方式
+    -   **非采样模式** (`do_sample=False`): 噪声增加**尺度参数**，扩大决策不确定性
+        -   数学原理: `U' ~ Cauchy(μ, γ + T·|b_noise|)`
+        -   哲学含义: 环境噪声使得个体的判断变得更加模糊，但核心身份保持不变
+    
+    -   **采样模式** (`do_sample=True`): 噪声扰动**位置参数**，改变个体身份
+        -   数学原理: `U' ~ Cauchy(μ + T·|b_noise|·ε, γ)`
+        -   哲学含义: 随机扰动导致个体偏离典型状态，探索非典型行为
 
-当 `do_sample=True` 时，模型进入随机性生成模式，其具体行为由 `temperature` 参数精细控制。
+这种**温度统一控制**的设计实现了完美的对称性和直观性。
 
-- **设置**: `do_sample=True`
-- **数学原理**: 噪声 `ε` 影响位置参数，`U' ~ Cauchy(μ + T·|b_noise|·ε, γ)`。随机性来源于 `ε` 的采样。
+### 3.2 推理模式详解
 
-#### 3.2.1 纯因果模式 (Pure Causal Mode)
+CausalQwen 提供四种核心推理模式，通过 `do_sample` 和 `temperature` 参数的组合实现，每种模式对应不同的因果生成哲学。
 
-- **设置**: `temperature = 0`
-- **流程**:
-    1.  当 `T=0` 时，噪声注入项为零，`loc_U_noisy = loc_U`。
-    2.  `ActionNetwork` 的计算与标准模式下的位置参数部分等价，但尺度参数没有噪声。
-    3.  后续预测流程同标准模式。
-- **哲学含义**: 这是对因果理论最纯粹的表达，生成过程完全基于从上下文推断出的个体因果表征 `U ~ Cauchy(μ, γ)`，不受任何外生随机性干扰，即 `Y = f(U)`。
+| 模式名称 | `do_sample` | `temperature` | 数学原理 | 哲学含义 |
+| :--- | :--- | :--- | :--- | :--- |
+| **因果模式 (Causal)** | `any` | `0` | `U' ~ Cauchy(μ, γ)` | 纯因果生成，无外生噪声，个体的必然表达 |
+| **标准模式 (Standard)** | `False` | `> 0` | `U' ~ Cauchy(μ, γ+T·\|b_noise\|)` | 噪声增加决策不确定性，保持个体身份稳定 |
+| **采样模式 (Sampling)** | `True` | `> 0` | `U'~Cauchy(μ+T·\|b_noise\|·ε,γ)` | 噪声扰动个体身份，探索决策空间多样性 |
+| **兼容模式 (Compatible)** | `N/A` | `any` | 标准 Softmax 概率计算 | 用于与传统LM进行基准比较 |
 
-#### 3.2.2 采样模式 (Sampling Mode)
-- **设置**: `temperature > 0`
-- **流程**:
-    1.  在 `ActionNetwork` 中，对标准柯西分布 `Cauchy(0,1)` 进行采样得到 `ε`。
-    2.  `ε` 经温度 `T` 缩放后，扰动位置参数 `loc_U`。
-    3.  使用被扰动后的 `loc_U_noisy` 计算 `loc_S` 和 `loc_Y`。
-    4.  后续预测流程同标准模式，但由于 `loc_S` 和 `loc_Y` 具有了随机性，每次运行的结果都会不同。
-- **哲学含义**: 探索"如果个体的内在状态受到一点随机影响，他会做出什么不同决策？"。温度越高，扰动越大，生成的多样性越强。
+#### 3.2.1 因果模式 (Causal Mode) (`temperature = 0`)
 
+这是对因果理论最纯粹的表达，无论 `do_sample` 取值如何。当温度为零时，完全没有外生噪声，生成过程基于个体自身的因果表征。决策分布完全由 `U ~ Cauchy(μ, γ)` 决定，精确对应了理论公式 **`Y = f(U)`**，即输出完全是个体 `U` 在普适因果律 `f` 下的必然表达。这种模式提供了最纯粹的因果生成，适用于需要高度一致性和可解释性的场景。
 
-#### 3.2.3 序列因果采样：共享外部噪声实例
+#### 3.2.2 标准模式 (Standard Mode) (`do_sample=False, temperature > 0`)
 
-想要实现同一个句子生成过程中，共享外部噪声实例，需要将外部噪声实例固定下来，然后每次生成时，都使用这个固定的外部噪声实例。
+这是模型的默认确定性推理模式。外生噪声 `T·|b_noise|` 被融合到尺度参数中，增加了决策的不确定性（分布更宽），但保持了决策中心（位置参数）的稳定。哲学含义是环境噪声使得个体的判断变得更加模糊，但个体的核心身份保持不变。最终通过 `argmax` 选择概率最高的词元，过程完全确定。
 
-TODO: 后续补充
+#### 3.2.3 采样模式 (Sampling Mode) (`do_sample=True, temperature > 0`)
 
+当采用随机生成时，外生噪声 `ε` 经过温度 `T` 调节后，扰动**位置参数**。这改变了个体的身份表征，从而探索不同的决策结果。这相当于在探索"如果这个个体受到随机扰动偏离典型状态，会做出什么不同的决策？"。温度越高，扰动越大，生成的多样性越强。
 
-### 3.3 兼容模式 (Compatible Mode)
+#### 3.2.4 兼容模式 (Compatible Mode)
 
-为了与传统的语言模型（如 GPT、Qwen）进行公平的基准比较和功能对齐，CausalQwen 提供了一种兼容模式。
-
-- **设置**: 无需特殊设置，只需在生成解码阶段改变算法。
-- **流程**:
-    1.  运行模型（通常在标准模式下）得到 `loc_S`。
-    2.  将 `loc_S` 视作传统的 `logits`。
-    3.  对 `loc_S` 应用 `softmax` 函数得到归一化的概率分布。
-    4.  在该概率分布上执行标准的 `top-k` / `top-p` 采样。
-- **用途**: 模型评估、与现有生态系统集成。
-
-### 3.4 自回归生成中的统一处理
-
-在自回归（逐词元生成）的场景中，模型在每一步都会同时产出分类和回归的预测。
-
-1.  **预测**: 模型在第 `t` 步输出 `pred_token_id` 和 `pred_value`。
-2.  **决策**:
-    - 如果 `pred_token_id` 是 `<NUM>`，则将 `pred_value` 的字符串形式追加到生成文本中，并将 `<NUM_ID>` 和 `pred_value` 分别送入下一轮的 `input_ids` 和 `numeric_values`。
-    - 如果 `pred_token_id` 是普通词元，则将该词元文本追加到生成文本中，并将 `pred_token_id` 和 `0.0` 分别送入下一轮的 `input_ids` 和 `numeric_values`。
-
-这种设计实现了文本和数值生成的无缝、统一处理。
+此模式下，模型会忽略所有因果模块（尤其是尺度参数 `scale_S`），仅使用决策的位置参数 `loc_S` 作为传统 logits，并应用标准的 Softmax 函数进行采样。这使得 CausalQwen 可以与任何传统语言模型在相同的设置下进行公平比较。
 
 ## 4. 初始化策略：知识迁移
 
@@ -455,13 +430,14 @@ graph TB
     Start["输入文本"] --> Forward["前向传播<br>(数值感知嵌入 → Qwen → 归因推断)"]
     Forward --> U["个体因果表征<br>U ~ Cauchy(loc_U, scale_U)"]
     
-    U --> Mode1["模式一：标准推理 (默认)"]
-    U --> Mode2["模式二：因果采样"]
-    U --> Mode3["模式三：传统softmax兼容"]
+    U --> Mode1["标准模式 (Standard)<br>do_sample=False, T>0"]
+    U --> Mode2["采样模式 (Sampling)<br>do_sample=True, T>0"]
+    U --> Mode3["因果模式 (Causal)<br>T=0"]
+    U --> Mode4["兼容模式 (Compatible)<br>传统Softmax"]
     
-    subgraph "Standard推理模式"
-        Mode1 --> Noise1["融合噪声分布<br>U' ~ Cauchy(loc_U, scale_U + |b_noise|)"]
-        Noise1 --> Action1["行动网络<br>(分布形式的线性变换)"]
+    subgraph "标准模式"
+        Mode1 --> Noise1["噪声融合到尺度参数<br>U' ~ Cauchy(μ, γ + T·|b_noise|)"]
+        Noise1 --> Action1["行动网络<br>(解析分布变换)"]
         Action1 --> S1["S_k ~ Cauchy(loc_S_k, scale_S_k)"]
         Action1 --> Y1["Y ~ Cauchy(loc_Y, scale_Y)"]
         S1 --> OvR1["计算OvR概率<br>P_k = P(S_k > C_k)"]
@@ -469,10 +445,10 @@ graph TB
         Y1 --> Reg1["回归: loc_Y"]
     end
     
-    subgraph "因果/采样推理模式"
-        Mode2 --> Sample2["采样具体个体<br>u ~ U"]
-        Sample2 --> Noise2["构建新分布<br>U' ~ Cauchy(u, |b_noise|)"]
-        Noise2 --> Action2["行动网络<br>(分布形式的线性变换)"]
+    subgraph "采样模式"
+        Mode2 --> Sample2["采样噪声扰动位置<br>ε ~ Cauchy(0,1)"]
+        Sample2 --> Noise2["U' ~ Cauchy(μ + T·|b_noise|·ε, γ)"]
+        Noise2 --> Action2["行动网络"]
         Action2 --> S2["S_k ~ Cauchy(...)"]
         Action2 --> Y2["Y ~ Cauchy(...)"]
         S2 --> OvR2["计算OvR概率"]
@@ -480,74 +456,34 @@ graph TB
         Y2 --> Reg2["回归: loc_Y"]
     end
     
-    subgraph "兼容传统推理模式"
-        Mode3 --> Skip3["跳过因果机制"]
-        Skip3 --> Logits3["直接使用 loc_S<br>作为 logits"]
-        Logits3 --> Softmax3["Softmax归一化"]
-        Softmax3 --> TopK3["Top-k/Top-p 采样"]
+    subgraph "因果模式"
+        Mode3 --> Pure3["纯因果表征<br>U' ~ Cauchy(μ, γ)"]
+        Pure3 --> Action3["行动网络"]
+        Action3 --> S3["S_k ~ Cauchy(...)"]
+        Action3 --> Y3["Y ~ Cauchy(...)"]
+        S3 --> OvR3["计算OvR概率"]
+        OvR3 --> Cls3["分类: argmax_k P_k"]
+        Y3 --> Reg3["回归: loc_Y"]
+    end
+    
+    subgraph "兼容模式"
+        Mode4 --> Skip4["跳过因果机制"]
+        Skip4 --> Logits4["直接使用 loc_S<br>作为 logits"]
+        Logits4 --> Softmax4["Softmax归一化"]
+        Softmax4 --> TopK4["Top-k/Top-p 采样"]
     end
     
     Cls1 & Reg1 --> Output1["输出预测"]
     Cls2 & Reg2 --> Output2["输出预测"]
-    TopK3 --> Output3["输出预测"]
+    Cls3 & Reg3 --> Output3["输出预测"]
+    TopK4 --> Output4["输出预测"]
     
     style U fill:#fff3e0,stroke:#e65100,stroke-width:3px
     style Output1 fill:#fce4ec,stroke:#880e4f
     style Output2 fill:#fce4ec,stroke:#880e4f
     style Output3 fill:#fce4ec,stroke:#880e4f
+    style Output4 fill:#fce4ec,stroke:#880e4f
 ```
-
----
-
-#### 4.2 CausalQwen 自回归序列生成流程
-
-这张图展示了CausalQwen如何进行自回归序列生成，包括文本和数值的统一处理。
-
-```mermaid
-graph TB
-    Start["初始输入文本<br>(Prompt)"] --> Tokenize["input_ids, numeric_values"]
-    
-    Tokenize --> Loop["开始自回归循环<br>t = 1, 2, ..."]
-    
-    subgraph "自回归生成主循环"
-        Loop --> Forward["前向传播得到 U_t~ Cauchy"]
-
-        Forward --> Branch{选择推理模式}
-
-        Branch -->|标准推理| Std["U'_t ~ Cauchy(loc_{U_t}, scale_{U_t} + |b_noise|)<br>↓<br>计算 P_k,t 和 loc_Y_t"]
-        Branch -->|因果/采样推理| Causal["U'_t~Cauchy(u_t, |b_noise|)<br>↓<br>计算 P_k,t 和 loc_Y_t"]
-        Branch -->|传统方法| Trad["使用 loc_S_t 作为 logits<br>↓<br>Softmax + Top-k/Top-p"]
-        
-        Std --> Predict["预测下一词元"]
-        Causal --> Predict
-        Trad --> Predict
-        
-        Predict --> IsNum{预测为&lt;NUM&gt;?}
-
-        IsNum -->|是| NumPath["使用回归值loc_{Y_t}:<br>input_ids.append(&lt;NUM_ID&gt;)<br>numeric_values.append(loc_{Y_t})<br>生成文本.append(str(loc_{Y_t}))"]
-        IsNum -->|否| TextPath["使用分类结果:<br>input_ids.append(pred_token_id)<br>numeric_values.append(0.0)<br>生成数值.append(token_text)"]
-        
-        NumPath --> Check{"结束条件?<br>(EOS或最大长度)"}
-        TextPath --> Check
-        
-        Check -->|否| Next["t = t + 1"]
-        Check -->|是| End["输出完整生成序列"]
-        
-        Next --> Forward
-    end
-    
-    style Start fill:#e8f5e9
-    style End fill:#e8f5e9
-    style IsNum fill:#fff3e0
-    style NumPath fill:#fbe9e7
-    style TextPath fill:#e3f2fd
-```
-
-**关键特点**：
-1. **统一处理**：每个位置都同时具有分类和回归能力
-2. **数值感知**：当预测为`<NUM>`时，使用回归通道的输出值
-3. **灵活推理**：支持三种推理模式的无缝切换
-4. **序列一致性**：`input_ids`和`numeric_values`始终保持对齐
 
 ---
 
@@ -563,7 +499,7 @@ graph TB
     subgraph "因果采样生成主循环"
         Loop --> Forward["归因推断网络 U_t"]
         
-        Forward --> NoiseInject["核心：噪声注入<br>U'_t ~ Cauchy(loc_U_t + |b_noise|·ε_noise, scale_U_t)"]
+        Forward --> NoiseInject["核心：噪声注入<br>U'_t ~ Cauchy(loc_U_t + T·|b_noise|·ε_noise, scale_U_t)"]
         
         NoiseInject --> Action["行动决策网络"]
         
@@ -598,7 +534,7 @@ graph TB
 
 **关键特点**：
 1. **固定噪声实例**：整个序列使用同一个 `ε_noise`，保证系统性一致
-2. **因果注入机制**：每个位置的 `U'_t` 都受到相同噪声影响
+2. **因果注入机制**：每个位置的 `U'_t` 都受到相同噪声影响，但通过温度参数 `T` 控制强度
 3. **双通道决策**：同时进行分类和回归预测
 4. **序列一致性**：维持 `input_ids` 和 `numeric_values` 的对齐
 
@@ -608,6 +544,70 @@ graph TB
 
 ### 图 5：损失流程图
 
+
+
+#### 图 5.1：分类损失 (`L_cls`) 的计算
+
+这张图展示了如何从模型对全部词汇的预测分布，计算出每个位置的分类总损失。
+
+```mermaid
+graph TD
+    subgraph "输入"
+        A["<b>loc_S</b><br>形状: [B, S, V_full]"]
+        B["<b>scale_S</b><br>形状: [B, S, V_full]"]
+        C["<b>C_k 阈值参数</b><br>形状: [V_full]"]
+        D["<b>真实标签 labels</b><br>形状: [B, S]"]
+    end
+
+    subgraph "OvR 概率计算"
+        A & B & C --> E["对每个词汇 k 计算:<br>P_{k,i} = 1/2 + (1/π)arctan((loc_S_{k,i} - C_k)/scale_S_{k,i})"]
+        E --> F["<b>OvR 概率张量 P</b><br>形状: [B, S, V_full]"]
+    end
+    
+    subgraph "损失计算"
+        D --> G["转换为 one-hot 编码 y<br>形状: [B, S, V_full]"]
+        F & G --> H["计算二元交叉熵:<br>-[y·log(P) + (1-y)·log(1-P)]"]
+        H --> I["对词汇维度求和"]
+    end
+
+    I --> J["<b>分类损失 L_cls</b><br>形状: [B, S]"]
+    
+    style J fill:#e3f2fd,stroke:#1b5e20,stroke-width:2px
+```
+
+**关键点**：
+- 使用 OvR（One-versus-Rest）方法，每个词汇独立计算二元分类概率
+- 引入可学习的阈值参数 `C_k`，允许模型为不同词汇学习不同的决策边界
+- 最终损失是所有词汇的二元交叉熵之和
+
+---
+
+#### 图 5.2：门控回归损失 (`L_reg_gated`) 的计算
+
+这张图详细展示了门控机制如何结合分类概率和回归损失。
+
+```mermaid
+graph TD
+    subgraph "输入"
+        A["<b>loc_Y</b><br>形状: [B, S]"]
+        B["<b>scale_Y</b><br>形状: [B, S]"]
+        C["<b>numeric_values</b><br>(真实数值)<br>形状: [B, S]"]
+        D["<b>P_&lt;NUM&gt;</b><br>(来自分类)<br>形状: [B, S]"]
+        E["<b>num_mask</b><br>(labels == NUM_TOKEN_ID)<br>形状: [B, S]"]
+    end
+
+    subgraph "路径 A：柯西负对数似然"
+        A & B & C --> F["L_nll = log(π·scale_Y) +<br>log(1 + ((y_true - loc_Y)/scale_Y)²)"]
+        F --> G["<b>基础回归损失 L_nll</b><br>形状: [B, S]"]
+    end
+
+    subgraph "路径 B：门控权重计算"
+        D & E --> H["Gate = num_mask ×<br>(α + (1-α)·P_&lt;NUM&gt;)"]
+        H --> I["<b>门控权重 Gate</b><br>形状: [B, S]"]
+    end
+
+    G & I --> J["L_reg_gated = Gate × L_nll<br>(逐元素相乘)"]
+    J --> K["<b>门控回归损失
 
 
 #### 图 5.1：分类损失 (`L_cls`) 的计算

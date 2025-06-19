@@ -4,7 +4,7 @@ CausalQwen 简单演示 - 完全兼容Qwen接口
 
 演示CausalQwen的核心功能：
 1. 与Qwen完全相同的使用方式
-2. do_sample参数控制V2核心行为
+2. do_sample参数控制因果推理行为
 3. 完整的生成能力展示
 """
 
@@ -52,8 +52,8 @@ def main():
     print(f"输入序列: {input_ids.tolist()}")
     
     # 3. 确定性生成（与Qwen相同）
-    print("\n🎯 确定性生成 (do_sample=False)")
-    print("   V2原理: 噪声影响尺度参数，增加决策不确定性")
+    print("\n🎯 标准模式 (do_sample=False, temperature>0)")
+    print("   原理: 噪声增加决策不确定性，尺度参数受温度影响")
     
     try:
         det_output = model.generate(
@@ -71,8 +71,8 @@ def main():
         print(f"❌ 确定性生成失败: {e}")
     
     # 4. 采样生成（与Qwen相同）
-    print("\n🎲 采样生成 (do_sample=True)")
-    print("   V2原理: 噪声影响位置参数，扰动个体身份")
+    print("\n🎲 采样模式 (do_sample=True, temperature>0)")
+    print("   原理: 噪声扰动个体身份，影响位置参数")
     
     try:
         samp_output = model.generate(
@@ -117,8 +117,8 @@ def main():
         except Exception as e:
             print(f"   T={temp}: 失败 - {e}")
     
-    # 6. 验证V2数学原理
-    print("\n🧮 V2数学原理验证")
+    # 6. 验证因果数学原理  
+    print("\n🧮 因果数学原理验证")
     try:
         from causal_qwen_mvp import InferenceValidator
         
@@ -132,12 +132,12 @@ def main():
         print(f"   尺度参数差异: {scale_diff:.6f}")
         
         if pos_diff > 1e-3:
-            print("✅ V2数学原理验证通过")
+            print("✅ 因果数学原理验证通过")
         else:
             print("⚠️  位置参数差异较小")
             
     except Exception as e:
-        print(f"❌ V2验证失败: {e}")
+        print(f"❌ 因果数学验证失败: {e}")
     
     # 7. 批量生成演示
     print("\n📦 批量生成演示")

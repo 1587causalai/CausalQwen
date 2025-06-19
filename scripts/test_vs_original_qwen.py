@@ -7,7 +7,7 @@ CausalQwen vs Qwen 端到端对比测试 - 更新版
 目标：从相同输入出发，对比CausalQwen与原始Qwen的输出差异
 验证：
 1. CausalQwen确定性模式 (do_sample=False) 与Qwen的兼容性
-2. CausalQwen采样模式 (do_sample=True) 体现V2数学原理
+2. CausalQwen采样模式 (do_sample=True) 体现因果数学原理
 3. 所有模式的数学计算符合设计文档
 4. 完整的生成能力验证
 
@@ -227,7 +227,7 @@ def compare_generation_methods(text, tokenizer, qwen_model, causal_model):
     with torch.no_grad():
         # === CausalQwen确定性生成 (do_sample=False) ===
         print_info("🎯 CausalQwen确定性模式 (do_sample=False)")
-        print_info("   V2原理: 噪声影响尺度参数，增加决策不确定性")
+        print_info("   标准模式原理: 噪声增加决策不确定性，影响尺度参数")
         
         causal_det_output = causal_model.generate(
             input_ids,
@@ -242,7 +242,7 @@ def compare_generation_methods(text, tokenizer, qwen_model, causal_model):
         
         # === CausalQwen采样生成 (do_sample=True) ===
         print_info("🎲 CausalQwen采样模式 (do_sample=True)")
-        print_info("   V2原理: 噪声影响位置参数，扰动个体身份")
+        print_info("   采样模式原理: 噪声扰动个体身份，影响位置参数")
         
         causal_samp_outputs = []
         for trial in range(3):  # 多次采样展示随机性
@@ -311,8 +311,8 @@ def compare_generation_methods(text, tokenizer, qwen_model, causal_model):
     else:
         print_warning("⚠️ CausalQwen采样多样性较低")
     
-    # 验证3：V2数学原理
-    print_info("🧮 验证V2数学原理")
+    # 验证3：因果数学原理
+    print_info("🧮 验证因果数学原理")
     try:
         from causal_qwen_mvp import InferenceValidator
         
@@ -326,12 +326,12 @@ def compare_generation_methods(text, tokenizer, qwen_model, causal_model):
         print_math(f"尺度参数差异: {scale_diff:.6f}")
         
         if pos_diff > 1e-3:
-            print_success("✅ V2数学原理验证：位置vs尺度差异显著")
+            print_success("✅ 因果数学原理验证：位置vs尺度差异显著")
         else:
             print_warning("⚠️ 位置参数差异较小")
     
     except Exception as e:
-        print_error(f"V2数学验证失败: {e}")
+        print_error(f"因果数学验证失败: {e}")
     
     return {
         'qwen_deterministic': (qwen_det_new, qwen_det_text),
@@ -391,7 +391,7 @@ def main():
     """主测试函数"""
     print_section("CausalQwen vs Qwen 端到端对比测试 - 更新版", Colors.PURPLE)
     print_info("使用与Qwen完全兼容的接口进行对比测试")
-    print_info("验证CausalQwen的V2数学原理和Qwen兼容性")
+    print_info("验证CausalQwen的因果数学原理和Qwen兼容性")
     
     # 测试文本
     test_texts = [
@@ -476,7 +476,7 @@ def main():
     if logits_consistency_count == total_cases:
         print_section("🎉 所有测试通过！CausalQwen与Qwen完全兼容！", Colors.GREEN)
         print_success("✅ 确定性模式的loc_S与Qwen的logits完全一致")
-        print_success("✅ 采样模式体现V2数学原理")
+        print_success("✅ 采样模式体现因果数学原理")
         print_success("✅ 温度参数正确控制生成多样性")
         print_success("✅ 完全兼容Qwen的generate()接口")
     else:

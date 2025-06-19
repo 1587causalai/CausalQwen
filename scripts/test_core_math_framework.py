@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-CausalQwen V2 数学原理验证测试 - 更新版
+CausalQwen 因果数学原理验证测试 - 更新版
 
-验证V2革命性设计的数学原理正确性，使用与Qwen完全兼容的接口
+验证因果推理框架的数学原理正确性，使用与Qwen完全兼容的接口
 核心验证：
 1. do_sample参数对噪声作用方式的控制
 2. 温度参数的选择性生效机制
 3. 柯西分布线性稳定性的严格实现
 4. ActionNetwork统一框架的数学一致性
 
-V2数学原理：
+因果数学原理：
 ┌─ do_sample=True：U' ~ Cauchy(μ + T·|b_noise|·ε, γ)
 └─ do_sample=False：U' ~ Cauchy(μ, γ + |b_noise|)
 """
@@ -63,9 +63,9 @@ def print_math(message):
 def print_theory(message):
     print(f"{Colors.WHITE}📖 {message}{Colors.END}")
 
-def test_v2_mathematical_framework():
-    """测试V2数学框架的核心组件"""
-    print_section("V2数学框架验证")
+def test_causal_mathematical_framework():
+    """测试因果数学框架的核心组件"""
+    print_section("因果数学框架验证")
     
     print_step(1, "验证柯西分布数学工具类")
     try:
@@ -114,9 +114,9 @@ def test_v2_mathematical_framework():
     except Exception as e:
         print_error(f"柯西数学工具测试失败: {e}")
 
-def test_action_network_v2_modes():
-    """测试ActionNetwork的V2双模式"""
-    print_section("ActionNetwork V2双模式验证")
+def test_action_network_causal_modes():
+    """测试ActionNetwork的因果推理模式"""
+    print_section("ActionNetwork 因果推理模式验证")
     
     print_step(1, "创建测试用ActionNetwork")
     try:
@@ -146,12 +146,12 @@ def test_action_network_v2_modes():
         print_error(f"ActionNetwork创建失败: {e}")
         return None, None, None, None
     
-    print_step(2, "测试V2非采样模式：噪声影响尺度参数")
+    print_step(2, "测试标准模式：噪声影响尺度参数")
     try:
         with torch.no_grad():
             loc_S_det, scale_S_det = action_net(loc_U, scale_U, do_sample=False)
         
-        print_theory("V2非采样模式数学公式：")
+        print_theory("标准模式数学公式：")
         print_theory("├─ U' ~ Cauchy(μ, γ + |b_noise|)")
         print_theory("├─ loc_S = W·μ + b")
         print_theory("└─ scale_S = (γ + |b_noise|) × |W|^T")
@@ -181,7 +181,7 @@ def test_action_network_v2_modes():
     except Exception as e:
         print_error(f"非采样模式测试失败: {e}")
     
-    print_step(3, "测试V2采样模式：噪声影响位置参数")
+    print_step(3, "测试采样模式：噪声影响位置参数")
     try:
         # 固定随机种子确保可重复性
         torch.manual_seed(42)
@@ -189,7 +189,7 @@ def test_action_network_v2_modes():
         with torch.no_grad():
             loc_S_samp, scale_S_samp = action_net(loc_U, scale_U, do_sample=True, temperature=1.0)
         
-        print_theory("V2采样模式数学公式：")
+        print_theory("采样模式数学公式：")
         print_theory("├─ ε ~ Cauchy(0, I) 标准噪声")
         print_theory("├─ U' ~ Cauchy(μ + T·|b_noise|·ε, γ)")
         print_theory("├─ loc_S = W·(μ + T·|b_noise|·ε) + b")
@@ -353,7 +353,7 @@ def test_qwen_compatible_interface():
     except Exception as e:
         print_error(f"生成接口测试失败: {e}")
     
-    print_step(3, "验证V2数学原理")
+    print_step(3, "验证因果数学原理")
     try:
         from causal_qwen_mvp import InferenceValidator
         
@@ -368,7 +368,7 @@ def test_qwen_compatible_interface():
         print_math(f"尺度参数差异: {scale_diff:.6f}")
         
         if pos_diff > 1e-3:
-            print_success("位置参数在不同模式下有显著差异（符合V2设计）")
+            print_success("位置参数在不同模式下有显著差异（符合因果设计）")
         else:
             print_warning("位置参数差异较小")
         
@@ -384,7 +384,7 @@ def test_qwen_compatible_interface():
             print_error("尺度参数过小，可能初始化有问题")
         
     except Exception as e:
-        print_error(f"V2数学原理验证失败: {e}")
+        print_error(f"因果数学原理验证失败: {e}")
 
 def test_temperature_and_sampling_params():
     """测试温度和采样参数"""
@@ -483,16 +483,16 @@ def test_temperature_and_sampling_params():
 
 def main():
     """主测试函数"""
-    print_section("CausalQwen V2 数学原理验证 - 更新版", Colors.PURPLE)
-    print_theory("验证V2革命性设计：do_sample参数控制的位置vs尺度差异")
+    print_section("CausalQwen 因果数学原理验证 - 更新版", Colors.PURPLE)
+    print_theory("验证因果推理框架：do_sample参数控制的位置vs尺度差异")
     print_theory("核心原理：do_sample控制噪声对Cauchy分布参数的不同影响方式")
     print_theory("完全兼容Qwen接口：generate(), do_sample, temperature, top_k, top_p")
     
     # 1. 数学框架验证
-    test_v2_mathematical_framework()
+    test_causal_mathematical_framework()
     
-    # 2. ActionNetwork双模式验证
-    action_results = test_action_network_v2_modes()
+    # 2. ActionNetwork因果模式验证
+    action_results = test_action_network_causal_modes()
     
     # 3. Qwen兼容接口验证
     test_qwen_compatible_interface()
@@ -501,14 +501,14 @@ def main():
     test_temperature_and_sampling_params()
     
     # 总结报告
-    print_section("V2验证总结", Colors.GREEN)
-    print_success("🎯 V2核心创新验证：do_sample控制的位置vs尺度差异")
+    print_section("因果验证总结", Colors.GREEN)
+    print_success("🎯 因果核心创新验证：do_sample控制的位置vs尺度差异")
     print_success("🎯 ActionNetwork统一框架：兼容Qwen的所有参数")
     print_success("🎯 温度参数选择性生效：仅在do_sample=True时影响噪声强度")
     print_success("🎯 柯西分布线性稳定性：严格的数学基础实现")
     print_success("🎯 完全Qwen兼容：generate()接口和所有采样参数")
     
-    print_theory("V2数学原理验证完成！")
+    print_theory("因果数学原理验证完成！")
     print_theory("├─ do_sample=True：U' ~ Cauchy(μ + T·|b_noise|·ε, γ)")
     print_theory("四种推理模式：")
     print_theory("├─ Causal模式 (temperature=0): 纯因果生成，无外生噪声")
