@@ -118,10 +118,10 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 -   **输入**: `loc_U` (形状: `[B, S, C]`), `scale_U` (形状: `[B, S, C]`)
 -   **内部参数**: 可学习的外生噪声基准 `b_noise` (形状: `[C]`)
 -   **处理**: 
-    1.  **V2 噪声注入**: 根据 `do_sample` 的值，选择不同的噪声注入方式：
+    1.  **温度统一的噪声注入**: 根据 `do_sample` 的值，选择不同的噪声注入方式：
         -   **非采样模式 (`do_sample=False`)**: 噪声影响**尺度**参数。
             `loc_U_noisy = loc_U`
-            `scale_U_noisy = scale_U + torch.abs(self.b_noise)`
+            `scale_U_noisy = scale_U + temperature * torch.abs(self.b_noise)`
         -   **采样模式 (`do_sample=True`)**: 噪声影响**位置**参数。
             `epsilon = sample_cauchy_noise()`
             `loc_U_noisy = loc_U + temperature * torch.abs(self.b_noise) * epsilon`
@@ -607,7 +607,11 @@ graph TD
     end
 
     G & I --> J["L_reg_gated = Gate × L_nll<br>(逐元素相乘)"]
-    J --> K["<b>门控回归损失
+    J --> K["<b>门控回归损失 L_reg_gated</b><br>形状: [B, S]"]
+
+    style K fill:#fff3e0,stroke:#e65100,stroke-width:2px
+```
+
 
 
 #### 图 5.1：分类损失 (`L_cls`) 的计算
