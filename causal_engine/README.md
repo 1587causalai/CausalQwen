@@ -67,6 +67,20 @@ Y = f(U, ε)
 
 This simple equation encodes a profound truth: **Intelligence is the application of universal laws to individual contexts.**
 
+### AbductionNetwork: The Self-Discovery Module
+
+The AbductionNetwork transforms evidence into self-understanding through independent pathways:
+
+| Input Configuration | loc_net (Position) | scale_net (Uncertainty) | Initialization |
+|-------------------|------------------|------------------------|----------------|
+| **H=C, layers=1** | `nn.Linear(H,C)` | `nn.Linear(H,C)` | **loc:identity**, scale:constant |
+| **H≠C, layers=1** | `nn.Linear(H,C)` | `nn.Linear(H,C)` | loc:Xavier, scale:constant |
+| **layers>1** | `MLP(H→C*2→C)` | `MLP(H→C*2→C)` | loc:Xavier, scale:constant |
+
+- **loc_net**: "Who am I?" - Identity inference with elegant initialization
+- **scale_net**: "How certain am I?" - Uncertainty quantification  
+- **Independence**: Complete gradient separation for optimal learning
+
 ## Implementation Purity
 
 ```python

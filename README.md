@@ -20,6 +20,8 @@
 ### What's New in v2.0
 - **🔧 Modular Design**: Three independent modules working in harmony
   - `AbductionNetwork`: From evidence to individuals (who am I?)
+    - Independent loc_net and scale_net pathways
+    - Smart initialization: identity when H=C, Xavier otherwise
   - `ActionNetwork`: From individuals to decisions (what should I do?)
   - `ActivationHead`: From decisions to outputs (how to express it?)
 - **🎯 Unified Activation**: Each output dimension can be either:

@@ -21,9 +21,32 @@ class AbductionNetwork(nn.Module):
     这是智能的第一步 - 从观察到的证据中推断出"我是谁"。
     网络将上下文特征映射到个体的因果表征分布 U ~ Cauchy(μ, γ)。
     
+    数学架构（独立网络版本）：
+    1. loc_net: H → C (位置推断)
+    2. scale_net: H → C (尺度推断)
+    3. 分布生成：(μ, γ) ∈ R^C × R^C_+
+    
+    构建规则表：
+    | 输入参数组合      | loc_net 构建      | scale_net 构建    | 初始化策略         |
+    |------------------|------------------|------------------|-------------------|
+    | H=C, layers=1    | nn.Linear(H,C)   | nn.Linear(H,C)   | loc:恒等, scale:常数 |
+    | H≠C, layers=1    | nn.Linear(H,C)   | nn.Linear(H,C)   | loc:Xavier, scale:常数 |
+    | H=C, layers>1    | MLP(H→C*2→C)     | MLP(H→C*2→C)     | loc:Xavier, scale:常数 |
+    | H≠C, layers>1    | MLP(H→C*2→C)     | MLP(H→C*2→C)     | loc:Xavier, scale:常数 |
+    
+    优雅设计：
+    - loc_net 和 scale_net 完全独立
+    - 当 H = C 且 mlp_layers = 1 时，loc_net 恒等初始化
+    - scale_net 总是用 MLP，最后一层初始化为常数
+    - 数学上更加灵活和优化
+    
     Args:
-        input_size: 输入特征维度
-        causal_size: 因果表征维度
+        input_size: 输入特征维度 (H)
+        causal_size: 因果表征维度 (C)
+        mlp_layers: MLP 层数（默认为 1）
+        mlp_hidden_ratio: MLP 隐藏层大小比例（hidden = C * ratio）
+        mlp_activation: MLP 激活函数
+        mlp_dropout: MLP dropout 率
         gamma_init: 初始尺度参数
     """
     
@@ -31,41 +54,151 @@ class AbductionNetwork(nn.Module):
         self, 
         input_size: int,
         causal_size: int,
+        mlp_layers: int = 1,
+        mlp_hidden_ratio: float = 2.0,
+        mlp_activation: str = 'relu',
+        mlp_dropout: float = 0.0,
         gamma_init: float = 1.0
     ):
         super().__init__()
         
         self.input_size = input_size
         self.causal_size = causal_size
+        self.mlp_layers = mlp_layers
+        self.mlp_hidden_ratio = mlp_hidden_ratio
         
-        # 位置网络：推断个体群体的中心
-        self.loc_net = nn.Linear(input_size, causal_size, bias=True)
+        # 独立的网络设计：每个网络都有自己的路径
+        # loc_net：H → C，独立路径
+        if input_size == causal_size and mlp_layers == 1:
+            # 特殊情况：直接连接，可以恒等初始化
+            self.loc_net = nn.Linear(input_size, causal_size, bias=True)
+            self._loc_is_identity_candidate = True
+        else:
+            # 一般情况：可能需要 MLP + Linear
+            if mlp_layers == 1:
+                # 单层线性变换
+                self.loc_net = nn.Linear(input_size, causal_size, bias=True)
+            else:
+                # 多层 MLP
+                self.loc_net = self._build_mlp(
+                    input_size, causal_size, mlp_layers,
+                    mlp_hidden_ratio, mlp_activation, mlp_dropout
+                )
+            self._loc_is_identity_candidate = False
         
-        # 尺度网络：推断个体群体的多样性
-        self.scale_net = nn.Linear(input_size, causal_size, bias=True)
+        # scale_net：H → C，独立路径（总是用 MLP）
+        self.scale_net = self._build_mlp(
+            input_size, 
+            causal_size,
+            mlp_layers,
+            mlp_hidden_ratio,
+            mlp_activation,
+            mlp_dropout
+        )
         
         # 初始化
         self._init_weights(gamma_init)
     
+    def _build_mlp(
+        self,
+        input_size: int,
+        output_size: int,  # 始终等于 causal_size
+        num_layers: int,
+        hidden_ratio: float,
+        activation: str,
+        dropout: float
+    ) -> nn.Module:
+        """
+        构建 MLP 模块（优雅版本）
+        
+        数学设计：
+        - 输入: H 维
+        - 输出: C 维 (causal_size)
+        - 隐藏层: C * hidden_ratio 维
+        
+        当 num_layers=1 时：
+        - 如果 H=C：单层线性（可以恒等初始化）
+        - 如果 H≠C：单层线性（维度转换）
+        
+        当 num_layers>1 时：深度 MLP
+        """
+        if num_layers == 1:
+            # 单层情况：最简洁的设计
+            return nn.Linear(input_size, output_size)
+        
+        # 多层情况：深度 MLP
+        hidden_size = int(output_size * hidden_ratio)
+        
+        # 选择激活函数
+        activation_fn = {
+            'relu': nn.ReLU,
+            'gelu': nn.GELU,
+            'silu': nn.SiLU,
+            'tanh': nn.Tanh,
+            'sigmoid': nn.Sigmoid
+        }.get(activation.lower(), nn.ReLU)
+        
+        layers = []
+        
+        # 第一层
+        layers.extend([
+            nn.Linear(input_size, hidden_size),
+            activation_fn(),
+        ])
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
+        
+        # 中间层
+        for _ in range(num_layers - 2):  # -2 因为第一层和最后一层已经算了
+            layers.extend([
+                nn.Linear(hidden_size, hidden_size),
+                activation_fn(),
+            ])
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
+        
+        # 输出层
+        layers.append(nn.Linear(hidden_size, output_size))
+        
+        return nn.Sequential(*layers)
+    
     def _init_weights(self, gamma_init: float):
-        """智能的初始化策略"""
+        """独立网络的优雅初始化策略"""
         with torch.no_grad():
-            if self.input_size == self.causal_size:
-                # 恒等初始化：保持输入特征
+            # loc_net 初始化
+            if self._loc_is_identity_candidate:
+                # 特殊情况：H=C 且 layers=1，恒等初始化
                 self.loc_net.weight.copy_(torch.eye(self.causal_size))
                 self.loc_net.bias.zero_()
             else:
-                # Xavier 初始化
-                nn.init.xavier_uniform_(self.loc_net.weight)
-                nn.init.zeros_(self.loc_net.bias)
+                # 一般情况：Xavier 初始化
+                if isinstance(self.loc_net, nn.Linear):
+                    nn.init.xavier_uniform_(self.loc_net.weight)
+                    nn.init.zeros_(self.loc_net.bias)
+                else:
+                    # MLP 情况
+                    for module in self.loc_net.modules():
+                        if isinstance(module, nn.Linear):
+                            nn.init.xavier_uniform_(module.weight)
+                            if module.bias is not None:
+                                nn.init.zeros_(module.bias)
             
-            # 尺度网络：初始为常数输出
-            nn.init.zeros_(self.scale_net.weight)
-            nn.init.constant_(self.scale_net.bias, gamma_init)
+            # scale_net 初始化（总是 MLP）
+            for module in self.scale_net.modules():
+                if isinstance(module, nn.Linear):
+                    # 最后一层特殊初始化为常数输出
+                    if module is list(self.scale_net.modules())[-1]:
+                        nn.init.zeros_(module.weight)
+                        if module.bias is not None:
+                            nn.init.constant_(module.bias, gamma_init)
+                    else:
+                        nn.init.xavier_uniform_(module.weight)
+                        if module.bias is not None:
+                            nn.init.zeros_(module.bias)
     
     def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        前向传播：从证据到个体
+        前向传播：从证据到个体（独立网络版本）
         
         Args:
             hidden_states: [batch_size, seq_len, input_size] 上下文特征
@@ -74,10 +207,31 @@ class AbductionNetwork(nn.Module):
             loc_U: [batch_size, seq_len, causal_size] 个体位置参数
             scale_U: [batch_size, seq_len, causal_size] 个体尺度参数
         """
+        # 独立的网络路径
         loc_U = self.loc_net(hidden_states)
         scale_U = F.softplus(self.scale_net(hidden_states))
         
         return loc_U, scale_U
+    
+    @property
+    def is_identity_mapping(self) -> bool:
+        """loc_net 是否为恒等映射"""
+        return self._loc_is_identity_candidate
+    
+    def get_architecture_description(self) -> str:
+        """获取架构描述"""
+        if self.mlp_layers == 1:
+            if self.is_identity_mapping:
+                loc_desc = f"Identity: {self.input_size} → {self.causal_size}"
+            else:
+                loc_desc = f"Linear: {self.input_size} → {self.causal_size}"
+            scale_desc = f"Linear: {self.input_size} → {self.causal_size}"
+        else:
+            hidden_size = int(self.causal_size * self.mlp_hidden_ratio)
+            loc_desc = f"MLP({self.mlp_layers}): {self.input_size} → {hidden_size} → {self.causal_size}"
+            scale_desc = f"MLP({self.mlp_layers}): {self.input_size} → {hidden_size} → {self.causal_size}"
+        
+        return f"loc_net=[{loc_desc}], scale_net=[{scale_desc}]"
 
 
 class ActionNetwork(nn.Module):

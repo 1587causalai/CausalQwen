@@ -61,6 +61,10 @@ class CausalEngine(nn.Module):
         vocab_size: 输出维度（词汇表大小）
         causal_size: 因果表征维度（默认等于hidden_size）
         activation_modes: 激活模式配置（默认全部分类）
+        abduction_mlp_layers: AbductionNetwork 的 MLP 层数（0=不使用MLP，除非维度不匹配）
+        abduction_mlp_hidden_ratio: MLP 隐藏层大小比例（相对于 causal_size）
+        abduction_mlp_activation: MLP 激活函数 ('relu', 'gelu', 'silu', 'tanh', 'sigmoid')
+        abduction_mlp_dropout: MLP dropout 率
         b_noise_init: 外生噪声初始值
         gamma_init: 初始尺度参数
         classification_threshold_init: 分类阈值初始值
@@ -74,6 +78,12 @@ class CausalEngine(nn.Module):
         vocab_size: int,
         causal_size: Optional[int] = None,
         activation_modes: Optional[Union[str, List[str]]] = None,
+        # AbductionNetwork MLP 参数
+        abduction_mlp_layers: int = 1,
+        abduction_mlp_hidden_ratio: float = 2.0,
+        abduction_mlp_activation: str = 'relu',
+        abduction_mlp_dropout: float = 0.0,
+        # 噪声和初始化参数
         b_noise_init: float = 0.1,
         gamma_init: float = 1.0,
         classification_threshold_init: float = 0.0,
@@ -91,6 +101,10 @@ class CausalEngine(nn.Module):
         self.abduction = AbductionNetwork(
             input_size=hidden_size,
             causal_size=self.causal_size,
+            mlp_layers=abduction_mlp_layers,
+            mlp_hidden_ratio=abduction_mlp_hidden_ratio,
+            mlp_activation=abduction_mlp_activation,
+            mlp_dropout=abduction_mlp_dropout,
             gamma_init=gamma_init
         )
         

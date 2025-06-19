@@ -38,6 +38,15 @@ CausalEngine:   X → U → f(U,ε) → Y
 | Needs sampling | Pure computation |
 | Zero-sum choices | Independent choices |
 
+## The Architecture
+
+**AbductionNetwork**: Evidence → Self-Understanding
+- Independent loc_net (identity) and scale_net (uncertainty)
+- Smart initialization: identity when H=C, Xavier otherwise
+
+**ActionNetwork**: Self → Decision  
+**ActivationHead**: Decision → Output
+
 ## The Code
 
 ```python

@@ -163,10 +163,47 @@ def demo_multi_task_head():
     print(f"\n✅ 多任务头支持复杂的多模态应用")
 
 
+def demo_abduction_mlp():
+    """演示 AbductionNetwork 的 MLP 功能"""
+    print("\n" + "=" * 60)
+    print("4. AbductionNetwork MLP 功能")
+    print("=" * 60)
+    
+    # 场景：复杂的非线性归因推断
+    print("\n📊 复杂归因推断场景:")
+    print("  - 输入维度: 1024 (大型 Transformer)")
+    print("  - 因果维度: 256 (压缩表征)")
+    print("  - MLP 层数: 2")
+    print("  - 激活函数: GELU")
+    
+    # 创建带 MLP 的引擎
+    engine = CausalEngine(
+        hidden_size=1024,
+        vocab_size=50000,
+        causal_size=256,
+        abduction_mlp_layers=2,
+        abduction_mlp_hidden_ratio=2.0,
+        abduction_mlp_activation='gelu',
+        abduction_mlp_dropout=0.1
+    )
+    
+    # 模拟复杂输入
+    hidden_states = torch.randn(1, 100, 1024)
+    output = engine(hidden_states, apply_activation=False)
+    
+    print(f"\n📈 归因推断结果:")
+    print(f"  - 输入: {hidden_states.shape}")
+    print(f"  - 个体表征 U: {output['loc_U'].shape}")
+    print(f"  - MLP 自动处理维度转换: 1024 → 256")
+    print(f"  - 支持复杂的非线性映射")
+    
+    print(f"\n✅ MLP 增强了归因推断的表达能力")
+
+
 def demo_custom_activation():
     """演示自定义激活模式"""
     print("\n" + "=" * 60)
-    print("4. 自定义激活模式")
+    print("5. 自定义激活模式")
     print("=" * 60)
     
     # 场景：科学计算 - 预测分子性质
@@ -214,6 +251,7 @@ def main():
     demo_basic_modular_usage()
     demo_mixed_activation()
     demo_multi_task_head()
+    demo_abduction_mlp()
     demo_custom_activation()
     
     print("\n" + "="*80)

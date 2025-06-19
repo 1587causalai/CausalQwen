@@ -22,7 +22,7 @@ from .engine import CausalEngine, CauchyMath
 from .networks import AbductionNetwork, ActionNetwork
 from .heads import ActivationHead, ActivationMode, MultiTaskActivationHead
 
-__version__ = "2.0.0"
+__version__ = "2.0.2"
 __author__ = "CausalEngine Development Team"
 __all__ = [
     # 核心引擎
@@ -45,8 +45,8 @@ __all__ = [
 ALGORITHM_VERSION = {
     "name": "CausalEngine",
     "version": __version__,
-    "description": "Modular Causal Inference Engine with Unified Activation",
+    "description": "Modular Causal Inference Engine with MLP-Enhanced Abduction",
     "paper": "Distribution-consistency Structural Causal Models",
     "core_innovation": "Individual Choice Variable U + Unified Classification/Regression",
-    "architecture": "AbductionNetwork → ActionNetwork → ActivationHead"
+    "architecture": "AbductionNetwork (w/ MLP) → ActionNetwork → ActivationHead"
 } 
