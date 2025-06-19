@@ -120,25 +120,25 @@ class TestQwenCompatibility:
         
         # TODO: 可以添加更多关于温度效果的统计验证
     
-    def test_temperature_no_effect_when_deterministic(self, test_model, sample_input_ids):
-        """测试确定性模式下温度参数无效"""
-        # 不同温度的确定性生成
+    def test_temperature_zero_consistency(self, test_model, sample_input_ids):
+        """测试温度为0时的一致性行为"""
+        # 温度为0时，无论do_sample是什么，都应该是纯因果模式
         output1 = test_model.generate(
             sample_input_ids,
             max_new_tokens=3,
             do_sample=False,
-            temperature=0.1
+            temperature=0.0
         )
         
         output2 = test_model.generate(
             sample_input_ids,
             max_new_tokens=3,
-            do_sample=False,
-            temperature=2.0
+            do_sample=True,
+            temperature=0.0
         )
         
-        # 应该完全相同
-        assert torch.all(output1 == output2), "确定性模式下温度参数应该无效"
+        # 温度为0时两种模式应该产生相同结果（纯因果）
+        assert torch.all(output1 == output2), "温度为0时两种模式应该产生相同结果（纯因果）"
     
     def test_top_k_top_p_parameters(self, test_model, sample_input_ids, set_random_seed):
         """测试top_k和top_p参数"""
@@ -227,7 +227,7 @@ class TestMathematicalPrinciples:
             pytest.skip("InferenceValidator not available")
         
         validator = InferenceValidator(test_model)
-        results = validator.validate_v2_principles(sample_input_ids, temperature=1.0)
+        results = validator.validate_causal_principles(sample_input_ids, temperature=1.0)
         
         # 验证返回结果
         assert 'position_difference' in results

@@ -220,23 +220,36 @@ class TestActionNetworkModes:
             # 温度不同时应该有差异，且差异大小与温度相关
             assert diff > 1e-6, f"温度{temperature}未产生预期差异"
     
-    def test_temperature_no_effect_in_deterministic_mode(self, action_network, 
+    def test_temperature_effect_in_standard_mode(self, action_network, 
                                                        sample_loc_U, sample_scale_U):
-        """测试温度参数在确定性模式下无效"""
+        """测试温度参数在标准模式下的效果"""
         with torch.no_grad():
-            # temperature=1.0
+            # temperature=0 (纯因果模式)
+            loc_S_0, scale_S_0 = action_network(
+                sample_loc_U, sample_scale_U, do_sample=False, temperature=0.0
+            )
+            
+            # temperature=1.0 (标准模式)
             loc_S_1, scale_S_1 = action_network(
                 sample_loc_U, sample_scale_U, do_sample=False, temperature=1.0
             )
             
-            # temperature=5.0
-            loc_S_5, scale_S_5 = action_network(
-                sample_loc_U, sample_scale_U, do_sample=False, temperature=5.0
+            # temperature=2.0 (标准模式)
+            loc_S_2, scale_S_2 = action_network(
+                sample_loc_U, sample_scale_U, do_sample=False, temperature=2.0
             )
         
-        # 确定性模式下温度参数应该无效
-        torch.testing.assert_close(loc_S_1, loc_S_5, atol=1e-8, rtol=1e-8)
-        torch.testing.assert_close(scale_S_1, scale_S_5, atol=1e-8, rtol=1e-8)
+        # 位置参数应该相同（标准模式下位置参数不受温度影响）
+        torch.testing.assert_close(loc_S_0, loc_S_1, atol=1e-8, rtol=1e-8)
+        torch.testing.assert_close(loc_S_1, loc_S_2, atol=1e-8, rtol=1e-8)
+        
+        # 尺度参数应该随温度增加而增加
+        scale_mean_0 = scale_S_0.mean().item()
+        scale_mean_1 = scale_S_1.mean().item()
+        scale_mean_2 = scale_S_2.mean().item()
+        
+        assert scale_mean_0 < scale_mean_1, f"温度1.0应该比温度0产生更大的尺度参数: {scale_mean_0} vs {scale_mean_1}"
+        assert scale_mean_1 < scale_mean_2, f"温度2.0应该比温度1.0产生更大的尺度参数: {scale_mean_1} vs {scale_mean_2}"
 
 
 class TestAbductionNetwork:
