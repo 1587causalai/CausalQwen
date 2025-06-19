@@ -1,7 +1,7 @@
 """
 CausalQwen 推理引擎 - 与Qwen完全兼容
 
-V2核心创新：位置vs尺度的精妙差异
+核心机制：位置vs尺度的差异化处理
 ├─ do_sample=True：噪声影响位置参数，扰动个体身份  
 └─ do_sample=False：噪声影响尺度参数，增加决策不确定性
 
@@ -97,14 +97,14 @@ class CausalInferenceEngine:
 
 
 class InferenceValidator:
-    """推理验证器 - 验证V2数学原理"""
+    """推理验证器 - 验证数学原理"""
     
     def __init__(self, model: CausalQwenMVPForCausalLM):
         self.model = model
         self.engine = CausalInferenceEngine(model)
     
     def validate_v2_principles(self, input_ids, temperature=1.0):
-        """验证V2数学原理：位置vs尺度差异"""
+        """验证数学原理：位置vs尺度差异"""
         results = {}
         
         with torch.no_grad():

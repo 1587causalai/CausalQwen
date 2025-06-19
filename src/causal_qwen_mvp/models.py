@@ -145,9 +145,9 @@ class ActionNetwork(nn.Module):
             print("❌ 源模型没有lm_head，使用标准初始化...")
         
     def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
-        """前向传播 - V2革命性设计：位置vs尺度的精妙差异
+        """前向传播 - 双模式设计：位置vs尺度的差异化处理
         
-        V2核心创新：噪声对采样/非采样模式的不同影响方式
+        核心机制：噪声对采样/非采样模式的不同影响方式
         
         采样模式：噪声影响位置参数
         ├─ ε ~ Cauchy(0, 1) 标准噪声采样
@@ -172,7 +172,7 @@ class ActionNetwork(nn.Module):
             scale_U = torch.zeros_like(loc_U)  # 默认为确定性分布
         
         if do_sample:
-            # 🎯 V2采样模式：噪声影响位置参数
+            # 🎯 采样模式：噪声影响位置参数
             
             # Step 1: 采样标准柯西噪声 ε ~ Cauchy(0, I)
             uniform_sample = torch.rand_like(loc_U)
@@ -192,7 +192,7 @@ class ActionNetwork(nn.Module):
             scale_S = scale_U @ torch.abs(self.lm_head.weight).T
 
         else:
-            # 🔧 V2非采样模式：噪声影响尺度参数
+            # 🔧 非采样模式：噪声影响尺度参数
             
             # Step 1: 外生噪声融合到尺度参数
             # 数学：scale_U_noisy = γ + |b_noise|
@@ -306,9 +306,9 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
         temperature: Optional[float] = 1.0,
         **kwargs
     ) -> Union[Tuple, CausalMVPOutput]:
-        """前向传播 - V2框架实现
+        """前向传播 - 双模式框架实现
         
-        V2核心特性：
+        核心特性：
         - do_sample=False: 非采样模式，噪声影响尺度参数
         - do_sample=True: 采样模式，噪声影响位置参数
         """
@@ -327,13 +327,13 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
         )
         hidden_states = transformer_outputs[0]
         
-        # 2. V2因果推理链路
+        # 2. 因果推理链路
         loc_U, scale_U = self.abduction_network(hidden_states)  # 个体推断
         loc_S, scale_S = self.action_network(
             loc_U, scale_U, 
             do_sample=do_sample, 
             temperature=temperature
-        )  # V2决策推断
+        )  # 决策推断
         
         # 3. 损失计算
         loss = None

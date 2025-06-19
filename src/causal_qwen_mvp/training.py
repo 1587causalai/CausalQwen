@@ -299,7 +299,7 @@ class LossComputer:
         else:
             loss = loss.mean()
         
-        return loss  # V2简化：移除历史遗留的权重配置
+        return loss  # 简化实现：移除历史遗留的权重配置
     
     def compute_regularization_loss(self, model: CausalQwenMVPForCausalLM) -> torch.Tensor:
         """计算正则化损失 - 占位实现"""

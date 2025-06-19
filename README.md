@@ -57,9 +57,32 @@ output = model.generate(
 
 ---
 
-## 🧪 核心测试验证
+## 🧪 测试
 
-运行4个核心测试脚本验证数学框架：
+### 标准化测试套件
+
+使用pytest框架的标准化测试：
+
+```bash
+# 运行所有测试（不需要Qwen模型）
+./run_tests.sh
+
+# 运行特定测试
+./run_tests.sh math         # 数学框架测试
+./run_tests.sh compatibility # 兼容性测试
+./run_tests.sh generation   # 生成功能测试
+
+# 生成测试覆盖率报告
+./run_tests.sh coverage
+
+# 或直接使用pytest
+pytest tests/              # 运行所有测试
+pytest tests/ -m "not requires_qwen"  # 跳过需要Qwen的测试
+```
+
+### 快速验证脚本
+
+运行核心测试脚本快速验证：
 
 ```bash
 # 1. 核心数学框架验证
@@ -87,7 +110,14 @@ CausalQwen/
 │   ├── models.py                 # CausalQwen V2模型
 │   ├── inference.py              # 推理引擎  
 │   └── training.py               # 训练工具
-├── scripts/                      # 核心测试
+├── tests/                        # 标准化测试套件
+│   ├── conftest.py               # pytest配置和fixtures
+│   ├── test_math_framework.py    # 核心数学框架测试
+│   ├── test_compatibility.py     # Qwen接口兼容性测试
+│   ├── test_generation.py        # 生成功能测试
+│   ├── test_comparison.py        # 与Qwen对比测试
+│   └── README.md                 # 测试说明文档
+├── scripts/                      # 快速验证脚本
 │   ├── test_core_math_framework.py         # 核心数学框架验证
 │   ├── test_qwen_interface_compatibility.py # Qwen接口兼容性测试
 │   ├── demo_basic_usage.py                 # 基本使用演示
@@ -99,6 +129,7 @@ CausalQwen/
 │   ├── model_inference_position_and_scale.md           # 位置vs尺度理论
 │   ├── init_pretraining_alignment.md                   # 预训练对齐
 │   └── U_deep_dive.md                                  # U变量深入研究
+├── run_tests.sh                  # 测试运行脚本
 └── README.md                     # 本文档
 ```
 
