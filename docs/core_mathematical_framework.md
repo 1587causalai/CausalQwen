@@ -6,6 +6,8 @@
 
 本文档详细描述了 CausalLLM 因果语言模型的核心设计理念、数学框架和实现细节。CausalLLM 是首个将个体选择变量 U 引入语言生成的因果推理模型，实现了从"概率采样"到"个体决策"的范式转变。本文中，我们选择Qwen2.5作为基础构建 CausalQwen 作为示范。
 
+> 在反事实世界里面，一切皆有可能。Everything is possible in the counterfactual world.
+
 ## 技术概述
 
 CausalQwen 代表了语言模型设计的重大突破，其核心创新包括：
@@ -567,21 +569,40 @@ CausalQwen 提供四种核心推理模式，通过 `do_sample` 和 `temperature`
 ### 6.1 生成流程图
 
 ```mermaid
-graph LR
-    Prompt["Prompt"] --> Forward["前向传播<br>获得 loc_S, scale_S"]
-    Forward --> Mode{推理模式}
-    Mode -->|标准模式| Det["argmax OvR Prob"]
-    Mode -->|因果/采样模式| Samp["argmax OvR Prob"]
-    Mode -->|兼容模式| Trad["传统 Softmax 采样"]
-    Det --> Next["下一词元"]
-    Samp --> Next
-    Trad --> Next
-    Next --> Check{结束?}
-    Check -->|否| Forward
-    Check -->|是| Done["完成"]
+graph TD
+    Prompt["输入 Prompt"] --> Forward["前向传播<br>获得 loc_U, scale_U"]
     
-    style Mode fill:#fff3e0
-    style Next fill:#e3f2fd
+    Forward --> TempCheck{temperature}
+    
+    %% 推理模式分支
+    TempCheck -->|T = 0| Causal["🎯 因果模式<br>无外生噪声"]
+    TempCheck -->|T > 0| SampleCheck{do_sample}
+    
+    SampleCheck -->|False| Standard["🔧 标准模式<br>噪声→尺度参数"]
+    SampleCheck -->|True| Sampling["🎲 采样模式<br>噪声→位置参数"]
+    
+    %% 决策计算
+    Causal --> Action["线性因果律<br>loc_S, scale_S"]
+    Standard --> Action
+    Sampling --> Action
+    
+    Action --> OvR["OvR 概率计算"]
+    OvR --> Selection{选择策略}
+    
+    Selection -->|因果推理| ArgMax["argmax(P_k)"]
+    Selection -->|兼容模式| Softmax["Softmax 采样"]
+    
+    ArgMax --> NextToken["下一词元"]
+    Softmax --> NextToken
+    NextToken --> EndCheck{结束?}
+    
+    EndCheck -->|否| Forward
+    EndCheck -->|是| Done["完成"]
+    
+    style Causal fill:#e8f5e9
+    style Standard fill:#e3f2fd
+    style Sampling fill:#fce4ec
+    style Action fill:#fff3e0,stroke:#e65100,stroke-width:2px
     style Done fill:#e8f5e9
 ```
 
@@ -918,7 +939,7 @@ graph TB
         C1["个体选择变量 U"]
         C2["因果机制 f(U,ε)"]
         C3["OvR 独立判断"]
-        C4["双模式推理"]
+        C4["因果推理"]
     end
     
     T1 --> C1
