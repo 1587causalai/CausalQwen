@@ -91,8 +91,11 @@ def _copy_qwen_weights(qwen_model, causal_model):
     
     causal_model.model.load_state_dict(causal_state_dict)
     
-    # 复制lm_head到ActionNetwork
-    causal_model.action_network.copy_weights_from_qwen(qwen_model)
+    # 复制lm_head到CausalEngine的action部分
+    # CausalEngine的action_head权重
+    causal_model.causal_engine.action_head.weight.data.copy_(qwen_model.lm_head.weight.data)
+    if qwen_model.lm_head.bias is not None and causal_model.causal_engine.action_head.bias is not None:
+        causal_model.causal_engine.action_head.bias.data.copy_(qwen_model.lm_head.bias.data)
 
 
 @pytest.mark.requires_qwen
@@ -117,10 +120,10 @@ class TestWeightCopying:
         assert feature_diff < 1e-6, f"特征差异过大: {feature_diff}"
     
     def test_action_network_weights_copied(self, qwen_model, causal_qwen_from_qwen):
-        """测试ActionNetwork权重是否正确复制"""
+        """测试CausalEngine权重是否正确复制"""
         # 检查lm_head权重
         qwen_lm_weight = qwen_model.lm_head.weight
-        causal_lm_weight = causal_qwen_from_qwen.action_network.lm_head.weight
+        causal_lm_weight = causal_qwen_from_qwen.causal_engine.action_head.weight
         
         weight_diff = torch.abs(qwen_lm_weight - causal_lm_weight).max().item()
         assert weight_diff < 1e-6, f"lm_head权重差异过大: {weight_diff}"
@@ -152,10 +155,14 @@ class TestLogitsConsistency:
                 # CausalQwen前向传播
                 transformer_out = causal_qwen_from_qwen.model(input_ids)
                 hidden_states = transformer_out.last_hidden_state
-                loc_U, scale_U = causal_qwen_from_qwen.abduction_network(hidden_states)
-                loc_S, _ = causal_qwen_from_qwen.action_network(
-                    loc_U, scale_U, do_sample=False
+                
+                # 使用CausalEngine进行推理
+                engine_output = causal_qwen_from_qwen.causal_engine(
+                    hidden_states, 
+                    do_sample=False,
+                    temperature=1.0
                 )
+                loc_S = engine_output['loc_S']
                 
                 # 比较
                 logits_diff = torch.abs(loc_S - qwen_logits).mean().item()

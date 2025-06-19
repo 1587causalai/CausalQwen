@@ -75,17 +75,50 @@ def test_model(small_model_config):
 @pytest.fixture
 def action_network(small_model_config):
     """创建单独的ActionNetwork用于测试"""
-    from causal_qwen_mvp.models import ActionNetwork
-    
-    return ActionNetwork(small_model_config)
+    # ActionNetwork 现在是 CausalEngine 的内部组件
+    # 为了测试，我们创建一个 mock 对象
+    from causal_engine import CausalEngine
+    engine = CausalEngine(
+        hidden_size=small_model_config.hidden_size,
+        vocab_size=small_model_config.vocab_size,
+        causal_size=small_model_config.causal_size,
+        b_noise_init=small_model_config.b_noise_init,
+        gamma_init=small_model_config.gamma_init
+    )
+    # 返回引擎的 action 方法，模拟原来的 ActionNetwork
+    class ActionNetworkWrapper:
+        def __init__(self, engine):
+            self.engine = engine
+            self.config = small_model_config
+            self.b_noise = engine.b_noise
+            self.lm_head = engine.action_head
+        def __call__(self, loc_U, scale_U, do_sample=False, temperature=1.0):
+            return self.engine.action(loc_U, scale_U, do_sample, temperature)
+    return ActionNetworkWrapper(engine)
 
 
 @pytest.fixture
 def abduction_network(small_model_config):
     """创建单独的AbductionNetwork用于测试"""
-    from causal_qwen_mvp.models import AbductionNetwork
-    
-    return AbductionNetwork(small_model_config)
+    # AbductionNetwork 现在是 CausalEngine 的内部组件
+    from causal_engine import CausalEngine
+    engine = CausalEngine(
+        hidden_size=small_model_config.hidden_size,
+        vocab_size=small_model_config.vocab_size,
+        causal_size=small_model_config.causal_size,
+        b_noise_init=small_model_config.b_noise_init,
+        gamma_init=small_model_config.gamma_init
+    )
+    # 返回引擎的 abduction 方法，模拟原来的 AbductionNetwork
+    class AbductionNetworkWrapper:
+        def __init__(self, engine):
+            self.engine = engine
+            self.config = small_model_config
+            self.loc_net = engine.abduction_loc
+            self.scale_net = engine.abduction_scale
+        def __call__(self, hidden_states):
+            return self.engine.abduction(hidden_states)
+    return AbductionNetworkWrapper(engine)
 
 
 # ========== 测试数据 Fixtures ==========

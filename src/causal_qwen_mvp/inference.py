@@ -113,7 +113,11 @@ class InferenceValidator:
             # 基础表征
             transformer_output = self.model.model(input_ids)
             hidden_states = transformer_output[0]
-            loc_U, scale_U = self.model.abduction_network(hidden_states)
+            
+            # 使用 CausalEngine 获取个体表征
+            engine_output = self.model.causal_engine(hidden_states, do_sample=False, temperature=1.0)
+            loc_U = engine_output['loc_U']
+            scale_U = engine_output['scale_U']
             
             # 确定性模式：噪声影响尺度参数
             det_output = self.model(input_ids, do_sample=False)

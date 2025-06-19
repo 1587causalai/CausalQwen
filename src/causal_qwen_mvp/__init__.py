@@ -39,12 +39,11 @@ from .config import (
 )
 
 # 核心组件
-from .components import (
-    CauchyMath,
-    AbductionNetwork,
-    ActionNetwork,
-    OvRClassifier
-)
+from .components import OvRClassifier
+
+# 注意：CausalEngine 和 CauchyMath 现在是独立的顶层模块
+# 这里我们只是为了方便导入而重新导出
+from causal_engine import CausalEngine, CauchyMath
 
 # 主模型
 from .models import (
@@ -77,8 +76,7 @@ __all__ = [
     'CauchyMath',
     
     # 网络模块
-    'AbductionNetwork',
-    'ActionNetwork',
+    'CausalEngine',  # 从顶层 causal_engine 导入
     'OvRClassifier',
     
     # 推理引擎
