@@ -344,38 +344,47 @@ class ActionNetwork(nn.Module):
         nn.init.zeros_(self.lm_head.bias)
         
     def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
-        """前向传播 - V2设计：位置vs尺度的精妙差异
+        """前向传播：温度控制噪声强度
         
-        V2核心创新：噪声对采样/非采样模式的不同影响方式
+        核心创新：温度参数统一控制噪声强度，do_sample控制噪声作用方式
         
-        采样模式 (do_sample=True): 噪声影响位置参数
+        温度 = 0 (纯因果模式):
+        ├─ U' ~ Cauchy(μ, γ) 
+        └─ 无外生噪声，个体的必然表达
+        
+        温度 > 0 且 do_sample=False (标准模式):
+        ├─ U' ~ Cauchy(μ, γ + T·|b_noise|)
+        └─ 噪声增加决策不确定性，保持个体身份
+        
+        温度 > 0 且 do_sample=True (采样模式):
         ├─ ε ~ Cauchy(0, 1) 标准噪声采样
-        ├─ U' ~ Cauchy(μ + T·|b_noise|·ε, γ) 噪声注入位置参数
-        └─ 扰动个体身份，保持原有不确定性
-        
-        非采样模式 (do_sample=False): 噪声影响尺度参数  
-        ├─ U' ~ Cauchy(μ, γ + |b_noise|) 噪声融合到尺度
-        └─ 保持个体身份，增加决策不确定性
+        ├─ U' ~ Cauchy(μ + T·|b_noise|·ε, γ)
+        └─ 噪声扰动个体身份，探索多样性
         """
         if scale_U is None:
             scale_U = torch.zeros_like(loc_U)
         
-        if do_sample:
-            # 🎯 V2采样模式：噪声影响位置参数
+        if temperature == 0:
+            # 🎯 纯因果模式：无噪声影响
+            loc_U_final = loc_U
+            scale_U_final = scale_U
+            
+        elif do_sample:
+            # 🎲 采样模式：噪声影响位置参数
             uniform_sample = torch.rand_like(loc_U)
             epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))
             
-            noise_injection = epsilon * temperature * torch.abs(self.b_noise)
-            loc_U_noisy = loc_U + noise_injection
-            
-            loc_S = self.lm_head(loc_U_noisy)
-            scale_S = scale_U @ torch.abs(self.lm_head.weight).T
+            loc_U_final = loc_U + temperature * torch.abs(self.b_noise) * epsilon
+            scale_U_final = scale_U
 
         else:
-            # 🔧 V2非采样模式：噪声影响尺度参数
-            scale_U_noisy = scale_U + torch.abs(self.b_noise)
-            loc_S = self.lm_head(loc_U)
-            scale_S = scale_U_noisy @ torch.abs(self.lm_head.weight).T
+            # 🔧 标准模式：噪声影响尺度参数
+            loc_U_final = loc_U
+            scale_U_final = scale_U + temperature * torch.abs(self.b_noise)
+        
+        # 线性因果律应用
+        loc_S = self.lm_head(loc_U_final)
+        scale_S = scale_U_final @ torch.abs(self.lm_head.weight).T
         
         return loc_S, scale_S
 ```
@@ -436,25 +445,30 @@ $$\mathcal{L} = \frac{\sum_{i=1}^S L_{\text{cls},i}}{\sum_{i=1}^S \text{mask}_i}
 - **数值稳定性**：使用 `torch.clamp` 避免 log(0) 
 - **OvR 优势**：独立判断，支持不确定性表达
 
-## 5. 推理模式 (V2 统一框架)
+## 5. 推理模式统一框架
 
-CausalQwen 实现了推理框架统一，用一个 `do_sample` 参数控制两种核心的因果推理模式，其本质区别在于**噪声是对位置参数还是尺度参数产生影响**。
+CausalQwen 实现了推理框架统一，通过 `do_sample` 和 `temperature` 两个参数的精妙组合，形成四种核心的因果推理模式。核心设计原则是：**温度参数统一控制噪声强度，`do_sample` 控制噪声作用方式**。
 
-### 5.1 V2核心思想：位置 vs. 尺度
+### 5.1 核心思想：温度统一的噪声控制
 
-V2 架构抛弃了 V1 中复杂的"个体具现"采样步骤，转向了更优雅和高效的解析计算。所有不确定性都保留在分布的参数中进行传播。
+架构的关键洞察是将**温度参数**作为噪声强度的统一控制器，实现了对称且直观的推理框架：
 
--   **非采样模式 (`do_sample=False`)**: 外生噪声 `|b_noise|` 被吸收到**尺度参数**中。这增加了决策的不确定性（分布更宽），但保持了决策中心（位置参数）的稳定。
-    -   数学原理: `U' ~ Cauchy(μ, γ + |b_noise|)`
-    -   哲学含义: 环境越嘈杂，我们对个体的判断就越模糊，但个体的典型画像不变。
+-   **温度 = 0**: 无论 `do_sample` 取值如何，都表示**纯因果生成**，完全没有外生噪声影响
+    -   数学原理: `U' ~ Cauchy(μ, γ)`
+    -   哲学含义: 个体在完全确定的环境下，基于自身因果表征的必然表达
 
--   **采样模式 (`do_sample=True`)**: 外生噪声 `ε` 经过温度 `T` 调节后，扰动**位置参数**。这改变了决策的中心，从而探索了不同的决策结果。
-    -   数学原理: `U' ~ Cauchy(μ + T·|b_noise|·ε, γ)`
-    -   哲学含义: 随机扰动可能导致个体做出非典型的行为，从而产生多样化的输出。
+-   **温度 > 0**: 根据 `do_sample` 的值选择噪声的作用方式
+    -   **非采样模式** (`do_sample=False`): 噪声增加**尺度参数**，扩大决策不确定性
+        -   数学原理: `U' ~ Cauchy(μ, γ + T·|b_noise|)`
+        -   哲学含义: 环境噪声使得个体的判断变得更加模糊，但核心身份保持不变
+    
+    -   **采样模式** (`do_sample=True`): 噪声扰动**位置参数**，改变个体身份
+        -   数学原理: `U' ~ Cauchy(μ + T·|b_noise|·ε, γ)`
+        -   哲学含义: 随机扰动导致个体偏离典型状态，探索非典型行为
 
-这种**位置vs尺度**的精妙差异设计是 V2 架构的核心创新。
+这种**温度统一控制**的设计实现了完美的对称性和直观性。
 
-### 5.2 V2 ActionNetwork 实现
+### 5.2 ActionNetwork 实现
 
 这种双模式统一在 `ActionNetwork` 中实现，其核心是`do_sample`参数和`temperature`参数的组合。
 
@@ -478,75 +492,82 @@ class ActionNetwork(nn.Module):
         nn.init.zeros_(self.lm_head.bias)
         
     def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
-        """前向传播 - V2革命性设计：位置vs尺度的精妙差异
+        """前向传播：温度统一控制噪声强度
         
-        V2核心创新：噪声对采样/非采样模式的不同影响方式
+        核心创新：温度参数统一控制噪声强度，do_sample控制噪声作用方式
         
-        采样模式 (do_sample=True): 噪声影响位置参数
+        温度 = 0 (纯因果模式):
+        ├─ U' ~ Cauchy(μ, γ) 
+        └─ 无外生噪声，个体的必然表达
+        
+        温度 > 0 且 do_sample=False (标准模式):
+        ├─ U' ~ Cauchy(μ, γ + T·|b_noise|)
+        └─ 噪声增加决策不确定性，保持个体身份
+        
+        温度 > 0 且 do_sample=True (采样模式):
         ├─ ε ~ Cauchy(0, 1) 标准噪声采样
-        ├─ U' ~ Cauchy(μ + T·|b_noise|·ε, γ) 噪声注入位置参数
-        └─ 扰动个体身份，保持原有不确定性
-        
-        非采样模式 (do_sample=False): 噪声影响尺度参数  
-        ├─ U' ~ Cauchy(μ, γ + |b_noise|) 噪声融合到尺度
-        └─ 保持个体身份，增加决策不确定性
+        ├─ U' ~ Cauchy(μ + T·|b_noise|·ε, γ)
+        └─ 噪声扰动个体身份，探索多样性
         """
         if scale_U is None:
             scale_U = torch.zeros_like(loc_U)
         
-        if do_sample:
-            # 🎯 V2采样模式：噪声影响位置参数
+        if temperature == 0:
+            # 🎯 纯因果模式：无噪声影响
+            loc_U_final = loc_U
+            scale_U_final = scale_U
+            
+        elif do_sample:
+            # 🎲 采样模式：噪声影响位置参数
             uniform_sample = torch.rand_like(loc_U)
             epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))
             
-            noise_injection = epsilon * temperature * torch.abs(self.b_noise)
-            loc_U_noisy = loc_U + noise_injection
-            
-            loc_S = self.lm_head(loc_U_noisy)
-            scale_S = scale_U @ torch.abs(self.lm_head.weight).T
+            loc_U_final = loc_U + temperature * torch.abs(self.b_noise) * epsilon
+            scale_U_final = scale_U
 
         else:
-            # 🔧 V2非采样模式：噪声影响尺度参数
-            scale_U_noisy = scale_U + torch.abs(self.b_noise)
-            loc_S = self.lm_head(loc_U)
-            scale_S = scale_U_noisy @ torch.abs(self.lm_head.weight).T
+            # 🔧 标准模式：噪声影响尺度参数
+            loc_U_final = loc_U
+            scale_U_final = scale_U + temperature * torch.abs(self.b_noise)
+        
+        # 线性因果律应用
+        loc_S = self.lm_head(loc_U_final)
+        scale_S = scale_U_final @ torch.abs(self.lm_head.weight).T
         
         return loc_S, scale_S
 ```
 
 ### 5.3 推理模式详解
 
-最终提供给用户的有三种核心模式，其行为由 `do_sample` 和 `temperature` 参数共同决定，名称也与代码实现保持一致。
+CausalQwen 提供四种核心推理模式，通过 `do_sample` 和 `temperature` 参数的组合实现，每种模式对应不同的因果生成哲学。
 
 | 模式名称 | `do_sample` | `temperature` | 数学原理 | 哲学含义 |
 | :--- | :--- | :--- | :--- | :--- |
-| **标准模式 (Standard)** | `False` | `any` | `U' ~ Cauchy(μ, γ+\|b_noise\|)` | 个体因果表征信息和外生噪声一起决定结果 |
-| **因果模式 (Causal)** | `True` | `0` | `U' ~ Cauchy(μ, γ)` | 无外生噪声，完全基于个体因果表征的生成 |
-| **采样模式 (Sampling)** | `True` | `> 0` | `U'~Cauchy(μ+T·\|b_noise\|·ε,γ)` | 扰动个体因果表征，探索决策空间的多样性|
+| **因果模式 (Causal)** | `any` | `0` | `U' ~ Cauchy(μ, γ)` | 纯因果生成，无外生噪声，个体的必然表达 |
+| **标准模式 (Standard)** | `False` | `> 0` | `U' ~ Cauchy(μ, γ+T·\|b_noise\|)` | 噪声增加决策不确定性，保持个体身份稳定 |
+| **采样模式 (Sampling)** | `True` | `> 0` | `U'~Cauchy(μ+T·\|b_noise\|·ε,γ)` | 噪声扰动个体身份，探索决策空间多样性 |
 | **兼容模式 (Compatible)** | `N/A` | `any` | 标准 Softmax 概率计算 | 用于与传统LM进行基准比较 |
 
-#### 5.3.1 标准模式 (Standard Mode) (`do_sample=False`)
+#### 5.3.1 因果模式 (Causal Mode) (`temperature = 0`)
 
-这是模型的默认确定性推理模式。正如其哲学含义所描述的，个体的因果表征信息（体现于 `μ` 和 `γ`）与外生噪声（`|b_noise|`）共同决定了最终结果。噪声被融合到尺度参数中，增加了决策的不确定性，但不改变决策的中心。最终通过 `argmax` 选择概率最高的词元，过程完全确定。
+这是对因果理论最纯粹的表达，无论 `do_sample` 取值如何。当温度为零时，完全没有外生噪声，生成过程基于个体自身的因果表征。决策分布完全由 `U ~ Cauchy(μ, γ)` 决定，精确对应了理论公式 **`Y = f(U)`**，即输出完全是个体 `U` 在普适因果律 `f` 下的必然表达。这种模式提供了最纯粹的因果生成，适用于需要高度一致性和可解释性的场景。
 
-#### 5.3.2 因果与采样模式 (Causal & Sampling Modes) (`do_sample=True`)
+#### 5.3.2 标准模式 (Standard Mode) (`do_sample=False, temperature > 0`)
 
-当 `do_sample` 为真时，模型进入随机性生成模式，其具体行为由**温度参数 `temperature`** 精细控制，分为两种核心子模式。
+这是模型的默认确定性推理模式。外生噪声 `T·|b_noise|` 被融合到尺度参数中，增加了决策的不确定性（分布更宽），但保持了决策中心（位置参数）的稳定。哲学含义是环境噪声使得个体的判断变得更加模糊，但个体的核心身份保持不变。最终通过 `argmax` 选择概率最高的词元，过程完全确定。
 
--   **因果模式 (`temperature = 0`)**:
-    这是对因果理论最纯粹的表达。当温度为零时，无外生噪声，生成过程完全基于个体自身的因果表征。决策分布完全由 `U ~ Cauchy(μ, γ)` 决定，精确对应了理论公式 **`Y = f(U)`**，即输出完全是个体 `U` 在普适因果律 `f` 下的必然表达。
+#### 5.3.3 采样模式 (Sampling Mode) (`do_sample=True, temperature > 0`)
 
--   **采样模式 (`temperature > 0`)**:
-    当温度大于零，外生噪声 `ε` 会按温度 `T` 的强度去**扰动个体的因果表征**，以此探索决策空间的多样性。这相当于在探索"如果这个个体的内在状态受到一点随机影响，他会做出什么不同的决策？"。温度越高，扰动越大，生成的多样性越强。
-    - TODO: 多步预测的时候可以考虑共享噪声 instance，生成某种一致性的结果。
+当采用随机生成时，外生噪声 `ε` 经过温度 `T` 调节后，扰动**位置参数**。这改变了个体的身份表征，从而探索不同的决策结果。这相当于在探索"如果这个个体受到随机扰动偏离典型状态，会做出什么不同的决策？"。温度越高，扰动越大，生成的多样性越强。
+- TODO: 多步预测的时候可以考虑共享噪声 instance，生成某种一致性的结果。
 
-#### 5.3.3 兼容模式 (Compatible Mode)
+#### 5.3.4 兼容模式 (Compatible Mode)
 
 此模式下，模型会忽略所有因果模块（尤其是尺度参数 `scale_S`），仅使用决策的位置参数 `loc_S` 作为传统 logits，并应用标准的 Softmax 函数进行采样。这使得 CausalQwen 可以与任何传统语言模型在相同的设置下进行公平比较。
 
 ## 6. 自回归序列生成
 
-自回归生成过程是标准的，但在每一步选择下一词元时，可以灵活运用 V2 提供的三种推理模式。
+自回归生成过程是标准的，但在每一步选择下一词元时，可以灵活运用四种推理模式。
 
 ### 6.1 生成流程图
 
@@ -571,7 +592,7 @@ graph LR
 
 ### 6.2 与传统语言模型的生成对比
 
-V2 架构在保留与传统语言模型比较能力的同时，提供了更丰富的因果生成选项。
+新架构在保留与传统语言模型比较能力的同时，提供了更丰富的因果生成选项。
 
 #### 6.2.1 生成哲学对比
 
@@ -602,7 +623,7 @@ graph
     style U2 fill:#fff3e0
     style F2 fill:#e8f5e9
 ```
-*注：CausalQwen V2 将随机性的作用机制从单一的输出层采样，深化为对因果链条内部不同参数（位置或尺度）的精准干预，从而实现了对生成过程多样性与确定性之间更精细的控制。CausalQwen V1 中通过固定采样个体 `u` 来实现一致性的思想，是一个错误的做法， 在V2被抛弃。* 
+*注：CausalQwen 将随机性的作用机制从单一的输出层采样，深化为对因果链条内部不同参数（位置或尺度）的精准干预，从而实现了对生成过程多样性与确定性之间更精细的控制。通过温度参数统一控制噪声强度，实现了四种推理模式的对称设计。* 
 
 ## 7. 实现要点
 
@@ -787,34 +808,30 @@ class ActionNetwork(nn.Module):
         self.b_noise = nn.Parameter(torch.zeros(hidden_size))
     
     def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
-        if do_sample:
-            # 🎯 V2 采样模式：噪声影响位置参数
+        if temperature == 0:
+            # 🎯 因果模式：无噪声影响
+            loc_U_final = loc_U
+            scale_U_final = scale_U
+            
+        elif do_sample:
+            # 🎲 采样模式：噪声影响位置参数
             
             # Step 1: 采样标准柯西噪声 ε ~ Cauchy(0, I)
             uniform_sample = torch.rand_like(loc_U)
             epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))
             
             # Step 2: 温度调节的噪声注入到位置参数
-            noise_injection = epsilon * temperature * torch.abs(self.b_noise)
-            loc_U_noisy = loc_U + noise_injection
-            
-            # Step 3: 基于扰动后的位置参数进行线性决策
-            loc_S = self.lm_head(loc_U_noisy)
-            
-            # Step 4: 尺度参数的线性稳定性变换
-            scale_S = scale_U @ torch.abs(self.lm_head.weight).T
+            loc_U_final = loc_U + temperature * torch.abs(self.b_noise) * epsilon
+            scale_U_final = scale_U
 
         else:
-            # 🔧 V2 非采样模式：噪声影响尺度参数
-            
-            # Step 1: 外生噪声融合到尺度参数
-            scale_U_noisy = scale_U + torch.abs(self.b_noise)
-            
-            # Step 2: 位置参数保持确定性的线性变换
-            loc_S = self.lm_head(loc_U)
-            
-            # Step 3: 尺度参数的线性稳定性变换
-            scale_S = scale_U_noisy @ torch.abs(self.lm_head.weight).T
+            # 🔧 标准模式：噪声影响尺度参数
+            loc_U_final = loc_U
+            scale_U_final = scale_U + temperature * torch.abs(self.b_noise)
+        
+        # 线性因果律应用
+        loc_S = self.lm_head(loc_U_final)
+        scale_S = scale_U_final @ torch.abs(self.lm_head.weight).T
         
         return loc_S, scale_S
 ```
