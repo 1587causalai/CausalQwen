@@ -2,7 +2,7 @@
 
 <div align="center">
   
-  [![CausalEngine](https://img.shields.io/badge/Powered%20by-CausalEngine™-ff1744.svg)](causal_engine/)
+  [![CausalEngine](https://img.shields.io/badge/Powered%20by-CausalEngine™%20v2.0-ff1744.svg)](causal_engine/)
   [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
   [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org)
   [![Status](https://img.shields.io/badge/Status-Revolutionary-purple.svg)](causal_engine/README.md)
@@ -10,6 +10,45 @@
   **[CausalEngine](causal_engine/) is to AI what PageRank was to search.**
   
 </div>
+
+---
+
+## 🎉 CausalEngine v2.0 Released!
+
+**Major Update**: Modular Architecture with Unified Activation Framework
+
+### What's New in v2.0
+- **🔧 Modular Design**: Three independent modules working in harmony
+  - `AbductionNetwork`: From evidence to individuals (who am I?)
+  - `ActionNetwork`: From individuals to decisions (what should I do?)
+  - `ActivationHead`: From decisions to outputs (how to express it?)
+- **🎯 Unified Activation**: Each output dimension can be either:
+  - Classification: P(S_k > C_k) for discrete choices
+  - Regression: a_k * S_k + b_k for continuous values
+- **🚀 Flexible Applications**: 
+  - Language models with confidence scores
+  - Multi-modal models with mixed outputs
+  - Scientific computing with physical constraints
+- **✅ Backward Compatible**: Existing v1.0 code continues to work
+
+### Quick Example: Mixed Classification and Regression
+```python
+from causal_engine import CausalEngine
+
+# Create engine with mixed outputs
+# e.g., 50k vocab (classification) + 10 confidence scores (regression)
+modes = ["classification"] * 50000 + ["regression"] * 10
+engine = CausalEngine(
+    hidden_size=768,
+    vocab_size=50010,
+    activation_modes=modes
+)
+
+# Use as before - the engine handles everything
+output = engine(hidden_states)
+vocab_probs = output['output'][:, :, :50000]      # Classification probabilities
+confidence = output['output'][:, :, 50000:]       # Regression values
+```
 
 ---
 

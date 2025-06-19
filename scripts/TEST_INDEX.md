@@ -47,6 +47,17 @@ python scripts/demo_basic_usage.py
 **用途**: 展示CausalQwen基本使用方法  
 **特点**: 与Qwen完全相同的使用接口
 
+### 5. 模块化架构演示 🆕 (v2.0)
+```bash
+python scripts/demo_modular_architecture.py
+```
+**用途**: 展示CausalEngine v2.0的模块化架构  
+**亮点**:
+- ✨ 三大独立模块：AbductionNetwork → ActionNetwork → ActivationHead
+- ✨ 混合激活：同时支持分类和回归输出
+- ✨ 多任务头：支持多模态应用
+- ✨ 灵活配置：可自定义每个维度的激活模式
+
 ---
 
 ## 🎯 推荐测试流程

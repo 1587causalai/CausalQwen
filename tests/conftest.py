@@ -90,8 +90,9 @@ def action_network(small_model_config):
         def __init__(self, engine):
             self.engine = engine
             self.config = small_model_config
-            self.b_noise = engine.b_noise
-            self.lm_head = engine.action_head
+            # 在 v2.0 架构中，这些属性在 action 模块内
+            self.b_noise = engine.action.b_noise
+            self.lm_head = engine.action.linear_law
         def __call__(self, loc_U, scale_U, do_sample=False, temperature=1.0):
             return self.engine.action(loc_U, scale_U, do_sample, temperature)
     return ActionNetworkWrapper(engine)
@@ -114,8 +115,9 @@ def abduction_network(small_model_config):
         def __init__(self, engine):
             self.engine = engine
             self.config = small_model_config
-            self.loc_net = engine.abduction_loc
-            self.scale_net = engine.abduction_scale
+            # 在 v2.0 架构中，这些属性在 abduction 模块内
+            self.loc_net = engine.abduction.loc_net
+            self.scale_net = engine.abduction.scale_net
         def __call__(self, hidden_states):
             return self.engine.abduction(hidden_states)
     return AbductionNetworkWrapper(engine)

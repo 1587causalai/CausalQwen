@@ -36,12 +36,13 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
     def __init__(self, config: CausalQwen2Config):
         super().__init__(config)
         
-        # 核心创新：实例化独立的 CausalEngine
+        # 核心创新：实例化独立的 CausalEngine v2.0
         # 注意：我们从 config 中提取原子参数，而不是传递整个 config
         self.causal_engine = CausalEngine(
             hidden_size=config.hidden_size,
             vocab_size=config.vocab_size,
             causal_size=config.causal_size,
+            activation_modes="classification",  # 默认全部用于分类
             b_noise_init=config.b_noise_init,
             gamma_init=config.gamma_init
         )
@@ -92,17 +93,20 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
         hidden_states = transformer_outputs[0]
         
         # Step 2: 调用独立的 CausalEngine 进行因果推理
+        # 注意：v2.0 支持内置的激活头，但这里我们使用外部 OvR 分类器以保持兼容性
         causal_outputs = self.causal_engine(
             hidden_states=hidden_states,
             do_sample=do_sample,
             temperature=temperature,
-            return_dict=True
+            return_dict=True,
+            apply_activation=False  # 不使用内置激活头，保持向后兼容
         )
         
         # Step 3: 计算损失（如果需要）
         loss = None
         if labels is not None:
-            # 使用 OvR 分类器计算概率
+            # 使用外部 OvR 分类器计算概率（保持向后兼容）
+            # 注意：也可以使用 causal_engine 的内置激活头
             probs = self.ovr_classifier(
                 causal_outputs['loc_S'], 
                 causal_outputs['scale_S']
