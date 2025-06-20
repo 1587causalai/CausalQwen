@@ -60,6 +60,25 @@ python scripts/demo_modular_architecture.py
 - ✨ 混合激活：同时支持分类和回归输出
 - ✨ 多任务头：支持多模态应用
 
+### 6. CauchyMath工具类测试 🆕 (v2.0.5)
+```bash
+python scripts/test_cauchy_math.py
+```
+**用途**: 验证CauchyMath工具类的完整数学函数库  
+**核心验证**:
+- ✅ 基本分布函数：PDF, CDF, 生存函数
+- ✅ 分位函数与CDF互逆性
+- ✅ 数值稳定性和极端值处理
+- ✅ 采样一致性验证
+- ✅ 可视化验证
+
+### 7. CauchyMath演示 🆕 (v2.0.5)
+```bash
+python scripts/demo_cauchy_math.py
+```
+**用途**: 展示CauchyMath工具类的实际使用  
+**功能**: 演示概率计算、分位函数、采样和线性稳定性
+
 ---
 
 ## 🎯 推荐测试流程

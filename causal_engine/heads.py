@@ -172,30 +172,42 @@ class ActivationHead(nn.Module):
         output = torch.zeros(batch_size, seq_len, self.output_size, device=device)
         
         # 分类激活：P(S_k > C_k) = 1/2 + (1/π)arctan((loc_S_k - C_k)/scale_S_k)
+        # 这是柯西分布的累积分布函数(CDF)的解析形式
+        # 数学依据: 如果 S_k ~ Cauchy(loc_S_k, scale_S_k)，则
+        # P(S_k > C_k) = 1 - CDF_Cauchy(C_k) = 1 - [1/2 + (1/π)arctan((C_k - loc_S_k)/scale_S_k)]
+        #              = 1/2 + (1/π)arctan((loc_S_k - C_k)/scale_S_k)
         if self.classification_dims:
             # 提取分类维度
             loc_S_cls = loc_S[:, :, self.classification_dims]
             scale_S_cls = scale_S[:, :, self.classification_dims]
             
-            # 计算概率
+            # 计算概率：应用柯西分布CDF的解析公式
             normalized_diff = (loc_S_cls - self.classification_thresholds) / scale_S_cls
             probs = 0.5 + (1 / torch.pi) * torch.atan(normalized_diff)
             
             # 填充输出
             output[:, :, self.classification_dims] = probs
         
-        # 回归激活：a_k * loc_S_k + b_k
+        # 回归激活：y_k = a_k * loc_S_k + b_k
+        # 数学依据: 对于回归任务，我们直接使用柯西分布的位置参数 loc_S_k
+        # 这相当于取决策分布的期望值（虽然柯西分布期望不存在，但位置参数是最优估计）
+        # 线性变换: f(S_k) = a_k * S_k + b_k，利用柯西分布的线性稳定性
         if self.regression_dims:
             # 提取回归维度
             loc_S_reg = loc_S[:, :, self.regression_dims]
             
-            # 计算回归值
+            # 计算回归值：线性变换
             values = self.regression_scales * loc_S_reg + self.regression_biases
             
             # 填充输出
             output[:, :, self.regression_dims] = values
         
-        # 离散有序激活：P(Y=k) = P(C_k < S <= C_{k+1})
+        # 离散有序激活：P(Y = k) = P(C_k < S ≤ C_{k+1})
+        # 数学依据: 
+        # 1. 构建阈值序列: -∞ = C_0 < C_1 < C_2 < ... < C_{K-1} < C_K = +∞
+        # 2. 对每个类别k，计算区间概率: P(Y=k) = CDF_Cauchy(C_{k+1}) - CDF_Cauchy(C_k)
+        # 3. 其中 CDF_Cauchy(c) = 1/2 + (1/π)arctan((c - loc_S)/scale_S)
+        # 4. 最终选择概率最大的类别: ŷ = argmax_k P(Y=k)
         if self.ordinal_dims:
             # 对每个离散有序维度进行处理
             for dim_idx in self.ordinal_dims:

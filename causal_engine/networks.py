@@ -200,15 +200,30 @@ class AbductionNetwork(nn.Module):
         """
         前向传播：从证据到个体（独立网络版本）
         
+        数学框架：
+        X ∈ R^H                    # 输入上下文特征
+        μ_U = f_loc(X)             # 位置网络：X → μ_U ∈ R^C  
+        γ_U = softplus(g_scale(X)) # 尺度网络：X → γ_U ∈ R^C_+
+        U ~ Cauchy(μ_U, γ_U)       # 输出个体分布
+        
+        网络设计：
+        - loc_net: 独立的位置参数推断网络
+        - scale_net: 独立的尺度参数推断网络  
+        - softplus激活确保尺度参数为正
+        
         Args:
             hidden_states: [batch_size, seq_len, input_size] 上下文特征
             
         Returns:
-            loc_U: [batch_size, seq_len, causal_size] 个体位置参数
-            scale_U: [batch_size, seq_len, causal_size] 个体尺度参数
+            loc_U: [batch_size, seq_len, causal_size] 个体位置参数 μ_U
+            scale_U: [batch_size, seq_len, causal_size] 个体尺度参数 γ_U
         """
         # 独立的网络路径
+        # 位置参数推断：μ_U = f_loc(X)
         loc_U = self.loc_net(hidden_states)
+        
+        # 尺度参数推断：γ_U = softplus(g_scale(X))
+        # softplus确保输出为正：softplus(x) = log(1 + exp(x)) > 0
         scale_U = F.softplus(self.scale_net(hidden_states))
         
         return loc_U, scale_U
@@ -288,6 +303,12 @@ class ActionNetwork(nn.Module):
         - temperature>0 & do_sample=False: 噪声增加尺度（不确定性）
         - temperature>0 & do_sample=True: 噪声扰动位置（身份）
         
+        数学框架：
+        U ~ Cauchy(loc_U, scale_U)  # 输入个体分布
+        ε ~ Cauchy(0, 1)            # 标准外生噪声
+        U' = f_noise(U, ε, T)       # 噪声注入函数
+        S = W_A * U' + b_A          # 线性因果律
+        
         Args:
             loc_U: 个体位置参数
             scale_U: 个体尺度参数
@@ -300,25 +321,33 @@ class ActionNetwork(nn.Module):
         """
         if temperature == 0:
             # 纯因果模式：无噪声
+            # 数学: U' = U (恒等变换)
             loc_U_final = loc_U
             scale_U_final = scale_U
             
         elif do_sample:
             # 采样模式：噪声扰动位置
+            # 数学: U' ~ Cauchy(loc_U + T·|b_noise|·ε, scale_U)
+            # 其中 ε ~ Cauchy(0,1) 通过逆变换采样: ε = tan(π(uniform - 0.5))
             uniform_sample = torch.rand_like(loc_U)
-            epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))
+            epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))  # 标准柯西分布采样
             loc_U_final = loc_U + temperature * torch.abs(self.b_noise) * epsilon
             scale_U_final = scale_U
             
         else:
             # 标准模式：噪声增加尺度
+            # 数学: U' ~ Cauchy(loc_U, scale_U + T·|b_noise|)
+            # 利用柯西分布的尺度可加性
             loc_U_final = loc_U
             scale_U_final = scale_U + temperature * torch.abs(self.b_noise)
         
-        # 应用线性因果律
-        loc_S = self.linear_law(loc_U_final)
+        # 应用线性因果律: S = W_A * U' + b_A
+        # 利用柯西分布的线性稳定性:
+        # 如果 U' ~ Cauchy(μ, γ)，则 W*U' + b ~ Cauchy(W*μ + b, |W|*γ)
+        loc_S = self.linear_law(loc_U_final)  # loc_S = W_A^T * loc_U' + b_A
         
-        # 尺度参数的线性传播
+        # 尺度参数的线性传播：scale_S = |W_A^T| * scale_U'
+        # 注意：这里使用矩阵乘法而不是逐元素乘法，保持线性变换的完整性
         scale_S = scale_U_final @ torch.abs(self.linear_law.weight).T
         
         return loc_S, scale_S 
