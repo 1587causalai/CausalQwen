@@ -279,19 +279,19 @@ class AbductionNetwork(nn.Module):
 
 ### 3.4 模块4：行动决策网络（普适因果律）
 
-#### 3.4.1 线性因果律的哲学：规律的简洁性
+#### 3.4.1 训练阶段的前向传播：注入外生噪声
 
-行动网络体现了我们的**线性因果律假说**：一旦找到正确的个体表征 $U$，因果规律本身是简单线性的。
+行动网络体现了我们的**线性因果律假说**：一旦找到正确的个体表征 $U$，因果规律本身是简单线性的。在训练的前向传播中，它通过注入一个外生噪声，并将个体表征应用到普适的线性变换上，从而产生最终的决策潜能。
 
 ```mermaid
 graph TB
-    subgraph "Step 1: 外生噪声注入"
+    subgraph "Step 1: 注入外生噪声"
         U["个体群体<br>U ~ Cauchy(μ, γ)"] --> Fusion["噪声融合"]
-        Epsilon["外生噪声<br>ε ~ Cauchy(0, |b_noise|)"] --> Fusion
-        Fusion --> U_prime["融合分布<br>U' ~ Cauchy(μ, γ + |b_noise|)"]
+        Epsilon["外生噪声<br><b>b_noise</b>"] --> Fusion
+        Fusion --> U_prime["融合了噪声的分布<br>U' ~ Cauchy(μ, γ + |<b>b_noise</b>|)"]
     end
     
-    subgraph "Step 2: 普适线性因果律"
+    subgraph "Step 2: 应用普适线性因果律"
         U_prime --> Law["因果律 f(u', ε)<br>线性变换 W_cls, b_cls"]
         Law --> Decision["决策分布<br>S_k ~ Cauchy(loc_S_k, scale_S_k)"]
     end
@@ -306,98 +306,43 @@ graph TB
     style Decision fill:#e3f2fd,color:#000
 ```
 
-#### 3.4.2 数学推导：柯西分布的线性传播
+#### 3.4.2 数学推导：训练时的噪声传播
 
-**Step 1: 外生噪声融合**
-利用柯西分布的加法稳定性：
-$$U'_i = U_i + \epsilon \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i} + |b_{\text{noise}}|)$$
+##### Step 1: 外生噪声融合
 
-**Step 2: 线性因果律应用**
-对每个词汇 $k$，应用相同的线性规律：
+-   **基本原理**: 核心思想是对个体表征 $U_i$ 注入一个标准柯西分布的噪声 $\varepsilon \sim \text{Cauchy}(0, 1)$，其强度由一个可学习的参数向量 $\mathbf{b}_{\text{noise}}$ 控制。变换后的随机变量 $U'_i$ 为：
+    $$U'_i = U_i + \mathbf{b}_{\text{noise}} \cdot \varepsilon$$
+-   **解析推导**: 根据柯西分布的线性稳定性，我们可以推导出 $U'_i$ 的分布。
+    -   首先，我们有 $U_i \sim \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i})$。
+    -   其次，缩放后的噪声项 $\mathbf{b}_{\text{noise}} \cdot \varepsilon \sim \text{Cauchy}(0, |\mathbf{b}_{\text{noise}}|)$。
+    -   因此，两个独立的柯西变量之和的分布为：
+        $$U'_i \sim \text{Cauchy}(\text{loc}_{U_i} + 0, \text{scale}_{U_i} + |\mathbf{b}_{\text{noise}}|) = \text{Cauchy}(\text{loc}_{U_i}, \text{scale}_{U_i} + |\mathbf{b}_{\text{noise}}|)$$
+-   **计算实现**: 这个推导允许我们在计算中完全避免采样，直接通过对尺度参数进行加法操作来高效地实现噪声注入。
+
+##### Step 2: 线性因果律应用
+对每个词汇 $k$，对这个包含了噪声的分布 $U'_i$ 应用相同的线性规律：
 $$S_{k,i} = W_{\text{cls},k} \cdot U'_i + b_{\text{cls},k}$$
 
-**Step 3: 决策分布推导**
-由柯西分布的线性稳定性：
+##### Step 3: 决策分布推导
+由柯西分布的线性稳定性，最终的决策分布参数为：
 $$S_{k,i} \sim \text{Cauchy}(\text{loc}_{S_{k,i}}, \text{scale}_{S_{k,i}})$$
 
 其中：
 - **位置参数**：$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k}$
-- **尺度参数**：$\text{scale}_{S_{k,i}} = |W_{\text{cls},k}| \cdot (\text{scale}_{U_i} + |b_{\text{noise}}|)$
+- **尺度参数**：$\text{scale}_{S_{k,i}} = (\text{scale}_{U_i} + |\mathbf{b}_{\text{noise}}|) \cdot |W_{\text{cls},k}|$$
 
-#### 3.4.3 代码实现：普适决策机制
+通过反向传播，模型会自动学习噪声强度参数 $\mathbf{b}_{\text{noise}}$ 的大小，从而为不同任务适配最优的不确定性。
 
-```python
-class ActionNetwork(nn.Module):
-    """行动网络：从个体表征到决策分布"""
-    
-    def __init__(self, config: CausalQwen2Config):
-        super().__init__()
-        self.config = config
-        
-        self.lm_head = nn.Linear(config.causal_size, config.vocab_size, bias=True)
-        self.b_noise = nn.Parameter(torch.zeros(config.causal_size))
-        
-        self._init_from_original_lm_head()
-    
-    def _init_from_original_lm_head(self):
-        """从原始lm_head复制权重，符合知识继承原则"""
-        nn.init.constant_(self.b_noise, self.config.b_noise_init)
-        nn.init.xavier_uniform_(self.lm_head.weight)
-        nn.init.zeros_(self.lm_head.bias)
-        
-    def forward(self, loc_U, scale_U=None, do_sample=False, temperature=1.0):
-        """前向传播：温度控制噪声强度
-        
-        核心创新：温度参数统一控制噪声强度，do_sample控制噪声作用方式
-        
-        温度 = 0 (纯因果模式):
-        ├─ U' ~ Cauchy(μ, γ) 
-        └─ 无外生噪声，个体的必然表达
-        
-        温度 > 0 且 do_sample=False (标准模式):
-        ├─ U' ~ Cauchy(μ, γ + T·|b_noise|)
-        └─ 噪声增加决策不确定性，保持个体身份
-        
-        温度 > 0 且 do_sample=True (采样模式):
-        ├─ ε ~ Cauchy(0, 1) 标准噪声采样
-        ├─ U' ~ Cauchy(μ + T·|b_noise|·ε, γ)
-        └─ 噪声扰动个体身份，探索多样性
-        """
-        if scale_U is None:
-            scale_U = torch.zeros_like(loc_U)
-        
-        if temperature == 0:
-            # 🎯 纯因果模式：无噪声影响
-            loc_U_final = loc_U
-            scale_U_final = scale_U
-            
-        elif do_sample:
-            # 🎲 采样模式：噪声影响位置参数
-            uniform_sample = torch.rand_like(loc_U)
-            epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))
-            
-            loc_U_final = loc_U + temperature * torch.abs(self.b_noise) * epsilon
-            scale_U_final = scale_U
-
-        else:
-            # 🔧 标准模式：噪声影响尺度参数
-            loc_U_final = loc_U
-            scale_U_final = scale_U + temperature * torch.abs(self.b_noise)
-        
-        # 线性因果律应用
-        loc_S = self.lm_head(loc_U_final)
-        scale_S = scale_U_final @ torch.abs(self.lm_head.weight).T
-        
-        return loc_S, scale_S
-```
-
-#### 3.4.4 设计洞察：两层哲学
+#### 3.4.3 设计洞察：两层哲学
 
 1. **表征层的复杂性**：从证据到个体表征是高度非线性的（归因推断网络）
 2. **规律层的简洁性**：从个体表征到决策是简单线性的（行动决策网络）
 
 这种设计体现了深刻的世界观：
 > 真正的挑战在于**学会如何看待世界**（学习正确的表征），一旦学会了，世界的规律将以极为优雅和简单的方式呈现。
+
+---
+**重要连接**: 上述训练过程产生的、包含了外生噪声影响的最终决策潜能分布 $S$，将被传递给任务激活头（ActivationHead）进行最终的、任务特定的处理。
 
 ## 4. 损失函数与训练
 
@@ -447,32 +392,23 @@ $$\mathcal{L} = \frac{\sum_{i=1}^S L_{\text{cls},i}}{\sum_{i=1}^S \text{mask}_i}
 - **数值稳定性**：使用 `torch.clamp` 避免 log(0) 
 - **OvR 优势**：独立判断，支持不确定性表达
 
-## 5. 推理模式统一框架
+## 5. 推理模式：对噪声的灵活调制
 
-CausalQwen 实现了推理框架统一，通过 `do_sample` 和 `temperature` 两个参数的精妙组合，形成四种核心的因果推理模式。核心设计原则是：**温度参数统一控制噪声强度，`do_sample` 控制噪声作用方式**。
+在推理阶段，我们可以通过 `temperature` 和 `do_sample` 两个参数，灵活地**调制**已经学习到的外生噪声 $\mathbf{b}_{\text{noise}}$，以实现不同的生成策略。CausalQwen 的 `ActionNetwork` 的 `forward` 函数完美地实现了这个统一框架。
 
 ### 5.1 核心思想：温度统一的噪声控制
 
-架构的关键洞察是将**温度参数**作为噪声强度的统一控制器，实现了对称且直观的推理框架：
+推理时，`temperature` 作为噪声强度的统一控制器，`do_sample` 选择噪声的作用方式：
 
--   **温度 = 0**: 无论 `do_sample` 取值如何，都表示**纯因果生成**，完全没有外生噪声影响
+-   **温度 = 0**: 关闭外生噪声，实现**纯因果生成**。
     -   数学原理: `U' ~ Cauchy(μ, γ)`
-    -   哲学含义: 个体在完全确定的环境下，基于自身因果表征的必然表达
-
--   **温度 > 0**: 根据 `do_sample` 的值选择噪声的作用方式
-    -   **非采样模式** (`do_sample=False`): 噪声增加**尺度参数**，扩大决策不确定性
+-   **温度 > 0**:
+    -   **非采样模式** (`do_sample=False`): 噪声增加**尺度参数**，扩大决策不确定性。
         -   数学原理: `U' ~ Cauchy(μ, γ + T·|b_noise|)`
-        -   哲学含义: 环境噪声使得个体的判断变得更加模糊，但核心身份保持不变
-    
-    -   **采样模式** (`do_sample=True`): 噪声扰动**位置参数**，改变个体身份
+    -   **采样模式** (`do_sample=True`): 噪声扰动**位置参数**，改变个体身份。
         -   数学原理: `U' ~ Cauchy(μ + T·|b_noise|·ε, γ)`
-        -   哲学含义: 随机扰动导致个体偏离典型状态，探索非典型行为
 
-这种**温度统一控制**的设计实现了完美的对称性和直观性。
-
-### 5.2 ActionNetwork 实现
-
-这种双模式统一在 `ActionNetwork` 中实现，其核心是`do_sample`参数和`temperature`参数的组合。
+### 5.2 ActionNetwork 的推理实现
 
 ```python
 class ActionNetwork(nn.Module):
@@ -514,7 +450,12 @@ class ActionNetwork(nn.Module):
         if scale_U is None:
             scale_U = torch.zeros_like(loc_U)
         
-        if do_sample:
+        if temperature == 0:
+            # 🎯 纯因果模式：无噪声影响
+            loc_U_final = loc_U
+            scale_U_final = scale_U
+            
+        elif do_sample:
             # 🎲 采样模式：噪声影响位置参数
             uniform_sample = torch.rand_like(loc_U)
             epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))

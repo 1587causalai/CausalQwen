@@ -113,29 +113,25 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 
 ### 2.4 模块四：行动网络 (Action Network)
 
-该模块是模型的核心决策单元，它体现了**普适的线性因果律**：一旦有了正确的个体因果表征 `U`，后续的决策过程是简单、统一且线性的。该网络在 V2 架构下，其核心是`do_sample`参数和`temperature`参数的组合，它将决定外生噪声是以何种方式影响最终决策的。
+该模块是模型的核心决策单元，体现了**普适的线性因果律**。在训练阶段，它通过注入一个外生噪声，并将个体表征 $U$ 映射到并行的决策头（分类和回归），从而产生最终的决策潜能。
 
 -   **输入**: `loc_U` (形状: `[B, S, C]`), `scale_U` (形状: `[B, S, C]`)
--   **内部参数**: 可学习的外生噪声基准 `b_noise` (形状: `[C]`)
--   **处理**: 
-    1.  **温度统一的噪声注入**: 根据 `do_sample` 的值，选择不同的噪声注入方式：
-        -   **非采样模式 (`do_sample=False`)**: 噪声影响**尺度**参数。
-            `loc_U_noisy = loc_U`
-            `scale_U_noisy = scale_U + temperature * torch.abs(self.b_noise)`
-        -   **采样模式 (`do_sample=True`)**: 噪声影响**位置**参数。
-            `epsilon = sample_cauchy_noise()`
-            `loc_U_noisy = loc_U + temperature * torch.abs(self.b_noise) * epsilon`
-            `scale_U_noisy = scale_U`
+-   **内部参数**: 一个可学习的参数向量 `b_noise` (形状: `[C]`)
+-   **处理**:
+    1.  **注入外生噪声**:
+        -   **基本原理**: 核心思想是对个体表征 $U$ 注入一个标准柯西分布的噪声 $\varepsilon \sim \text{Cauchy}(0, 1)$，其强度由一个可学习的参数向量 $\mathbf{b}_{\text{noise}}$ 控制。变换后的随机变量 $U'$ 为：
+            $$U' = U + \mathbf{b}_{\text{noise}} \cdot \varepsilon$$
+        -   **解析推导与计算实现**: 根据柯西分布的线性稳定性，可以推导出 $U' \sim \text{Cauchy}(\text{loc}_U, \text{scale}_U + |\mathbf{b}_{\text{noise}}|)$。这个推导允许我们在计算中完全避免采样，直接通过对尺度参数进行加法操作来高效地实现噪声注入。
 
-    2.  **并行决策 (Parallel Decision Making)**：基于经过噪声注入的分布参数 `(loc_U_noisy, scale_U_noisy)`，通过两个并行的线性"头"来计算分类和回归的决策分布。
+    2.  **并行决策 (Parallel Decision Making)**：基于包含了噪声的分布 $U'$，通过两个并行的线性"头"来计算分类和回归的决策分布。
 
         -   **分类头 (Classification Head)**：
-            `loc_S = lm_head(loc_U_noisy)`
-            `scale_S = scale_U_noisy @ torch.abs(lm_head.weight).T`
-        
+            $$\text{loc}_S = \text{lm\_head}(\text{loc}_U)$$
+            $$\text{scale}_S = (\text{scale}_U + |\mathbf{b}_{\text{noise}}|) \cdot |\text{lm\_head.weight}^T|$$
+
         -   **回归头 (Regression Head)**：
-            `loc_Y = reg_head(loc_U_noisy)`
-            `scale_Y = scale_U_noisy @ torch.abs(reg_head.weight).T`
+            $$\text{loc}_Y = \text{reg\_head}(\text{loc}_U)$$
+            $$\text{scale}_Y = (\text{scale}_U + |\mathbf{b}_{\text{noise}}|) \cdot |\text{reg\_head.weight}^T|$$
 
 -   **输出**:
     - 分类决策分布参数: `loc_S` (形状: `[B, S, V_full]`), `scale_S` (形状: `[B, S, V_full]`)
@@ -145,6 +141,9 @@ enhanced_embeddings: [[e1], [e2], [e3 + φ(99.9)], [e4]]
 > 如果 $X_1, X_2, ..., X_n$ 是独立的柯西随机变量，$X_j \sim \text{Cauchy}(\mu_j, \gamma_j)$，那么对于权重 $w_j$：
 > $$\sum_{j=1}^n w_j X_j \sim \text{Cauchy}\left(\sum_{j=1}^n w_j \mu_j, \sum_{j=1}^n |w_j| \gamma_j\right)$$
 > 这一定理是整个行动网络能够以解析方式（无采样）对分布参数进行精确变换的数学基石。
+
+---
+**重要连接**: 上述训练过程产生的、包含了外生噪声影响的最终决策潜能分布 $S$ 和 $Y$，将被传递给任务激活头（ActivationHead）进行最终的、任务特定的处理。
 
 ### 2.5 模块五：损失计算 (Loss Calculation)
 
@@ -180,26 +179,21 @@ $$
 总损失为：
 $$\mathcal{L}_{\text{total}} = \underbrace{\frac{\sum_i L_{\text{cls}, i} \cdot \text{cls\_mask}_i}{\sum_i \text{cls\_mask}_i}}_{\text{平均分类损失}} + \lambda \cdot \underbrace{\frac{\sum_i \mathcal{L}_{\text{reg\_gated},i}}{\sum_i \text{num\_mask}_i}}_{\text{有效回归损失}}$$
 
-## 3.推理阶段：生成预测 (Inference)
+## 3. 推理阶段：对噪声的灵活调制
 
-CausalQwen V2 架构提供了一个统一且强大的推理框架，通过 `do_sample` 和 `temperature` 两个参数的组合，实现了四种核心的因果推理模式。**核心设计原则是：温度参数统一控制噪声强度，`do_sample` 控制噪声作用方式**。
+在推理阶段，我们可以通过 `temperature` 和 `do_sample` 两个参数，灵活地**调制**已经学习到的外生噪声 $\mathbf{b}_{\text{noise}}$，以实现不同的生成策略。
 
 ### 3.1 核心思想：温度统一的噪声控制
 
-架构的关键洞察是将**温度参数**作为噪声强度的统一控制器，实现了对称且直观的推理框架：
+推理时，`temperature` 作为噪声强度的统一控制器，`do_sample` 选择噪声的作用方式：
 
--   **温度 = 0**: 无论 `do_sample` 取值如何，都表示**纯因果生成**，完全没有外生噪声影响
+-   **温度 = 0**: 关闭外生噪声，实现**纯因果生成**。
     -   数学原理: `U' ~ Cauchy(μ, γ)`
-    -   哲学含义: 个体在完全确定的环境下，基于自身因果表征的必然表达
-
--   **温度 > 0**: 根据 `do_sample` 的值选择噪声的作用方式
-    -   **非采样模式** (`do_sample=False`): 噪声增加**尺度参数**，扩大决策不确定性
+-   **温度 > 0**:
+    -   **非采样模式** (`do_sample=False`): 噪声增加**尺度参数**，扩大决策不确定性。
         -   数学原理: `U' ~ Cauchy(μ, γ + T·|b_noise|)`
-        -   哲学含义: 环境噪声使得个体的判断变得更加模糊，但核心身份保持不变
-    
-    -   **采样模式** (`do_sample=True`): 噪声扰动**位置参数**，改变个体身份
+    -   **采样模式** (`do_sample=True`): 噪声扰动**位置参数**，改变个体身份。
         -   数学原理: `U' ~ Cauchy(μ + T·|b_noise|·ε, γ)`
-        -   哲学含义: 随机扰动导致个体偏离典型状态，探索非典型行为
 
 这种**温度统一控制**的设计实现了完美的对称性和直观性。
 
