@@ -325,142 +325,110 @@ graph TB
 
 ```mermaid
 graph TB
-    %% CausalEngine的核心创新：随机变量预测
+    %% 核心标题
+    Title["💡 <b>CausalEngine 核心创新</b><br/><i>直接用随机变量预测</i>"]
     
-    Title["💡 核心创新：直接用随机变量预测"]
+    Title --> Compare
     
-    Title --> Comparison
-    
-    subgraph Comparison [" "]
+    %% 对比区
+    subgraph Compare [" "]
         direction LR
         
-        subgraph Traditional ["🏛️ 传统方法"]
-            direction TB
-            T1["随机变量 X"]
-            T2["↓<br/>计算统计量<br/>(均值、方差等)"]
-            T3["↓<br/>基于统计量预测"]
-            T4["❌ 问题：<br/>柯西分布无期望！"]
-            
-            T1 --> T2 --> T3
-            T3 --> T4
-        end
+        Traditional["🏛️ <b>传统方法</br> E[Y|X]"]
         
-        subgraph CausalEngine ["🚀 CausalEngine方法"]
-            direction TB
-            C1["随机变量 S_k ~ Cauchy<br/>（决策得分）"]
-            C2["↓<br/>应用确定性函数 f_k(·)"]
-            C3["↓<br/>直接得到预测！"]
-            
-            subgraph Examples ["📊 三种激活函数"]
-                direction TB
-                E1["词元: P(S_k > C_k)"]
-                E2["数值: w_k·S_k + b_k"]
-                E3["离散: P(C_i < S_k ≤ C_{i+1})"]
-            end
-            
-            C1 --> C2 --> C3
-            C3 --> Examples
-        end
+        VS["<b>VS</b>"]
+        
+        CausalEngine["🚀 <b>CausalEngine</b><br/>S_k ~ Cauchy → f_k(·) → 预测<br/>✅ 分布即预测"]
+        
+        Traditional ~~~ VS ~~~ CausalEngine
     end
     
-    Comparison --> Insight
+    Compare --> Functions
     
-    subgraph Insight ["⚡ 关键洞察"]
-        I1["不需要期望值！分布本身就是预测！<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>• S_k 是行动网络输出的随机变量<br/>• f_k(·) 是确定性的激活函数<br/>• 随机输入 + 确定函数 = 随机输出"]
-    end
-    
-    Insight --> Philosophy
-    
-    subgraph Philosophy ["🎯 深层含义"]
+    %% 激活函数展示
+    subgraph Functions ["<b>三种激活函数 f_k(·)</b>"]
         direction LR
-        P1["因果机制<br/>f_k(s_k) 确定"]
-        P2["个体特性<br/>S_k 随机"]
-        P3["自然涌现<br/>输出随机性"]
+        Token["🔤 词元<br/>P(S_k > C_k)"]
+        Numeric["📊 数值<br/>w_k·S_k + b_k"]  
+        Ordinal["🔢 有序<br/>P(C_k,i < S_k ≤ C_k,i+1)"]
         
-        P1 --> P3
-        P2 --> P3
+        Token ~~~ Numeric ~~~ Ordinal
     end
     
-    %% 样式
-    style Title fill:#fff3e0,stroke:#f57c00,stroke-width:3px,color:#000
-    style Comparison fill:#ffffff,stroke:#e0e0e0,stroke-width:1px,color:#000
-    style Traditional fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000
-    style CausalEngine fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
-    style Examples fill:#c8e6c9,stroke:#388e3c,stroke-width:1px,color:#000
-    style Insight fill:#fff8e1,stroke:#ff9800,stroke-width:2px,color:#000
-    style Philosophy fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000
-    style I1 fill:#ffe0b2,stroke:#ef6c00,stroke-width:2px,color:#000
+    Functions --> Insight
+    
+    %% 核心洞察
+    Insight["⚡ <b>关键洞察</b><br/>分布本身就是预测！<br/>随机 S_k + 确定函数 f_k  <br/> = 随机输出 Y_k"]
+    
+    
+    %% 哲学意义
+    
+    %% 样式美化
+    style Title fill:#fff8e1,stroke:#ff9800,stroke-width:3px
+    style Compare fill:#f8f9fa,stroke:#dee2e6,stroke-width:1px
+    style Traditional fill:#ffebee,stroke:#d32f2f,stroke-width:2px
+    style CausalEngine fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    style VS fill:transparent,stroke:none
+    
+    style Functions fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style Token fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px
+    style Numeric fill:#e8f5e9,stroke:#388e3c,stroke-width:1px
+    style Ordinal fill:#fce4ec,stroke:#c2185b,stroke-width:1px
+    
+    style Insight fill:#fff3e0,stroke:#ff9800,stroke-width:3px
 ```
 
 各任务的解析计算与损失函数如下：
 
 ```mermaid
-graph TB
-    %% 任务激活：三种任务类型的并行处理
+graph LR
+    %% 输入
+    Input["🎯 <b>输入</b><br/>决策得分向量 S<br/>S_k ~ Cauchy(μ_k, γ_k)"]
     
-    Input["🎯 输入：决策得分向量 S（随机变量）<br/>S = [S₁, S₂, ..., S_V]，每个 S_k ~ Cauchy(μ_k, γ_k)"] 
+    %% 直接连接到三个并行任务分支
+    Input --> Token
+    Input --> Numeric
+    Input --> Discrete
     
-    Input --> Title["✨ 任务激活函数"]
-    
-    Title --> Tasks
-    
-    subgraph Tasks ["三种任务类型（并行）"]
+    subgraph Token ["🔤 词元分类"]
         direction LR
-        
-        subgraph Token ["🔤 词元分类"]
-            direction TB
-            T1["激活函数<br/>f_k(s_k) = I(s_k > C_k)"]
-            T2["训练：概率计算<br/>P_k = P(S_k > C_k)<br/>= 1/2 + 1/π·arctan(...)"]
-            T3["推理：词元选择<br/>argmax_k P_k (OvR)"]
-            T4["损失：BCE<br/>-∑[y_k·log(P_k)+...]"]
-            T1 --> T2 --> T3
-            T2 --> T4
-        end
-        
-        subgraph Numeric ["📊 数值回归"]
-            direction TB
-            N1["激活函数<br/>f_k(s_k) = w_k·s_k + b_k"]
-            N2["训练：分布变换<br/>Y_k ~ Cauchy(w_k·μ_k+b_k,<br/>|w_k|·γ_k)"]
-            N3["推理：点估计<br/>ŷ_k = w_k·μ_k + b_k"]
-            N4["损失：柯西NLL"]
-            N1 --> N2 --> N3
-            N2 --> N4
-        end
-        
-        subgraph Discrete ["🔢 有序分类"]
-            direction TB
-            D1["激活函数<br/>f_k(s_k) = ∑y_i·I(C_i<s_k≤C_{i+1})"]
-            D2["训练：区间概率<br/>P(y_i) = F(C_{i+1})-F(C_i)"]
-            D3["推理：类别选择<br/>argmax_i P(y_i)"]
-            D4["损失：交叉熵"]
-            D1 --> D2 --> D3
-            D2 --> D4
-        end
+        T1["<b>激活与概率</b><br/>f(s_k) = I(s_k > C_k)<br/>P_k = 1/2 + arctan((C_k - μ_k)/γ_k)/π"]
+        T2["<b>输出和损失</b><br/>argmax_k P_k <br/>OvR BCE Loss"]
+        T1 --> T2
     end
     
-    Tasks --> Integration
-    
-    subgraph Integration ["🎯 统一输出"]
-        direction TB
-        Out1["多任务输出<br/>━━━━━━━━━━━━━━━<br/>词元 + 数值 + 离散值"]
-        Loss1["总损失函数<br/>L = ∑w_t·L_t"]
-        Out1 -.-> Loss1
+    subgraph Numeric ["📊 数值回归"]
+        direction LR
+        N1["<b>激活与分布</b><br/>f(s_k) = w_k·s_k + b_k<br/>Y_k ~ Cauchy(w_k·μ_k+b_k, |w_k|·γ_k)"]
+        N2["<b>输出和损失</b><br/>ŷ_k = w_k·μ_k + b_k <br/> Cauchy NLL Loss"]
+        N1 --> N2
     end
     
-    %% 强调随机性
-    Input -.->|"随机性来源"| Note["📌 S_k 是随机变量<br/>来自行动网络"]
+    subgraph Discrete ["🔢 有序分类"]
+        direction LR
+        D1["<b>激活与概率</b><br/>f(s_k) = ∑y_i·I(C_{k,i} < s_k ≤ C_{k,i+1})<br/>P_k(y_i) = F(C_{k,i+1}) - F(C_{k,i})"]
+        D2["<b>输出和损失</b><br/>argmax_i P(y_i) <br/>交叉熵 Loss"]
+        D1 --> D2
+    end
+    
+    %% 输出整合
+    Token --> Output
+    Numeric --> Output
+    Discrete --> Output
+    
+    Output["🎯 <b>统一输出</b><br/>多任务结果<br/>L = ∑w_t·L_t"]
+    
+    %% 注释
+    Input -.-> Note["📌 <b>关键点</b><br/>S_k 是随机的"]
     
     %% 样式定义
-    style Input fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000
-    style Title fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000
-    style Tasks fill:#f5f5f5,stroke:#9e9e9e,stroke-width:1px,color:#000
-    style Integration fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
+    style Input fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#000
+    style Output fill:#e0f2f1,stroke:#00796b,stroke-width:3px,color:#000
+    style Note fill:#fffde7,stroke:#fbc02d,stroke-width:2px,color:#000
     
-    style Token fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#000
-    style Numeric fill:#e8f5e9,stroke:#4caf50,stroke-width:2px,color:#000
-    style Discrete fill:#fce4ec,stroke:#e91e63,stroke-width:2px,color:#000
-    
-    style Note fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    style Token fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px,color:#000
+    style Numeric fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#000
+    style Discrete fill:#fce4ec,stroke:#d32f2f,stroke-width:2px,color:#000
 ```
 
 ##### 任务特定的激活函数
