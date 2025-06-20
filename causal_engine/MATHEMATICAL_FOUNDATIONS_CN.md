@@ -144,7 +144,7 @@ graph TB
     
     subgraph TaskAct ["任务激活细节"]
         direction TB
-        TA1["🎯 应用激活函数 f_k(s_k)"]
+        TA1["🎯 应用任务激活函数 f_k(s_k)"]
         TA2["📊 解析计算输出概率/分布"]
         TA1 --> TA2
     end
@@ -153,7 +153,7 @@ graph TB
     
     Step2 --> Token2["🔤 词元输出<br/>(OvR) P(S_k > C_k)"]
     Step2 --> Numeric2["📈 数值输出<br/>w_k·S_k + b_k"]
-    Step2 --> Discrete2["🔢 离散输出<br/>P(C_i < S_k ≤ C_{i+1})"]
+    Step2 --> Discrete2["🔢 离散输出<br/>P(C_{k,i} < S_k ≤ C_{k,i+1})"]
     
     Token2 --> Final["🎉 最终决策"]
     Numeric2 --> Final
@@ -199,8 +199,8 @@ graph TB
         
         subgraph Step2 ["🔄 步骤2: 线性因果变换"]
             direction LR
-            Transform["S = W · U' + b"]
-            Params["loc_S = μ · W^T + b<br/>scale_S=(γ + |b_noise|)|W^T|"]
+            Transform["S = W_A · U' + b_A"]
+            Params["loc_S = μ · W_A^T + b_A<br/>scale_S=(γ + |b_noise|)|W_A^T|"]
             Result2["S ~ Cauchy(loc_S, scale_S)"]
             Transform --> Params --> Result2
         end
@@ -392,7 +392,7 @@ graph LR
     
     subgraph Token ["🔤 词元分类"]
         direction LR
-        T1["<b>激活与概率</b><br/>f(s_k) = I(s_k > C_k)<br/>P_k = 1/2 + arctan((C_k - μ_k)/γ_k)/π"]
+        T1["<b>激活与概率</b><br/>f(s_k) = I(s_k > C_k)<br/>P_k = 1/2 + arctan((μ_k - C_k)/γ_k)/π"]
         T2["<b>输出和损失</b><br/>argmax_k P_k <br/>OvR BCE Loss"]
         T1 --> T2
     end
@@ -406,7 +406,7 @@ graph LR
     
     subgraph Discrete ["🔢 有序分类"]
         direction LR
-        D1["<b>激活与概率</b><br/>f(s_k) = ∑y_i·I(C_{k,i} < s_k ≤ C_{k,i+1})<br/>P_k(y_i) = F(C_{k,i+1}) - F(C_{k,i})"]
+        D1["<b>激活与概率</b><br/>f(s_k) = ∑y_i·I(C_{k,i} < s_k ≤ C_{k,i+1})<br/>P(y_i) = F(C_{k,i+1}) - F(C_{k,i})"]
         D2["<b>输出和损失</b><br/>argmax_i P(y_i) <br/>交叉熵 Loss"]
         D1 --> D2
     end
@@ -441,7 +441,7 @@ CausalEngine 的一个关键优势是其任务无关性。通过定义不同的�
 -   **解析推导**:
     $$P(f_k(S_k)=1) = P(I(S_k > C_k)=1) = P(S_k > C_k)$$
     利用柯西分布的累积分布函数(CDF)，我们可以直接计算这个概率：
-    $$P(S_k > C_k) = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{C_k - \text{loc}_{S_k}}{\text{scale}_{S_k}}\right)$$
+    $$P(S_k > C_k) = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\text{loc}_{S_k} - C_k}{\text{scale}_{S_k}}\right)$$
 -   **多分类决策机制**: 对于词汇表中的所有词元 $k \in \{1, 2, ..., V\}$，每个词元都有独立的激活概率 $P_k$。最终的词元选择采用 **OvR (One-vs-Rest)** 策略：
     $$\text{selected\_token} = \arg\max_k P_k = \arg\max_k P(S_k > C_k)$$
     这种独立判断的方式与传统的 Softmax 不同，每个词元的选择概率不需要归一化，允许模型表达更灵活的不确定性。
@@ -514,16 +514,15 @@ CausalEngine 通过一个统一的数学框架实现了对不确定性的精确�
 
 ```mermaid
 graph TB
-    %% 推理模式：三种调制方式
+    %% 主流程：从上到下
     
     Input["🎯 推理输入<br/>个体分布 U ~ Cauchy(μ_U, γ_U)（随机变量）<br/>已学习噪声强度 b_noise"]
     
     Input --> Control["⚙️ 推理控制<br/>temperature (T) & do_sample"]
     
-    Control --> Modes
-    
-    subgraph Modes ["🔀 三种推理模式（并列）"]
-        direction LR
+    %% 将三个模式放在一个隐藏的容器中，以便统一连接
+    subgraph " "
+        direction LR %% 关键：让内部的模式水平排列
         
         subgraph CausalMode ["⚖️ 因果模式"]
             direction TB
@@ -553,16 +552,23 @@ graph TB
         end
     end
     
-    Modes --> Output
+    %% 连接控制与各个模式
+    Control --> CausalMode
+    Control --> StandardMode
+    Control --> SamplingMode
+    
+    %% 连接各个模式到输出
+    CausalMode --> Output
+    StandardMode --> Output
+    SamplingMode --> Output
     
     subgraph Output ["🎉 输出"]
         OutDesc["调制后的个体分布 U'（随机变量）<br/>传递给行动阶段生成决策得分 S"]
     end
     
-    %% 样式
+    %% 样式 (与原版完全相同)
     style Input fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000
     style Control fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000
-    style Modes fill:#f5f5f5,stroke:#9e9e9e,stroke-width:1px,color:#000
     style Output fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
     
     style CausalMode fill:#e3f2fd,stroke:#2196f3,stroke-width:2px,color:#000
@@ -578,81 +584,91 @@ graph TB
 
 ```mermaid
 graph TB
-    %% CausalEngine 完整架构流程图
+    %% CausalEngine 完整架构 - 优化布局版
     
-    %% 输入
-    Evidence["📊 证据 E<br/>输入数据/观测"]
+    %% === 主线流程（中央垂直） ===
+    Evidence["📊 <b>证据 E</b><br/><i>输入数据/观测</i>"]
+    Stage1["🔍 <b>归因推断</b><br/><i>Abduction</i><br/>证据 → 个体"]
+    U["🎲 <b>个体选择变量 U</b><br/><i>Individual Selection Variable</i><br/>U ~ Cauchy(μ_U, γ_U)"]
+    Stage2["⚡ <b>行动决策</b><br/><i>Action</i><br/>个体 → 决策 → 输出"]
+    Output["🎯 <b>智能输出</b><br/><i>多任务结果</i>"]
     
-    %% 阶段1：归因推断
-    Evidence --> Stage1["🔍 阶段1: 归因推断<br/>(Abduction)"]
+    Evidence ==>|"<b>阶段 1</b>"| Stage1
+    Stage1 ==>|"<b>推断</b>"| U
+    U ==>|"<b>阶段 2</b>"| Stage2
+    Stage2 ==>|"<b>结果</b>"| Output
     
-    subgraph AbductionDetail ["归因推断细节"]
+    %% === 归因网络（左侧） ===
+    Stage1 -.- AbdNet
+    subgraph AbdNet ["&nbsp;&nbsp;<b>归因网络</b>&nbsp;&nbsp;"]
         direction TB
-        E1["证据 E"] --> Networks["🧠 双网络架构"]
-        
-        subgraph Networks
-            LocNet["📍 位置网络: μ_U = loc_net(E)"]
-            ScaleNet["📏 尺度网络: γ_U = softplus(scale_net(E))"]
-        end
-        
-        Networks --> U1["🎲 个体分布<br/>U ~ Cauchy(μ_U, γ_U)"]
+        Abd1["📍 位置网络<br/>μ_U = loc_net(E)"]
+        Abd2["📏 尺度网络<br/>γ_U = softplus(scale_net(E))"]
     end
     
-    Stage1 -.-> AbductionDetail
-    Stage1 --> U["🎲 个体表征 U"]
-    
-    %% 阶段2：行动决策
-    U --> Stage2["⚡ 阶段2: 行动决策<br/>(Action)"]
-    
-    subgraph ActionDetail ["行动决策细节"]
+    %% === 推理模式（中间左） ===
+    U -.- Modes
+    subgraph Modes ["&nbsp;&nbsp;<b>推理模式</b>&nbsp;&nbsp;"]
         direction TB
-        
-        subgraph ScoreGen ["💫 决策得分生成"]
-            U2["个体 U"] --> Noise["🌊 噪声注入<br/>U' = U + b_noise·ε"]
-            Noise --> Linear["🔄 线性变换<br/>S = W_A·U' + b_A"]
-            Linear --> S1["决策得分 S"]
-        end
-        
-        S1 --> Activation["✨ 任务激活"]
-        
-        subgraph TaskTypes ["📋 支持的任务类型"]
-            Token["🔤 词元: P(S_k > C_k)"]
-            Numeric["📈 数值: w_k·S_k + b_k"]
-            Discrete["🔢 离散: P(C_i < S_k ≤ C_{i+1})"]
-        end
-        
-        Activation --> TaskTypes
+        M1["⚖️ <b>因果模式</b><br/>T = 0<br/>纯粹因果推理"]
+        M2["🌡️ <b>标准模式</b><br/>T > 0, do_sample = False<br/>扩大尺度参数"]
+        M3["🎲 <b>采样模式</b><br/>T > 0, do_sample = True<br/>扰动位置参数"]
     end
     
-    Stage2 -.-> ActionDetail
-    Stage2 --> Output["🎉 多任务输出"]
-    
-    %% 推理调制
-    U -.->|推理时| InferenceControl["🔧 推理控制"]
-    
-    subgraph InferenceControl
+    %% === 行动网络（右侧） ===
+    Stage2 -.- ActNet
+    subgraph ActNet ["&nbsp;&nbsp;<b>行动网络</b>&nbsp;&nbsp;"]
         direction TB
-        Params["temperature & do_sample"]
-        Params --> M1["⚖️ 因果模式: T=0"]
-        Params --> M2["🌡️ 标准模式: T>0, 扩大尺度"]
-        Params --> M3["🎲 采样模式: T>0, 扰动位置"]
+        Act1["🌊 噪声注入<br/>U' = U + b_noise·ε<br/>ε ~ Cauchy(0,1)"]
+        Act2["🔄 线性变换<br/>S = W_A·U' + b_A<br/>S = [S₁, ..., S_V]"]
+        Act1 --> Act2
     end
     
-    %% 样式
-    style Evidence fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000
-    style Stage1 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:3px,color:#000
-    style Stage2 fill:#fff3e0,stroke:#f57c00,stroke-width:3px,color:#000
-    style Output fill:#e1f5fe,stroke:#0277bd,stroke-width:3px,color:#000
-    style U fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#000
+    %% === 任务激活（最右侧） ===
+    Stage2 -.- Tasks
+    subgraph Tasks ["&nbsp;&nbsp;<b>任务激活</b>&nbsp;&nbsp;"]
+        direction TB
+        Task1["🔤 <b>词元分类</b><br/>OvR策略<br/>P(S_k > C_k)"]
+        Task2["📈 <b>数值回归</b><br/>线性变换<br/>w_k·S_k + b_k"]
+        Task3["🔢 <b>有序分类</b><br/>区间概率<br/>P(C_i < S_k ≤ C_{i+1})"]
+    end
     
-    style AbductionDetail fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px,color:#000
-    style ActionDetail fill:#fff3e0,stroke:#f57c00,stroke-width:1px,color:#000
-    style InferenceControl fill:#e0f2f1,stroke:#00796b,stroke-width:1px,color:#000
+    %% === 核心公式（底部） ===
+    Output -.-> Formula["<b>Y = f(U, ε)</b><br/><i>其中 f 是普适因果机制</i>"]
     
-    style ScoreGen fill:#fff8e1,stroke:#ffa000,stroke-width:1px,color:#000
-    style TaskTypes fill:#f5f5f5,stroke:#616161,stroke-width:1px,color:#000
+    %% === 样式设计 ===
+    %% 主线节点 - 渐变色彩
+    style Evidence fill:#2e7d32,stroke:#1b5e20,stroke-width:4px,color:#fff
+    style Stage1 fill:#6a1b9a,stroke:#4a148c,stroke-width:4px,color:#fff  
+    style U fill:#1565c0,stroke:#0d47a1,stroke-width:4px,color:#fff
+    style Stage2 fill:#ef6c00,stroke:#e65100,stroke-width:4px,color:#fff
+    style Output fill:#00695c,stroke:#004d40,stroke-width:4px,color:#fff
+    
+    %% 细节模块 - 半透明背景
+    style AbdNet fill:#f3e5f5ee,stroke:#7b1fa2,stroke-width:2px,color:#000
+    style Modes fill:#e0f2f1ee,stroke:#00796b,stroke-width:2px,color:#000
+    style ActNet fill:#fff3e0ee,stroke:#f57c00,stroke-width:2px,color:#000
+    style Tasks fill:#e3f2fdee,stroke:#1976d2,stroke-width:2px,color:#000
+    
+    %% 内部节点 - 浅色填充
+    style Abd1 fill:#ede7f6,color:#000
+    style Abd2 fill:#ede7f6,color:#000
+    style M1 fill:#e0f2f1,color:#000
+    style M2 fill:#e0f2f1,color:#000
+    style M3 fill:#e0f2f1,color:#000
+    style Act1 fill:#fff3e0,color:#000
+    style Act2 fill:#fff3e0,color:#000
+    style Task1 fill:#e1f5fe,color:#000
+    style Task2 fill:#e1f5fe,color:#000
+    style Task3 fill:#e1f5fe,color:#000
+    
+    %% 公式样式
+    style Formula fill:#f5f5f5,stroke:#bdbdbd,stroke-width:1px,color:#666,stroke-dasharray: 3 3
+    
+    %% 定位微调
+    classDef leftAlign text-align:left
+    classDef rightAlign text-align:right
 ```
-
 CausalEngine 提供了一个数学上完备、计算上高效的因果推理算法。其核心贡献包括：
 
 ### 理论创新
