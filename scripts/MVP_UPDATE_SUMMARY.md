@@ -111,4 +111,4 @@ model.causal_engine.activation    # ActivationHead
 3. **架构升级**: 享受独立网络架构的所有优势
 4. **测试验证**: 64 个测试全部通过，质量有保障
 
-CausalQwen MVP 现在是 CausalEngine v2.0.3 的完美应用示例，展示了如何将革命性的因果推理引擎集成到实际的语言模型中。 
+CausalQwen MVP 现在是 CausalEngine v2.0.3 的完美应用示例，展示了如何将突破性的因果推理引擎集成到实际的语言模型中。 

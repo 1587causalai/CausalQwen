@@ -1,11 +1,11 @@
-# CausalQwen: 革命性 CausalEngine™ 的首个应用
+# CausalQwen: 突破性 CausalEngine™ 的首个应用
 
 <div align="center">
   
   [![CausalEngine](https://img.shields.io/badge/驱动引擎-CausalEngine™-ff1744.svg)](causal_engine/)
   [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
   [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org)
-  [![Status](https://img.shields.io/badge/状态-革命性-purple.svg)](causal_engine/README_CN.md)
+  [![Status](https://img.shields.io/badge/状态-突破性-purple.svg)](causal_engine/README_CN.md)
   
   **[CausalEngine](causal_engine/) 之于 AI，正如 PageRank 之于搜索。**
   
@@ -21,7 +21,7 @@
 
 ### 📚 必读资料
 - **[CausalEngine 概述](causal_engine/README_CN.md)** - 改变一切的算法
-- **[技术白皮书](causal_engine/WHITEPAPER_CN.md)** - 深入的数学基础
+- **[数学基础](causal_engine/MATHEMATICAL_FOUNDATIONS_CN.md)** - 深入的数学理论
 - **[单页简介](causal_engine/ONE_PAGER_CN.md)** - 高管快速了解
 
 ---
@@ -37,8 +37,8 @@
 ### 公理三：温度统一控制
 一个优雅的参数来控制确定性与随机性之间的边界。
 
-### 公理四：独立决策（OvR）
-从 Softmax 暴政中解放 —— 每个选择基于自身价值评估。
+### 公理四：结构方程决策
+每个选择基于得分确定性函数计算多种类型输出。
 
 ---
 
@@ -95,7 +95,7 @@ decision, uncertainty = output['loc_S'], output['scale_S']
 CausalQwen/
 ├── causal_engine/                # ⭐ 核心算法 ⭐
 │   ├── README_CN.md              # CausalEngine 概述
-│   ├── WHITEPAPER_CN.md          # 技术白皮书
+│   ├── MATHEMATICAL_FOUNDATIONS_CN.md # 数学基础
 │   ├── ONE_PAGER_CN.md           # 高管简介
 │   └── engine.py                 # 纯净实现
 ├── src/causal_qwen_mvp/          # Qwen 特定应用
@@ -133,7 +133,7 @@ pytest tests/
 | 学习相关性 | 理解因果关系 |
 | 黑盒决策 | 玻璃盒推理 |
 | 需要采样 | 纯解析计算 |
-| Softmax 竞争 | 独立评估 |
+| 词元预测 | 多类型输出 |
 | 模式模仿 | 真正智能 |
 
 ---

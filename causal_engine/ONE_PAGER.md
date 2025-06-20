@@ -26,8 +26,8 @@ CausalEngine:   X → U → f(U,ε) → Y
 3. **Temperature Control**  
    One parameter to rule determinism vs. randomness
 
-4. **Independent Decisions**  
-   Every choice stands on its own merit (no Softmax competition)
+4. **Structural Equation Decisions**  
+   Every choice computed by deterministic functions for multiple output types
 
 ## Why It Matters
 
@@ -36,16 +36,7 @@ CausalEngine:   X → U → f(U,ε) → Y
 | Imitates patterns | Understands causes |
 | Black box | Glass box |
 | Needs sampling | Pure computation |
-| Zero-sum choices | Independent choices |
-
-## The Architecture
-
-**AbductionNetwork**: Evidence → Self-Understanding
-- Independent loc_net (identity) and scale_net (uncertainty)
-- Smart initialization: identity when H=C, Xavier otherwise
-
-**ActionNetwork**: Self → Decision  
-**ActivationHead**: Decision → Output
+| Token prediction | Multi-type outputs |
 
 ## The Code
 

@@ -1,11 +1,11 @@
-# CausalQwen: First Application of the Revolutionary CausalEngine™
+# CausalQwen: First Application of the Breakthrough CausalEngine™
 
 <div align="center">
   
   [![CausalEngine](https://img.shields.io/badge/Powered%20by-CausalEngine™%20v2.0-ff1744.svg)](causal_engine/)
   [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
   [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org)
-  [![Status](https://img.shields.io/badge/Status-Revolutionary-purple.svg)](causal_engine/README.md)
+  [![Status](https://img.shields.io/badge/Status-Breakthrough-purple.svg)](causal_engine/README.md)
   
   **[CausalEngine](causal_engine/) is to AI what PageRank was to search.**
   
@@ -62,7 +62,7 @@ This repository demonstrates the first application of CausalEngine to language m
 
 ### 📚 Essential Reading
 - **[CausalEngine Overview](causal_engine/README.md)** - The algorithm that changes everything
-- **[Technical Whitepaper](causal_engine/WHITEPAPER.md)** - Deep mathematical foundations
+- **[Mathematical Foundations](causal_engine/MATHEMATICAL_FOUNDATIONS.md)** - Deep mathematical foundations
 - **[One-Pager](causal_engine/ONE_PAGER.md)** - Quick summary for executives
 
 ---
@@ -78,8 +78,8 @@ The only distribution that enables analytical causal computation without samplin
 ### Axiom III: Temperature-Unified Control
 One elegant parameter to control the boundary between determinism and stochasticity.
 
-### Axiom IV: Independent Decisions (OvR)
-Liberation from Softmax tyranny - every choice evaluated on its own merit.
+### Axiom IV: Structural Equation Decisions
+Every choice computed by deterministic functions for multiple output types.
 
 ---
 
@@ -136,7 +136,7 @@ decision, uncertainty = output['loc_S'], output['scale_S']
 CausalQwen/
 ├── causal_engine/                # ⭐ THE CORE ALGORITHM ⭐
 │   ├── README.md                 # CausalEngine overview
-│   ├── WHITEPAPER.md             # Technical whitepaper
+│   ├── MATHEMATICAL_FOUNDATIONS.md # Mathematical foundations
 │   ├── ONE_PAGER.md              # Executive summary
 │   └── engine.py                 # Pure implementation
 ├── src/causal_qwen_mvp/          # Qwen-specific application
@@ -174,7 +174,7 @@ pytest tests/
 | Learns correlations | Understands causation |
 | Black box decisions | Glass box reasoning |
 | Requires sampling | Pure analytical computation |
-| Softmax competition | Independent evaluation |
+| Token prediction | Multi-type outputs |
 | Pattern imitation | True intelligence |
 
 ---

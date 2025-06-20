@@ -25,7 +25,7 @@ class CausalQwenMVPForCausalLM(Qwen2ForCausalLM):
     """
     CausalQwen - CausalEngine 在 Qwen 上的应用实例
     
-    这个类展示了如何将革命性的 CausalEngine 集成到现有的语言模型中。
+    这个类展示了如何将突破性的 CausalEngine 集成到现有的语言模型中。
     它继承自 Qwen2ForCausalLM，但用 CausalEngine 替换了原始的生成机制。
     
     这只是一个开始 - CausalEngine 可以被应用到任何 Transformer 模型上。
