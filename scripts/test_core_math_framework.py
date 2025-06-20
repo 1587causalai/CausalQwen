@@ -69,7 +69,7 @@ def test_causal_mathematical_framework():
     
     print_step(1, "验证柯西分布数学工具类")
     try:
-        from causal_qwen_mvp.components import CauchyMath
+        from causal_engine.engine import CauchyMath
         
         # 测试线性稳定性
         batch_size, input_dim, output_dim = 4, 128, 256
@@ -120,18 +120,19 @@ def test_action_network_causal_modes():
     
     print_step(1, "创建测试用ActionNetwork")
     try:
-        from causal_qwen_mvp.components import ActionNetwork
+        from causal_engine.networks import ActionNetwork
         from causal_qwen_mvp.config import CausalQwen2Config
         
         # 创建小型测试配置
-        config = CausalQwen2Config(
-            vocab_size=100,
-            hidden_size=64,
-            causal_size=64,
-            b_noise_init=0.1
-        )
+        causal_size = 64
+        vocab_size = 100
+        b_noise_init = 0.1
         
-        action_net = ActionNetwork(config)
+        action_net = ActionNetwork(
+            causal_size=causal_size,
+            output_size=vocab_size,
+            b_noise_init=b_noise_init
+        )
         print_success("ActionNetwork创建成功")
         
         # 创建测试输入
@@ -163,8 +164,8 @@ def test_action_network_causal_modes():
         
         # 验证非采样模式的数学实现
         expected_scale_U_noisy = scale_U + torch.abs(action_net.b_noise)
-        expected_loc_S = action_net.lm_head(loc_U)
-        expected_scale_S = expected_scale_U_noisy @ torch.abs(action_net.lm_head.weight).T
+        expected_loc_S = action_net.linear_law(loc_U)
+        expected_scale_S = expected_scale_U_noisy @ torch.abs(action_net.linear_law.weight).T
         
         if torch.allclose(loc_S_det, expected_loc_S, atol=1e-5):
             print_success("非采样模式位置参数计算正确")
@@ -213,7 +214,7 @@ def test_action_network_causal_modes():
             print_warning("采样模式位置参数与非采样模式无差异（异常）")
         
         # 验证采样模式的尺度参数计算
-        expected_scale_S_samp = scale_U @ torch.abs(action_net.lm_head.weight).T
+        expected_scale_S_samp = scale_U @ torch.abs(action_net.linear_law.weight).T
         if torch.allclose(scale_S_samp, expected_scale_S_samp, atol=1e-5):
             print_success("采样模式尺度参数计算正确")
         else:

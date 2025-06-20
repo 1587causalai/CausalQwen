@@ -163,10 +163,66 @@ def demo_multi_task_head():
     print(f"\n✅ 多任务头支持复杂的多模态应用")
 
 
+def demo_independent_networks():
+    """演示 v2.0.3 独立网络架构"""
+    print("\n" + "=" * 60)
+    print("4. v2.0.3 独立网络架构")
+    print("=" * 60)
+    
+    print("\n📊 独立网络设计优势:")
+    print("  - loc_net 和 scale_net 完全独立")
+    print("  - 智能初始化策略")
+    print("  - 梯度独立优化")
+    
+    # 展示不同配置的构建规则
+    configs = [
+        (512, 512, 1, "恒等映射"),
+        (768, 256, 1, "维度转换"),
+        (1024, 512, 2, "深度网络")
+    ]
+    
+    print(f"\n📋 构建规则演示:")
+    print(f"{'配置':<20} {'架构描述':<50} {'恒等映射'}")
+    print("-" * 80)
+    
+    for h, c, layers, desc in configs:
+        abduction = AbductionNetwork(h, c, layers)
+        arch_desc = abduction.get_architecture_description()
+        is_identity = abduction.is_identity_mapping
+        
+        config_str = f"H={h}, C={c}, L={layers}"
+        print(f"{config_str:<20} {arch_desc:<50} {'✓' if is_identity else '✗'}")
+    
+    # 演示梯度独立性
+    print(f"\n📈 梯度独立性验证:")
+    network = AbductionNetwork(256, 128, 2)
+    x = torch.randn(1, 10, 256, requires_grad=True)
+    
+    loc_U, scale_U = network(x)
+    
+    # 分别计算梯度
+    loc_loss = loc_U.sum()
+    scale_loss = scale_U.sum()
+    
+    # loc_loss 的梯度
+    network.zero_grad()
+    loc_loss.backward(retain_graph=True)
+    
+    loc_has_grad = any(p.grad is not None and p.grad.abs().sum() > 0 
+                       for p in network.loc_net.parameters())
+    scale_has_grad = any(p.grad is not None and p.grad.abs().sum() > 0 
+                        for p in network.scale_net.parameters())
+    
+    print(f"  - loc_loss → loc_net梯度: {'✓' if loc_has_grad else '✗'}")
+    print(f"  - loc_loss → scale_net梯度: {'✗' if not scale_has_grad else '✓'}")
+    
+    print(f"\n✅ 独立网络架构实现完美的数学解耦")
+
+
 def demo_abduction_mlp():
     """演示 AbductionNetwork 的 MLP 功能"""
     print("\n" + "=" * 60)
-    print("4. AbductionNetwork MLP 功能")
+    print("5. AbductionNetwork MLP 功能")
     print("=" * 60)
     
     # 场景：复杂的非线性归因推断
@@ -203,7 +259,7 @@ def demo_abduction_mlp():
 def demo_custom_activation():
     """演示自定义激活模式"""
     print("\n" + "=" * 60)
-    print("5. 自定义激活模式")
+    print("6. 自定义激活模式")
     print("=" * 60)
     
     # 场景：科学计算 - 预测分子性质
@@ -251,6 +307,7 @@ def main():
     demo_basic_modular_usage()
     demo_mixed_activation()
     demo_multi_task_head()
+    demo_independent_networks()
     demo_abduction_mlp()
     demo_custom_activation()
     

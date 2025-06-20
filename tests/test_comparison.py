@@ -92,10 +92,10 @@ def _copy_qwen_weights(qwen_model, causal_model):
     causal_model.model.load_state_dict(causal_state_dict)
     
     # 复制lm_head到CausalEngine的action部分
-    # CausalEngine的activation_head权重
-    causal_model.causal_engine.activation_head.weight.data.copy_(qwen_model.lm_head.weight.data)
-    if qwen_model.lm_head.bias is not None and causal_model.causal_engine.activation_head.bias is not None:
-        causal_model.causal_engine.activation_head.bias.data.copy_(qwen_model.lm_head.bias.data)
+    # CausalEngine的action.linear_law权重
+    causal_model.causal_engine.action.linear_law.weight.data.copy_(qwen_model.lm_head.weight.data)
+    if qwen_model.lm_head.bias is not None and causal_model.causal_engine.action.linear_law.bias is not None:
+        causal_model.causal_engine.action.linear_law.bias.data.copy_(qwen_model.lm_head.bias.data)
 
 
 @pytest.mark.requires_qwen
@@ -123,7 +123,7 @@ class TestWeightCopying:
         """测试CausalEngine权重是否正确复制"""
         # 检查lm_head权重
         qwen_lm_weight = qwen_model.lm_head.weight
-        causal_lm_weight = causal_qwen_from_qwen.causal_engine.activation_head.weight
+        causal_lm_weight = causal_qwen_from_qwen.causal_engine.action.linear_law.weight
         
         weight_diff = torch.abs(qwen_lm_weight - causal_lm_weight).max().item()
         assert weight_diff < 1e-6, f"lm_head权重差异过大: {weight_diff}"

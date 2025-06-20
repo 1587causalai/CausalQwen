@@ -306,10 +306,10 @@ class LossComputer:
         # TODO: 添加因果模型特定的正则化
         reg_loss = 0.0
         
-        # L2正则化
-        for param in model.abduction_network.parameters():
+        # L2正则化 - 使用新的 CausalEngine v2.0.3 架构
+        for param in model.causal_engine.abduction.parameters():
             reg_loss += torch.norm(param, p=2)
-        for param in model.action_network.parameters():
+        for param in model.causal_engine.action.parameters():
             reg_loss += torch.norm(param, p=2)
         
         return reg_loss * 1e-5  # 正则化权重

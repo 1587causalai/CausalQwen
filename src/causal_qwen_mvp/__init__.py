@@ -43,7 +43,12 @@ from .components import OvRClassifier
 
 # 注意：CausalEngine 和 CauchyMath 现在是独立的顶层模块
 # 这里我们只是为了方便导入而重新导出
-from causal_engine import CausalEngine, CauchyMath
+try:
+    from causal_engine import CausalEngine, CauchyMath
+except ImportError:
+    # 如果无法导入，说明用户需要直接从 causal_engine 导入
+    CausalEngine = None
+    CauchyMath = None
 
 # 主模型
 from .models import (
@@ -72,11 +77,7 @@ __all__ = [
     'CausalQwen2Config', 
     'CausalMVPOutput',
     
-    # 数学工具
-    'CauchyMath',
-    
     # 网络模块
-    'CausalEngine',  # 从顶层 causal_engine 导入
     'OvRClassifier',
     
     # 推理引擎
@@ -88,6 +89,10 @@ __all__ = [
     'LossComputer', 
     'TrainingValidator',
 ]
+
+# 只有在成功导入时才添加到 __all__
+if CausalEngine is not None:
+    __all__.extend(['CausalEngine', 'CauchyMath'])
 
 def create_mvp_model(model_name_or_path="Qwen/Qwen2.5-0.5B", **config_kwargs):
     """快速创建CausalQwen MVP模型

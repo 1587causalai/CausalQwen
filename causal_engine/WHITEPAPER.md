@@ -36,6 +36,53 @@ This decomposition separates three distinct sources of variation:
 2. **Universal laws** (encoded in f)
 3. **Random perturbations** (represented by ε)
 
+#### Causal vs Statistical Paradigms
+
+```mermaid
+flowchart LR
+    subgraph Traditional["🔗 Traditional Statistical Models"]
+        direction TB
+        X1["📊 Input X"] 
+        ML1["🤖 Learn P(Y|X)<br/>Statistical Correlation"]
+        Y1["📈 Output Y"]
+        Limit1["⚠️ Limitations<br/>• Correlational only<br/>• Black box decisions<br/>• No counterfactuals<br/>• No interpretability"]
+        
+        X1 --> ML1
+        ML1 --> Y1
+        ML1 --> Limit1
+    end
+    
+    subgraph Causal["🧠 CausalEngine Framework"]
+        direction TB
+        X2["📊 Context X"]
+        Abduct["🔍 Abduction<br/>Infer U ~ P(U|X)"]
+        U["👤 Individual U<br/>Causal Representation"]
+        Noise["🎲 Exogenous Noise ε"]
+        Law["⚖️ Universal Law<br/>Y = f(U, ε)"]
+        Y2["📈 Output Y"]
+        Benefits["✅ Benefits<br/>• True causation<br/>• Full interpretability<br/>• Counterfactual ready<br/>• Individual reasoning"]
+        
+        X2 --> Abduct
+        Abduct --> U
+        U --> Law
+        Noise --> Law
+        Law --> Y2
+        Law --> Benefits
+    end
+    
+    classDef traditional fill:#fef7ff,stroke:#7c3aed,stroke-width:2px,color:#4c1d95
+    classDef causal fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#15803d
+    classDef highlight fill:#fef3c7,stroke:#f59e0b,stroke-width:3px,color:#92400e
+    classDef warning fill:#fef2f2,stroke:#ef4444,stroke-width:2px,color:#dc2626
+    classDef success fill:#ecfdf5,stroke:#10b981,stroke-width:2px,color:#059669
+    
+    class Traditional traditional
+    class Causal causal
+    class U highlight
+    class Limit1 warning
+    class Benefits success
+```
+
 ### 2.2 The Cauchy Distribution Choice
 
 We model U using the Cauchy distribution for its unique mathematical properties:
@@ -61,9 +108,55 @@ The Cauchy distribution provides:
 
 4. **Undefined Moments**: Mathematical embodiment of fundamental uncertainty
 
-### 2.3 The Dual-Stage Architecture
+#### Cauchy Linear Stability Visualization
 
-CausalEngine implements intelligence as a two-stage process:
+```mermaid
+flowchart TD
+    subgraph Inputs["📊 Independent Cauchy Distributions"]
+        U1["🎯 U₁ ~ Cauchy(μ₁, γ₁)"]
+        U2["🎯 U₂ ~ Cauchy(μ₂, γ₂)"]
+        U3["⋮"]
+        Un["🎯 Uₙ ~ Cauchy(μₙ, γₙ)"]
+    end
+    
+    subgraph Process["⚡ Linear Combination"]
+        Combine["🔄 S = w₁U₁ + w₂U₂ + ... + wₙUₙ<br/>🎨 Weighted Linear Transform"]
+    end
+    
+    subgraph Output["✨ Analytical Result"]
+        Result["🎉 S ~ Cauchy(Σwᵢμᵢ, Σ|wᵢ|γᵢ)<br/>📐 Exact Distribution"]
+    end
+    
+    subgraph Advantages["🚀 Key Benefits"]
+        Benefit1["🚫 No sampling required"]
+        Benefit2["🎯 Exact uncertainty propagation"]
+        Benefit3["⚡ Efficient computation"]
+        Benefit4["📈 Differentiable everywhere"]
+    end
+    
+    U1 --> Combine
+    U2 --> Combine
+    Un --> Combine
+    Combine --> Result
+    Result --> Benefit1
+    Result --> Benefit2
+    Result --> Benefit3
+    Result --> Benefit4
+    
+    classDef input fill:#ddd6fe,stroke:#7c3aed,stroke-width:2px,color:#5b21b6
+    classDef process fill:#fef3c7,stroke:#f59e0b,stroke-width:2px,color:#92400e
+    classDef result fill:#dcfce7,stroke:#16a34a,stroke-width:3px,color:#15803d
+    classDef benefit fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0369a1
+    
+    class U1,U2,Un input
+    class Combine process
+    class Result result
+    class Benefit1,Benefit2,Benefit3,Benefit4 benefit
+```
+
+### 2.3 The Three-Stage Architecture
+
+CausalEngine implements intelligence as a **three-stage process**:
 
 #### Stage 1: Abduction (Evidence → Individual)
 Given context features z ∈ ℝᴴ, infer the individual's causal representation:
@@ -77,15 +170,82 @@ U ~ Cauchy(μᵤ, γᵤ)
 This maps from observable evidence to a distribution over possible individuals consistent with that evidence.
 
 #### Stage 2: Action (Individual → Decision)
-Apply universal causal law to generate decisions:
+Apply universal causal law to generate raw decision distributions:
 
 ```
-S = W_cls · U' + b_cls
+S = W_action · U' + b_action
 ```
 
-Where U' incorporates exogenous noise based on the inference mode.
+Where U' incorporates exogenous noise based on the inference mode, and S represents the raw decision distribution before activation.
+
+#### Stage 3: Activation (Decision → Output)
+Transform raw decisions into task-specific outputs:
+
+**Classification Activation:**
+```
+P(y = k) = P(S_k > C_k) = 1/2 + (1/π)arctan((loc_S_k - C_k)/scale_S_k)
+```
+
+**Regression Activation:**
+```
+y_continuous = loc_S (direct output of location parameter)
+```
+
+This modular design allows the same decision distribution to support both classification and regression tasks simultaneously.
 
 ## 3. Temperature-Unified Inference Framework
+
+### 3.0 CausalEngine Three-Stage Architecture
+
+The following diagram illustrates the complete CausalEngine pipeline with its **three distinct stages**:
+
+```mermaid
+flowchart TD
+    subgraph Input["📊 Input Layer"]
+        A["🔤 Input Features<br/>z ∈ ℝᴴ<br/>Context Representation"]
+    end
+    
+    subgraph Stage1["🔍 Stage 1: Abduction"]
+        B["🧠 Abduction Network<br/>Evidence → Individual<br/>🎯 Infer P(U|X)"]
+        C["✨ Individual Representation<br/>U ~ Cauchy(μ, γ)<br/>🎨 Causal Identity"]
+    end
+    
+    subgraph Stage2["⚖️ Stage 2: Action"]
+        D["🎯 Action Network<br/>Individual → Decision<br/>⚡ Universal Law f(U,ε)"]
+        E["🎲 Decision Distribution<br/>S ~ Cauchy(loc_S, scale_S)<br/>📊 Raw Decisions"]
+    end
+    
+    subgraph Stage3["🎭 Stage 3: Activation"]
+        F1["🏷️ Classification Head<br/>🎯 OvR Probabilities<br/>P(y=k) = P(S_k > C_k)"]
+        F2["📊 Regression Head<br/>📈 Continuous Values<br/>Direct loc_S output"]
+        G["🎉 Final Output<br/>✅ Classifications & Regressions<br/>🌟 Mixed Task Support"]
+    end
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F1
+    E --> F2
+    F1 --> G
+    F2 --> G
+
+    classDef inputStyle fill:#f0f9ff,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
+    classDef stage1Style fill:#fef7ff,stroke:#a855f7,stroke-width:2px,color:#6b21a8
+    classDef individualStyle fill:#fef3c7,stroke:#f59e0b,stroke-width:3px,color:#92400e
+    classDef stage2Style fill:#ecfdf5,stroke:#10b981,stroke-width:2px,color:#047857
+    classDef decisionStyle fill:#fdf2f8,stroke:#ec4899,stroke-width:2px,color:#be185d
+    classDef stage3Style fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#15803d
+    classDef outputStyle fill:#fffbeb,stroke:#f59e0b,stroke-width:3px,color:#92400e
+
+    class A inputStyle
+    class B,C stage1Style
+    class C individualStyle
+    class D,E stage2Style
+    class E decisionStyle
+    class F1,F2 stage3Style
+    class G outputStyle
+```
 
 CausalEngine unifies all inference modes through two parameters:
 
@@ -115,26 +275,132 @@ This framework achieves remarkable symmetry:
 - **Temperature > 0**: Controls noise magnitude
 - **do_sample**: Controls noise target (scale vs location)
 
-## 4. One-vs-Rest Classification
+#### Inference Modes Visualization
 
-### 4.1 Liberation from Softmax
-
-Traditional softmax enforces competitive normalization:
+```mermaid
+flowchart TD
+    subgraph Core["🎯 Stage 1: Abduction"]
+        Start["👤 Individual Representation<br/>U ~ Cauchy(μ, γ)<br/>🧬 Base Identity"]
+    end
+    
+    subgraph Standard["🎯 Standard Mode (T>0, do_sample=False)"]
+        Mode1["🔧 Standard Mode<br/>🎚️ Temperature Control"]
+        Noise1["📊 Noise → Scale Parameter<br/>U' ~ Cauchy(μ, γ + T·|b_noise|)<br/>🔍 Increased Uncertainty"]
+        Action1["⚖️ Stage 2: Action Network<br/>📐 S ~ Cauchy(loc_S, scale_S)"]
+        Activation1["🎭 Stage 3: Activation<br/>🏷️ Classification + 📊 Regression"]
+        Output1["✅ Deterministic Output<br/>🎯 argmax_k P_k<br/>🎪 Confident Decisions"]
+    end
+    
+    subgraph Sampling["🎲 Sampling Mode (T>0, do_sample=True)"]
+        Mode2["🎲 Sampling Mode<br/>🎪 Exploration Ready"]
+        Sample2["🎰 Sample Noise<br/>ε ~ Cauchy(0,1)<br/>🎲 Random Perturbation"]
+        Noise2["📍 Noise → Location Parameter<br/>U' ~ Cauchy(μ + T·|b_noise|·ε, γ)<br/>🚀 Identity Shift"]
+        Action2["⚖️ Stage 2: Action Network<br/>🔄 S ~ Cauchy(loc_S, scale_S)"]
+        Activation2["🎭 Stage 3: Activation<br/>📊 Mixed Task Processing"]
+        Output2["🌟 Stochastic Output<br/>🔮 Explore Counterfactuals<br/>🎭 Alternative Personas"]
+    end
+    
+    subgraph Causal["🔬 Causal Mode (T=0)"]
+        Mode3["🔬 Causal Mode<br/>🎯 Pure Causation"]
+        Pure3["✨ Pure Causation<br/>U' ~ Cauchy(μ, γ)<br/>🎪 No External Noise"]
+        Action3["⚖️ Stage 2: Action Network<br/>🎯 S ~ Cauchy(loc_S, scale_S)"]
+        Activation3["🎭 Stage 3: Activation<br/>📐 Exact Processing"]
+        Output3["🎉 Deterministic Output<br/>👤 Pure Individual Expression<br/>🔬 True Causal Behavior"]
+    end
+    
+    Start --> Mode1
+    Start --> Mode2
+    Start --> Mode3
+    
+    Mode1 --> Noise1 --> Action1 --> Activation1 --> Output1
+    Mode2 --> Sample2 --> Noise2 --> Action2 --> Activation2 --> Output2
+    Mode3 --> Pure3 --> Action3 --> Activation3 --> Output3
+    
+    classDef core fill:#fef3c7,stroke:#f59e0b,stroke-width:4px,color:#92400e
+    classDef standard fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1d4ed8
+    classDef sampling fill:#f3e8ff,stroke:#8b5cf6,stroke-width:2px,color:#6d28d9
+    classDef causal fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#15803d
+    classDef activation fill:#fdf2f8,stroke:#ec4899,stroke-width:2px,color:#be185d
+    classDef output1 fill:#eff6ff,stroke:#2563eb,stroke-width:2px,color:#1e40af
+    classDef output2 fill:#faf5ff,stroke:#9333ea,stroke-width:2px,color:#7c2d12
+    classDef output3 fill:#f0fdf4,stroke:#22c55e,stroke-width:2px,color:#16a34a
+    
+    class Start core
+    class Mode1,Noise1,Action1 standard
+    class Mode2,Sample2,Noise2,Action2 sampling
+    class Mode3,Pure3,Action3 causal
+    class Activation1,Activation2,Activation3 activation
+    class Output1 output1
+    class Output2 output2
+    class Output3 output3
 ```
-P(y = k) = exp(zₖ) / Σⱼ exp(zⱼ)
+
+## 4. Activation Stage: Multi-Task Output Processing
+
+### 4.1 Beyond Single-Task Limitations
+
+The third stage of CausalEngine - **Activation** - transforms raw decision distributions into task-specific outputs. Unlike traditional approaches that are limited to single tasks, CausalEngine's activation stage supports both classification and regression simultaneously.
+
+**Traditional Single-Task Approach:**
+```
+P(y = k) = exp(zₖ) / Σⱼ exp(zⱼ)  (Classification only)
 ```
 
-CausalEngine uses independent OvR decisions:
+**CausalEngine Multi-Task Activation:**
+
+*Classification Head (OvR):*
 ```
 P(y = k) = P(Sₖ > Cₖ) = 1/2 + (1/π)arctan((loc_Sₖ - Cₖ)/scale_Sₖ)
 ```
 
-### 4.2 Advantages
+*Regression Head:*
+```
+y_continuous = loc_S  (Direct location parameter output)
+```
 
-1. **True Independence**: Each choice evaluated on its own merit
-2. **Multi-label Natural**: Multiple choices can have high probability
-3. **Uncertainty Preservation**: Scale parameter directly represents confidence
-4. **Threshold Flexibility**: Cₖ can be learned or set per-class
+### 4.2 Activation Stage Advantages
+
+1. **Multi-Task Unity**: Single decision distribution supports both classification and regression
+2. **True Independence**: Each choice evaluated on its own merit (no forced normalization)
+3. **Multi-label Natural**: Multiple choices can have high probability simultaneously
+4. **Uncertainty Preservation**: Scale parameter directly represents confidence for both tasks
+5. **Threshold Flexibility**: Classification thresholds Cₖ can be learned or set per-class
+6. **Regression Simplicity**: Direct location parameter output for continuous values
+
+#### OvR vs Softmax Comparison
+
+```mermaid
+flowchart LR
+    subgraph Traditional["🔗 Traditional Softmax Approach"]
+        direction TB
+        A1["📊 Decision Logits<br/>z₁, z₂, ..., zₖ<br/>🎯 Raw Scores"]
+        B1["⚔️ Competitive Normalization<br/>P(y=k) = exp(zₖ)/Σⱼexp(zⱼ)<br/>🥊 Winner-Takes-All"]
+        C1["🔒 Zero-Sum Competition<br/>ΣₖP(y=k) = 1<br/>⚖️ Forced Normalization"]
+        D1["👑 Single Winner<br/>🚫 Mutual Exclusion<br/>❌ Limited Flexibility"]
+        
+        A1 --> B1 --> C1 --> D1
+    end
+    
+    subgraph CausalOvR["🧠 CausalEngine OvR Approach"]
+        direction TB
+        A2["🎲 Decision Distributions<br/>S₁, S₂, ..., Sₖ ~ Cauchy<br/>📊 Full Uncertainty Info"]
+        B2["🎯 Independent Evaluation<br/>P(y=k) = P(Sₖ > Cₖ)<br/>⚖️ Merit-Based Assessment"]
+        C2["🆓 No Normalization<br/>Each choice on its merit<br/>🎪 Natural Probabilities"]
+        D2["🌟 Multi-label Possible<br/>🔄 Independent Decisions<br/>✅ Maximum Flexibility"]
+        
+        A2 --> B2 --> C2 --> D2
+    end
+    
+    classDef traditional fill:#fef2f2,stroke:#dc2626,stroke-width:2px,color:#991b1b
+    classDef causal fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#15803d
+    classDef limitation fill:#fef2f2,stroke:#ef4444,stroke-width:3px,color:#dc2626
+    classDef advantage fill:#ecfdf5,stroke:#10b981,stroke-width:3px,color:#059669
+    
+    class A1,B1,C1 traditional
+    class A2,B2,C2 causal
+    class D1 limitation
+    class D2 advantage
+```
 
 ## 5. Implementation Details
 
