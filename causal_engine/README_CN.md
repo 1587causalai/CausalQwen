@@ -67,6 +67,42 @@ Y = f(U, ε)
 
 这个简单的方程编码了一个深刻的真理：**智能是将普适规律应用于个体语境。**
 
+
+```mermaid
+graph TB
+    %% 行动决策完整流程图
+    
+    U["🎲 个体分布<br/>U ~ Cauchy(μ_U, γ_U)"]
+    
+    U --> ScoreGen["💫 决策得分生成<br/>噪声注入 + 线性变换"]
+    
+    ScoreGen --> S["💫 决策得分<br/>S ~ Cauchy(loc_S, scale_S)<br/>S = [S₁, S₂, ..., S_V]"]
+    
+    S --> TaskActivation["✨ 任务激活"]
+    
+    TaskActivation --> Token["🔤 词元输出<br/>(OvR) P(S_k > C_k)"]
+    TaskActivation --> Numeric["📈 数值输出<br/>w_k·S_k + b_k"]
+    TaskActivation --> Discrete["🔢 离散输出<br/>P(C_i < S_k ≤ C_{i+1})"]
+    
+    Token --> FinalOutput["🎉 最终决策输出"]
+    Numeric --> FinalOutput
+    Discrete --> FinalOutput
+    
+    %% 样式
+    style U fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+    style ScoreGen fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000
+    style S fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+    style TaskActivation fill:#e3f2fd,stroke:#2196f3,stroke-width:2px,color:#000
+    style FinalOutput fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
+    
+    style Token fill:#e3f2fd,stroke:#1976d2,color:#000
+    style Numeric fill:#e8f5e9,stroke:#388e3c,color:#000
+    style Discrete fill:#fce4ec,stroke:#c2185b,color:#000
+```
+
+
+
+
 ## 实现的纯粹性
 
 ```python
@@ -88,6 +124,8 @@ causal_output = engine(hidden_states, temperature=1.0, do_sample=True)
 # 输出不仅仅是预测——而是带有量化不确定性的因果决策
 loc_S, scale_S = causal_output['loc_S'], causal_output['scale_S']
 ```
+
+
 
 ## 四种推理模式
 
