@@ -19,6 +19,7 @@ class ActivationMode(Enum):
     """激活模式枚举"""
     CLASSIFICATION = "classification"
     REGRESSION = "regression"
+    ORDINAL = "ordinal"  # 离散有序值预测
 
 
 class ActivationHead(nn.Module):
@@ -37,6 +38,8 @@ class ActivationHead(nn.Module):
         classification_threshold_init: 分类阈值初始值
         regression_scale_init: 回归缩放初始值
         regression_bias_init: 回归偏置初始值
+        ordinal_num_classes: 离散有序激活的参数配置
+        ordinal_threshold_init: 离散有序激活的阈值初始值
     """
     
     def __init__(
@@ -45,7 +48,9 @@ class ActivationHead(nn.Module):
         activation_modes: Optional[Union[str, List[str]]] = None,
         classification_threshold_init: float = 0.0,
         regression_scale_init: float = 1.0,
-        regression_bias_init: float = 0.0
+        regression_bias_init: float = 0.0,
+        ordinal_num_classes: Optional[Union[int, List[int]]] = None,
+        ordinal_threshold_init: float = 0.0
     ):
         super().__init__()
         
@@ -63,6 +68,10 @@ class ActivationHead(nn.Module):
             i for i, mode in enumerate(self.activation_modes)
             if mode == ActivationMode.REGRESSION
         ]
+        self.ordinal_dims = [
+            i for i, mode in enumerate(self.activation_modes)
+            if mode == ActivationMode.ORDINAL
+        ]
         
         # 分类参数：阈值 C_k
         if self.classification_dims:
@@ -78,6 +87,42 @@ class ActivationHead(nn.Module):
             self.regression_biases = nn.Parameter(
                 torch.full((len(self.regression_dims),), regression_bias_init)
             )
+        
+        # 离散有序参数：多个阈值形成区间
+        if self.ordinal_dims:
+            # 为每个离散有序维度存储其类别数
+            self.ordinal_num_classes = {}
+            # 存储所有离散有序维度的阈值
+            self.ordinal_thresholds = nn.ParameterDict()
+            
+            # 解析每个离散有序维度的类别数
+            if ordinal_num_classes is None:
+                # 默认为二分类
+                parsed_num_classes = [2] * len(self.ordinal_dims)
+            elif isinstance(ordinal_num_classes, int):
+                # 所有维度使用相同的类别数
+                parsed_num_classes = [ordinal_num_classes] * len(self.ordinal_dims)
+            elif isinstance(ordinal_num_classes, list):
+                if len(ordinal_num_classes) != len(self.ordinal_dims):
+                    raise ValueError(
+                        f"离散有序类别数列表长度 ({len(ordinal_num_classes)}) "
+                        f"必须等于离散有序维度数 ({len(self.ordinal_dims)})"
+                    )
+                parsed_num_classes = ordinal_num_classes
+            else:
+                raise ValueError(f"不支持的离散有序类别数类型: {type(ordinal_num_classes)}")
+            
+            # 为每个离散有序维度创建阈值
+            for idx, (dim_idx, num_classes) in enumerate(zip(self.ordinal_dims, parsed_num_classes)):
+                if num_classes < 2:
+                    raise ValueError(f"离散有序维度 {dim_idx} 的类别数必须至少为2，但得到 {num_classes}")
+                
+                self.ordinal_num_classes[dim_idx] = num_classes
+                
+                # 创建 num_classes-1 个阈值
+                # 初始化为等间隔的值
+                init_thresholds = torch.linspace(-1, 1, num_classes - 1) * ordinal_threshold_init
+                self.ordinal_thresholds[f'ordinal_{dim_idx}'] = nn.Parameter(init_thresholds)
     
     def _parse_activation_modes(self, modes: Optional[Union[str, List[str]]]) -> List[ActivationMode]:
         """解析激活模式配置"""
@@ -150,6 +195,55 @@ class ActivationHead(nn.Module):
             # 填充输出
             output[:, :, self.regression_dims] = values
         
+        # 离散有序激活：P(Y=k) = P(C_k < S <= C_{k+1})
+        if self.ordinal_dims:
+            # 对每个离散有序维度进行处理
+            for dim_idx in self.ordinal_dims:
+                loc_S_ord = loc_S[:, :, dim_idx:dim_idx+1]  # [batch, seq, 1]
+                scale_S_ord = scale_S[:, :, dim_idx:dim_idx+1]  # [batch, seq, 1]
+                
+                num_classes = self.ordinal_num_classes[dim_idx]
+                thresholds = self.ordinal_thresholds[f'ordinal_{dim_idx}']  # [num_classes-1]
+                
+                # 构建完整的阈值序列：[-inf, C_1, C_2, ..., C_{K-1}, +inf]
+                neg_inf = torch.tensor(float('-inf'), device=thresholds.device)
+                pos_inf = torch.tensor(float('+inf'), device=thresholds.device)
+                full_thresholds = torch.cat([neg_inf.unsqueeze(0), thresholds, pos_inf.unsqueeze(0)])
+                
+                # 计算每个区间的概率
+                probs = []
+                for k in range(num_classes):
+                    # P(Y=k) = P(S <= C_{k+1}) - P(S <= C_k)
+                    # 使用柯西CDF: P(S <= c) = 1/2 + (1/π)arctan((c - loc_S)/scale_S)
+                    
+                    # 上界概率
+                    if k == num_classes - 1:
+                        # 最后一个类别，上界是+inf，概率为1
+                        upper_prob = torch.ones_like(loc_S_ord)
+                    else:
+                        upper_threshold = full_thresholds[k + 1]
+                        upper_prob = 0.5 + (1 / torch.pi) * torch.atan((upper_threshold - loc_S_ord) / scale_S_ord)
+                    
+                    # 下界概率
+                    if k == 0:
+                        # 第一个类别，下界是-inf，概率为0
+                        lower_prob = torch.zeros_like(loc_S_ord)
+                    else:
+                        lower_threshold = full_thresholds[k]
+                        lower_prob = 0.5 + (1 / torch.pi) * torch.atan((lower_threshold - loc_S_ord) / scale_S_ord)
+                    
+                    # 区间概率
+                    prob_k = upper_prob - lower_prob
+                    probs.append(prob_k)
+                
+                # 将概率拼接成完整的分布
+                # probs: List[Tensor[batch, seq, 1]] -> Tensor[batch, seq, num_classes]
+                ordinal_probs = torch.cat(probs, dim=-1)
+                
+                # 对于离散有序输出，我们返回最大概率类别的索引
+                # 这与分类不同，分类返回的是概率，而离散有序返回的是类别索引
+                output[:, :, dim_idx] = torch.argmax(ordinal_probs, dim=-1).float()
+        
         if return_dict:
             result = {
                 'output': output,
@@ -165,6 +259,11 @@ class ActivationHead(nn.Module):
                 result['regression_values'] = output[:, :, self.regression_dims]
                 result['regression_dims'] = self.regression_dims
             
+            if self.ordinal_dims:
+                result['ordinal_predictions'] = output[:, :, self.ordinal_dims]
+                result['ordinal_dims'] = self.ordinal_dims
+                result['ordinal_num_classes'] = self.ordinal_num_classes
+            
             return result
         
         return output
@@ -175,6 +274,7 @@ class ActivationHead(nn.Module):
             'output_size': self.output_size,
             'num_classification_dims': len(self.classification_dims),
             'num_regression_dims': len(self.regression_dims),
+            'num_ordinal_dims': len(self.ordinal_dims),
             'activation_modes': [mode.value for mode in self.activation_modes]
         }
         
@@ -184,6 +284,10 @@ class ActivationHead(nn.Module):
         if self.regression_dims:
             config['regression_scales'] = self.regression_scales.tolist()
             config['regression_biases'] = self.regression_biases.tolist()
+        
+        if self.ordinal_dims:
+            config['ordinal_num_classes'] = self.ordinal_num_classes
+            config['ordinal_thresholds'] = {f'ordinal_{i}': t.tolist() for i, t in self.ordinal_thresholds.items()}
         
         return config
 

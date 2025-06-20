@@ -70,6 +70,8 @@ class CausalEngine(nn.Module):
         classification_threshold_init: 分类阈值初始值
         regression_scale_init: 回归缩放初始值
         regression_bias_init: 回归偏置初始值
+        ordinal_num_classes: 离散有序激活的类别数
+        ordinal_threshold_init: 离散有序激活的阈值初始值
     """
     
     def __init__(
@@ -88,7 +90,10 @@ class CausalEngine(nn.Module):
         gamma_init: float = 1.0,
         classification_threshold_init: float = 0.0,
         regression_scale_init: float = 1.0,
-        regression_bias_init: float = 0.0
+        regression_bias_init: float = 0.0,
+        # 离散有序激活参数
+        ordinal_num_classes: Optional[Union[int, List[int]]] = None,
+        ordinal_threshold_init: float = 0.0
     ):
         super().__init__()
         
@@ -119,7 +124,9 @@ class CausalEngine(nn.Module):
             activation_modes=activation_modes,
             classification_threshold_init=classification_threshold_init,
             regression_scale_init=regression_scale_init,
-            regression_bias_init=regression_bias_init
+            regression_bias_init=regression_bias_init,
+            ordinal_num_classes=ordinal_num_classes,
+            ordinal_threshold_init=ordinal_threshold_init
         )
     
     def forward(

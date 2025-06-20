@@ -22,7 +22,7 @@ from .engine import CausalEngine, CauchyMath
 from .networks import AbductionNetwork, ActionNetwork
 from .heads import ActivationHead, ActivationMode, MultiTaskActivationHead
 
-__version__ = "2.0.2"
+__version__ = "2.0.4"
 __author__ = "CausalEngine Development Team"
 __all__ = [
     # 核心引擎
