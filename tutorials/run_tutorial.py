@@ -24,11 +24,19 @@ def print_menu():
     tutorials = [
         {
             "id": "1",
-            "name": "数字识别 (多分类任务)",
-            "path": "01_classification/digit_recognition.py",
-            "description": "手写数字识别（0-9），展示CausalEngine多分类能力和不确定性量化",
+            "name": "表格数据快速测试",
+            "path": "01_classification/tabular_quick_test.py",
+            "description": "在5个经典小数据集上快速对比CausalEngine性能",
             "difficulty": "🟢 基础",
-            "time": "~3分钟"
+            "time": "~2分钟"
+        },
+        {
+            "id": "1b",
+            "name": "表格数据完整基准测试",
+            "path": "01_classification/tabular_classification_benchmark.py",
+            "description": "在4个大型数据集上全面测试，已修复macOS兼容性",
+            "difficulty": "🔥 进阶",
+            "time": "~8分钟"
         },
         {
             "id": "2", 
@@ -187,7 +195,7 @@ def main():
         tutorials = print_menu()
         
         try:
-            choice = input("请选择教程 (输入数字): ").strip()
+            choice = input("请选择教程 (输入数字或字母): ").strip()
             
             if choice.lower() == 'q':
                 print("👋 再见！感谢使用 CausalEngine 教程!")
