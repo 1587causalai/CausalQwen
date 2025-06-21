@@ -151,7 +151,8 @@ def run_ablation_experiment(data_dict):
             batch_y = batch_y.to(device)
             
             inputs = prepare_causal_inputs(batch_x)
-            metrics = trainer_ablation.train_step_ablation(inputs, batch_y)
+            hidden_states = inputs['values'] if isinstance(inputs, dict) else inputs
+            metrics = trainer_ablation.train_step_ablation(hidden_states, batch_y)
             
             train_loss += metrics['loss']
             train_acc += metrics['accuracy']
@@ -167,7 +168,8 @@ def run_ablation_experiment(data_dict):
             batch_y = batch_y.to(device)
             
             inputs = prepare_causal_inputs(batch_x)
-            metrics = trainer_ablation.eval_step(inputs, batch_y, use_ablation=True)
+            hidden_states = inputs['values'] if isinstance(inputs, dict) else inputs
+            metrics = trainer_ablation.eval_step(hidden_states, batch_y, use_ablation=True)
             
             val_loss += metrics['loss']
             val_acc += metrics['accuracy']
@@ -226,7 +228,8 @@ def run_ablation_experiment(data_dict):
             batch_y = batch_y.to(device)
             
             inputs = prepare_causal_inputs(batch_x)
-            metrics = trainer_full.train_step_full(inputs, batch_y)
+            hidden_states = inputs['values'] if isinstance(inputs, dict) else inputs
+            metrics = trainer_full.train_step_full(hidden_states, batch_y)
             
             train_loss += metrics['loss']
             train_acc += metrics['accuracy']
@@ -242,7 +245,8 @@ def run_ablation_experiment(data_dict):
             batch_y = batch_y.to(device)
             
             inputs = prepare_causal_inputs(batch_x)
-            metrics = trainer_full.eval_step(inputs, batch_y, use_ablation=False)
+            hidden_states = inputs['values'] if isinstance(inputs, dict) else inputs
+            metrics = trainer_full.eval_step(hidden_states, batch_y, use_ablation=False)
             
             val_loss += metrics['loss']
             val_acc += metrics['accuracy']

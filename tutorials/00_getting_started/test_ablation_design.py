@@ -122,13 +122,15 @@ print("\n6. 测试训练步骤")
 
 # 消融版本训练
 print("\n消融版本训练步骤:")
-ablation_metrics = trainer.train_step_ablation(inputs.copy(), targets)
+hidden_states = inputs['values'] if isinstance(inputs, dict) else inputs
+ablation_metrics = trainer.train_step_ablation(hidden_states, targets)
 print(f"  损失: {ablation_metrics['loss']:.4f}")
 print(f"  准确率: {ablation_metrics['accuracy']:.4f}")
 
 # 完整版本训练  
 print("\n完整版本训练步骤:")
-full_metrics = trainer.train_step_full(inputs.copy(), targets)
+hidden_states = inputs['values'] if isinstance(inputs, dict) else inputs
+full_metrics = trainer.train_step_full(hidden_states, targets)
 print(f"  损失: {full_metrics['loss']:.4f}")
 print(f"  准确率: {full_metrics['accuracy']:.4f}")
 

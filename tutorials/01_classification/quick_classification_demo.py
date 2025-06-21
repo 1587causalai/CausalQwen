@@ -139,13 +139,11 @@ for epoch in range(num_epochs):
         # 准备输入
         batch_size = batch_x.shape[0]
         inputs = {
-            'input_ids': torch.arange(20).unsqueeze(0).expand(batch_size, -1),
-            'values': batch_x,
-            'temperature': 1.0,
-            'mode': 'causal'
+            'values': batch_x
         }
         
-        metrics = ablation_trainer.train_step_ablation(inputs, batch_y)
+        hidden_states = inputs['values'] if isinstance(inputs, dict) else inputs
+        metrics = ablation_trainer.train_step_ablation(hidden_states, batch_y)
         epoch_loss += metrics['loss']
     
     avg_loss = epoch_loss / len(train_loader)
@@ -161,13 +159,11 @@ for epoch in range(num_epochs):
         # 准备输入
         batch_size = batch_x.shape[0]
         inputs = {
-            'input_ids': torch.arange(20).unsqueeze(0).expand(batch_size, -1),
-            'values': batch_x,
-            'temperature': 1.0,
-            'mode': 'causal'
+            'values': batch_x
         }
         
-        metrics = full_trainer.train_step_full(inputs, batch_y)
+        hidden_states = inputs['values'] if isinstance(inputs, dict) else inputs
+        metrics = full_trainer.train_step_full(hidden_states, batch_y)
         epoch_loss += metrics['loss']
     
     avg_loss = epoch_loss / len(train_loader)
