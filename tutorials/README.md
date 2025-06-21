@@ -1,217 +1,157 @@
-# CausalEngine 实际应用教程
+# CausalEngine 教程与评估框架
 
-欢迎来到 CausalEngine 实际应用教程！这个教程集合通过具体的例子展示了 CausalEngine 在各种机器学习任务中的强大能力。
+欢迎来到 CausalEngine 的综合教程和评估框架！本框架不仅提供了如何使用 CausalEngine 进行分类和回归任务的详细教程，更重要的是通过广泛的消融实验证明了 CausalEngine 相比传统神经网络的革命性优势。
 
-## 🎯 教程目标
+## 🌟 框架特色
 
-通过这些教程，你将学会：
-- ✅ 如何在真实数据集上使用 CausalEngine
-- ✅ 理解 CausalEngine 相比传统方法的优势
-- ✅ 掌握三种推理模式的使用场景
-- ✅ 学会配置不同的激活模式（分类、回归、有序分类）
-- ✅ 实现多任务学习和混合输出
-- ✅ 评估和可视化模型性能
+### 📚 完整教程体系
+- **快速入门**: 从零开始了解 CausalEngine
+- **分类任务**: 4个真实数据集的完整实现
+- **回归任务**: 4个真实数据集的完整实现  
+- **高级主题**: 深入理解因果推理机制
 
-## 📚 教程结构
+### 🔬 严谨的消融实验
+- **三层对比**: 传统神经网络 vs 消融版本 vs 完整引擎
+- **真实数据**: 8个公开数据集，样本量500-100万
+- **统计显著性**: 多次运行，统计显著性检验
+- **可复现性**: 固定随机种子，完整实验记录
 
-### 🟢 基础应用教程（单任务）
+### 📊 评估的数据集
 
-#### [01. 分类任务：情感分析](01_classification/)
-- **📁 文件**: `sentiment_analysis.py`
-- **🎯 任务**: 电影评论情感分类（正面/负面）
-- **💡 重点展示**:
-  - CausalEngine 分类激活函数
-  - OvR (One-vs-Rest) 概率计算
-  - 不确定性量化能力
-  - 三种推理模式对比
-- **📊 数据**: 模拟 IMDb 电影评论 (TF-IDF 特征)
-- **⭐ 亮点**: 与传统 Logistic Regression 的性能对比
+#### 分类数据集 (Binary & Multi-class)
+| 数据集 | 样本数 | 特征数 | 任务类型 | 领域 |
+|--------|--------|--------|----------|------|
+| Adult Income | 48,842 | 14 | 收入预测 | 人口统计 |
+| Bank Marketing | 41,188 | 20 | 营销响应 | 金融 |
+| Credit Default | 30,000 | 23 | 违约检测 | 风控 |
+| Mushroom Safety | 8,124 | 22 | 安全分类 | 生物 |
 
-#### [02. 回归任务：房价预测](02_regression/)
-- **📁 文件**: `house_price_prediction.py`
-- **🎯 任务**: California Housing 房价预测
-- **💡 重点展示**:
-  - CausalEngine 回归激活函数
-  - 柯西分布的异常值鲁棒性
-  - 预测区间和不确定性量化
-  - Cauchy NLL 损失函数
-- **📊 数据**: California Housing Dataset
-- **⭐ 亮点**: 90% 预测区间覆盖率分析
+#### 回归数据集 (Continuous Target)
+| 数据集 | 样本数 | 特征数 | 任务类型 | 领域 |
+|--------|--------|--------|----------|------|
+| Bike Sharing | 17,379 | 16 | 需求预测 | 交通 |
+| Wine Quality | 6,497 | 11 | 质量评分 | 食品 |
+| Ames Housing | 2,919 | 79 | 房价预测 | 房地产 |
+| California Housing | 20,640 | 8* | 价值估计 | 房地产 |
 
-#### [03. 有序分类：评分预测](03_ordinal/)
-- **📁 文件**: `rating_prediction.py`  
-- **🎯 任务**: 电影星级评分预测（1-5星）
-- **💡 重点展示**:
-  - **新功能**: 离散有序激活 (CausalEngine v2.0.4)
-  - 类别间顺序关系保持
-  - 阈值自动学习机制
-  - 有序分类特殊评估指标
-- **📊 数据**: 模拟电影评分数据
-- **⭐ 亮点**: 相邻准确率 vs 精确准确率分析
-
-### 🔥 高级应用教程（多任务）
-
-#### [04. 混合任务：电商评论综合分析](04_multitask/)
-- **📁 文件**: `ecommerce_analysis.py`
-- **🎯 任务**: 同时预测情感(分类) + 评分(有序) + 有用性(回归)
-- **💡 重点展示**:
-  - **核心特色**: 混合激活模式
-  - 共享因果表征的优势
-  - 多任务协同学习效应
-  - 动态任务权重平衡
-- **📊 数据**: 模拟电商评论多维数据
-- **⭐ 亮点**: 单个模型处理三种不同输出类型
-
-#### [05. 语言模型：CausalQwen 应用](05_language_model/) ⏳
-- **📁 文件**: `causal_qwen_demo.py`
-- **🎯 任务**: 可控文本生成 + 情感控制
-- **💡 重点展示**:
-  - CausalQwen 完整工作流程
-  - 语言模型中的因果推理
-  - 生成质量 vs 多样性权衡
-- **📊 数据**: 小规模中文语料
-- **⭐ 亮点**: 真实语言模型应用案例
-
-### 🔬 深度分析教程
-
-#### [06. 对比分析：传统方法 vs CausalEngine](06_comparison/) ⏳
-- **📁 文件**: `comprehensive_comparison.py`
-- **🎯 目标**: 全面性能基准测试
-- **💡 重点展示**:
-  - 多个数据集上的系统对比
-  - 收敛速度和稳定性分析
-  - 计算效率对比
-  - 不确定性校准质量评估
-- **📊 数据**: 多个公开基准数据集
-- **⭐ 亮点**: 科学严谨的对比实验
+*通过特征工程扩展至10+特征
 
 ## 🚀 快速开始
 
 ### 环境准备
 ```bash
 # 安装依赖
-pip install torch transformers numpy matplotlib seaborn scikit-learn
+pip install torch transformers numpy pandas scikit-learn matplotlib seaborn
 
-# 克隆仓库
-cd /path/to/CausalQwen
+# 运行快速测试
+python tutorials/00_getting_started/basic_usage.py
 ```
 
-### 运行第一个教程
-```bash
-# 情感分析教程
-cd tutorials/01_classification/
-python sentiment_analysis.py
-```
-
-### 预期输出
-每个教程都会：
-1. 📊 创建/加载相应数据集
-2. 🏗️ 构建 CausalEngine 模型
-3. 🚀 训练并对比基线方法
-4. 🔍 评估三种推理模式
-5. 📈 生成详细的可视化分析
-6. 📋 输出性能总结报告
-
-## 📋 教程特色
-
-### ✨ 统一的设计模式
-每个教程遵循一致的结构：
-- **数据准备**: 真实或高质量模拟数据
-- **模型构建**: 清晰的 CausalEngine 配置
-- **训练过程**: 完整的训练循环和验证
-- **性能评估**: 多维度指标和可视化
-- **对比分析**: 与传统方法的科学对比
-
-### 🎯 重点展示的 CausalEngine 优势
-1. **数学严谨性**: 基于柯西分布的解析计算
-2. **不确定性量化**: 原生支持预测不确定性
-3. **推理模式多样性**: 因果/标准/采样三种模式
-4. **任务类型丰富**: 分类/回归/有序分类/混合任务
-5. **异常值鲁棒性**: 柯西分布的天然优势
-6. **参数效率**: 多任务共享表征
-
-### 📊 可视化分析
-每个教程包含丰富的可视化：
-- 📈 训练曲线和收敛分析
-- 📊 性能对比条形图和热力图
-- 🎯 预测 vs 真实值散点图
-- 📐 不确定性分布和预测区间
-- 🔍 混淆矩阵和分类报告
-- 🎨 共享表征空间可视化
-
-## 🔧 自定义和扩展
-
-### 修改数据集
-每个教程都支持简单的数据集替换：
+### 三步体验 CausalEngine
 ```python
-# 在 create_sample_data() 或 load_and_prepare_data() 中
-# 替换为你自己的数据加载逻辑
-features, labels = your_data_loading_function()
-```
+from causal_engine import CausalEngine
 
-### 调整模型架构
-```python
-# 修改 CausalEngine 配置
+# 1. 创建引擎
 engine = CausalEngine(
-    hidden_size=256,  # 增加隐藏层大小
-    vocab_size=num_classes,
-    activation_modes=your_activation_modes,
-    # ... 其他参数
+    hidden_size=128,
+    vocab_size=10,  # 分类类别数
+    causal_size=128,
+    activation_modes="classification"
 )
+
+# 2. 因果推理
+hidden_states = torch.randn(32, 10, 128)  # (batch, seq, hidden)
+output = engine(hidden_states, temperature=1.0, do_sample=True)
+
+# 3. 获取预测
+predictions = output.logits.argmax(dim=-1)
 ```
 
-### 添加新的评估指标
-```python
-# 在相应的评估函数中添加新指标
-def evaluate_model(predictions, targets):
-    # 现有指标
-    accuracy = accuracy_score(targets, predictions)
-    
-    # 你的新指标
-    your_metric = your_metric_function(targets, predictions)
-    
-    return {'accuracy': accuracy, 'your_metric': your_metric}
-```
-
-## 🎓 学习路径建议
+## 📖 学习路径
 
 ### 初学者路径
-1. 🟢 **01-分类教程**: 理解基本概念和分类激活
-2. 🟢 **02-回归教程**: 学习回归任务和不确定性
-3. 🟢 **03-有序分类**: 掌握新的有序激活功能
+1. **基础概念**: `00_getting_started/` - 理解因果vs相关
+2. **简单任务**: `01_classification/adult_income_prediction.py` - 第一个分类项目
+3. **回归实战**: `02_regression/bike_sharing_demand.py` - 第一个回归项目
+4. **消融分析**: `03_ablation_studies/loc_only_vs_full_engine.py` - 理解优势
 
-### 进阶路径  
-4. 🔥 **04-多任务教程**: 理解混合激活和共享表征
-5. 🔥 **05-语言模型**: 学习 CausalQwen 应用
-6. 🔬 **06-对比分析**: 深入理解性能优势
+### 研究者路径
+1. **理论基础**: 阅读 `causal_engine/MATHEMATICAL_FOUNDATIONS.md`
+2. **全面评估**: 运行 `03_ablation_studies/comprehensive_comparison.py`
+3. **高级分析**: 探索 `04_advanced_topics/` 目录
+4. **自定义实验**: 基于框架开发新的评估
 
-## 📞 获取帮助
+## 🔬 消融实验说明
 
-### 常见问题
-- **Q**: 为什么我的结果与教程略有不同？
-- **A**: 这是正常的！随机种子和数据生成可能导致小幅差异。关注整体趋势和相对性能。
+### 实验设计原理
+CausalEngine 的核心假设是：**仅使用位置输出(loc)时，它等价于传统神经网络**。通过这个消融实验，我们可以量化因果推理（位置+尺度）相比传统方法的提升。
 
-- **Q**: 如何在自己的数据上使用 CausalEngine？
-- **A**: 参考教程中的数据预处理部分，确保特征标准化和标签格式正确。
+### 三种算法对比
+```python
+# 1. 传统神经网络 (Baseline)
+class TraditionalMLP:
+    def forward(self, x):
+        return self.layers(x)  # 直接映射
 
-- **Q**: 哪种推理模式最适合我的任务？
-- **A**: 一般建议：纯因果模式用于稳定预测，标准模式平衡性能和不确定性，采样模式用于探索多样性。
+# 2. CausalEngine消融版本 (仅位置输出)
+class CausalEngineAblated:
+    def forward(self, x):
+        return self.abduction_network.loc_net(x)  # 仅使用loc
 
-### 技术支持
-- 📖 查看 [CausalEngine 文档](../causal_engine/README.md)
-- 🔍 阅读 [数学基础](../causal_engine/MATHEMATICAL_FOUNDATIONS_CN.md)  
-- 🏗️ 参考 [架构决策](../causal_engine/misc/ARCHITECTURE_DECISION.md)
+# 3. 完整CausalEngine (位置+尺度)
+class CausalEngineFull:
+    def forward(self, x):
+        return self.causal_reasoning(x)  # U ~ Cauchy(loc, scale)
+```
 
-## 🌟 贡献
+### 评估指标
+- **分类**: Accuracy, Precision, Recall, F1-Score, AUC-ROC
+- **回归**: MAE, MSE, RMSE, R², MAPE
+- **不确定性**: 预测置信度分析
+- **统计检验**: t-test, Wilcoxon signed-rank test
 
-我们欢迎社区贡献更多教程和改进建议！如果你：
-- 🆕 开发了新的应用场景教程
-- 🔧 发现了可以改进的地方
-- 📊 有更好的可视化想法
-- 🐛 发现了 Bug
+## 🎯 预期结果
 
-请通过 GitHub Issues 或 Pull Requests 与我们联系。
+基于CausalEngine的理论基础，我们预期：
+
+1. **传统神经网络 ≈ CausalEngine消融版本**: 验证理论一致性
+2. **完整CausalEngine > CausalEngine消融版本**: 证明因果推理优势
+3. **温度效应**: 不同温度下性能的变化规律
+4. **不确定性量化**: 更准确的预测置信度
+
+## 📁 目录结构
+
+```
+tutorials/
+├── 00_getting_started/     # 快速入门教程
+├── 01_classification/      # 分类任务实战
+├── 02_regression/          # 回归任务实战
+├── 03_ablation_studies/    # 消融实验核心
+├── 04_advanced_topics/     # 高级主题探索
+└── utils/                  # 通用工具函数
+```
+
+## 🤝 贡献指南
+
+欢迎贡献新的数据集、实验设计或分析方法！请遵循以下步骤：
+
+1. Fork 项目并创建新分支
+2. 添加你的实验或教程
+3. 确保代码符合项目风格
+4. 提交 Pull Request
+
+## 📄 引用
+
+如果你在研究中使用了这个框架，请引用：
+```bibtex
+@software{causal_engine_tutorials,
+  title={CausalEngine Tutorial and Evaluation Framework},
+  author={CausalQwen Team},
+  year={2024},
+  url={https://github.com/causalqwen/causal-engine}
+}
+```
 
 ---
 
-**让我们一起探索 CausalEngine 的强大潜力，体验真正的因果推理在机器学习中的魅力！** 🚀✨
+🚀 **开始你的因果推理之旅，见证AI从模式匹配到因果理解的革命性转变！**

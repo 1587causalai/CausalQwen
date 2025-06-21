@@ -49,6 +49,7 @@ pip install torch transformers numpy
 
 # Development dependencies  
 pip install -e .[dev]  # Includes pytest, black, isort, flake8, mypy
+pip install pytest-cov  # For coverage reports
 
 # Full installation with docs
 pip install -e .[dev,docs]
@@ -61,6 +62,14 @@ The project uses standard Python tools configured in setup.py:
 - **isort**: Import sorting  
 - **flake8**: Linting
 - **mypy**: Type checking
+
+```bash
+# Code formatting and linting
+black src/ tests/
+isort src/ tests/
+flake8 src/ tests/
+mypy src/
+```
 
 ## Core Mathematical Framework
 

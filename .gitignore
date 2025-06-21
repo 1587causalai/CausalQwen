@@ -40,6 +40,7 @@ venv.bak/
 *.ckpt
 
 # Data
+data/
 data/raw/
 data/processed/
 data/external/
@@ -53,12 +54,12 @@ logs/
 
 # Results
 results/
-!results/*.png
 outputs/
 
 # Temporary files
 tmp/
 temp/
+*.png
 
 # OS specific
 .DS_Store
