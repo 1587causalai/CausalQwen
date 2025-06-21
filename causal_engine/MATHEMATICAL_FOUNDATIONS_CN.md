@@ -25,12 +25,13 @@ $$Y = f(U, \varepsilon)$$
 - $\varepsilon$: 外生噪声（Exogenous Noise）
 - $f$: 普适因果机制（Universal Causal Mechanism）
 
-### 两阶段架构
+### CausalEngine 架构
 
 CausalEngine 的设计基于一个深刻的洞察：真正的智能不是模仿，而是理解。这种理解通过两个核心阶段实现：
 
 1. **归因（Abduction）**：从观测推断个体的内在表征
-2. **行动（Action）**：基于个体表征生成决策并输出结果
+2. **行动（Action）**：基于个体表征生成决策得分
+3. **任务激活（Task Activation）**：将决策得分转化为任务特定的输出
 
 ```mermaid
 graph TB
@@ -44,14 +45,14 @@ graph TB
     
     subgraph Stage2_Detail ["行动阶段细节"]
         direction TB
+        Modes["🔧 推理模式<br/>🌡️ 标准: 扩大不确定性<br/>🎲 采样: 探索多样性<br/>⚖️ 因果: 纯粹推理"]
         Step2_1["💫 决策得分生成<br/>S = W·(U + b_noise·ε) + b"]
-        Step2_2["✨ 任务激活<br/>f_k(s_k) → 输出"]
-        Step2_1 --> Step2_2
+        Step2_1 --> Modes
     end
     
     Stage2 -.-> Stage2_Detail
     
-    Stage2 --> MultiTask["🎯 多任务输出"]
+    Stage2 --> MultiTask["🎯 任务激活"]
     
     subgraph Tasks ["支持的任务类型"]
         direction LR
@@ -60,8 +61,7 @@ graph TB
     
     MultiTask --> Tasks
     
-    %% 推理模式
-    Stage2 -.->|推理时调制| Modes["🔧 推理模式<br/>🌡️ 标准: 扩大不确定性<br/>🎲 采样: 探索多样性<br/>⚖️ 因果: 纯粹推理"]
+
     
     %% 样式
     style Evidence fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000
@@ -118,63 +118,7 @@ $$p(U|E) = \frac{1}{\pi\gamma_U} \cdot \frac{1}{1 + \left(\frac{U - \mu_U}{\gamm
 
 #### 阶段2：行动决策（Action）
 
-这是因果链条中的核心驱动环节。它接收代表个体的分布 $U \sim \text{Cauchy}(\mu_U, \gamma_U)$，通过因果机制生成决策得分 $S$，并最终转化为任务特定的输出。
-
-```mermaid
-graph TB
-    %% 行动阶段内部结构
-    
-    U2["🎲 个体分布 U<br/>（来自归因阶段）"]
-    
-    U2 --> Step1["💫 步骤1: 决策得分生成"]
-    
-    subgraph ScoreGen ["决策得分生成细节"]
-        direction TB
-        SG1["🌊 噪声注入<br/>U' = U + b_noise·ε"]
-        SG2["🔄 线性变换<br/>S = W_A·U' + b_A"]
-        SG3["💫 输出: S ~ Cauchy(loc_S, scale_S)"]
-        SG1 --> SG2 --> SG3
-    end
-    
-    Step1 -.-> ScoreGen
-    
-    Step1 --> S2["💫 决策得分 S<br/>S = [S₁, S₂, ..., S_V]"]
-    
-    S2 --> Step2["✨ 步骤2: 任务激活"]
-    
-    subgraph TaskAct ["任务激活细节"]
-        direction TB
-        TA1["🎯 应用任务激活函数 f_k(s_k)"]
-        TA2["📊 解析计算输出概率/分布"]
-        TA1 --> TA2
-    end
-    
-    Step2 -.-> TaskAct
-    
-    Step2 --> Token2["🔤 词元输出<br/>(OvR) P(S_k > C_k)"]
-    Step2 --> Numeric2["📈 数值输出<br/>w_k·S_k + b_k"]
-    Step2 --> Discrete2["🔢 离散输出<br/>P(C_{k,i} < S_k ≤ C_{k,i+1})"]
-    
-    Token2 --> Final["🎉 最终决策"]
-    Numeric2 --> Final
-    Discrete2 --> Final
-    
-    %% 样式
-    style U2 fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
-    style Step1 fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000
-    style Step2 fill:#e3f2fd,stroke:#2196f3,stroke-width:2px,color:#000
-    style S2 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
-    style Final fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
-    
-    style ScoreGen fill:#fff8e1,stroke:#ffa000,stroke-width:1px,color:#000
-    style TaskAct fill:#e8eaf6,stroke:#3f51b5,stroke-width:1px,color:#000
-    
-    style Token2 fill:#e3f2fd,stroke:#1976d2,color:#000
-    style Numeric2 fill:#e8f5e9,stroke:#388e3c,color:#000
-    style Discrete2 fill:#fce4ec,stroke:#c2185b,color:#000
-```
-
-行动阶段包含两个主要组件：
+结构方程 $Y=f(U, \varepsilon)$ 被分解成两个过程: 1）生成决策得分；2）应用任务激活函数。
 
 ##### 2.1 决策得分生成
 
@@ -238,76 +182,85 @@ graph TB
 
 通过反向传播，模型会自动学习噪声强度参数 $\mathbf{b}_{\text{noise}}$ 的大小，从而为不同任务适配最优的不确定性。
 
-##### 2.2 任务激活函数
 
-##### 两个视角的统一
+##### 2.2 确定性计算任务输出
 
-在理解任务激活函数时，有两个互补的视角：
+因果关系的链路是： 接收代表个体的分布 $U \sim \text{Cauchy}(\mu_U, \gamma_U)$，通过因果机制生成决策得分 $S$，并最终转化为任务特定的输出。
 
 ```mermaid
 graph TB
-    %% CausalEngine核心创新对比图
+    %% 行动阶段内部结构
     
-    Title["💡 CausalEngine 核心创新"]
+    U2["🎲 个体分布 U<br/>（来自归因阶段）"]
     
-    Title --> VS{" VS "}
+    U2 --> Step1["💫 步骤1: 决策得分生成"]
     
-    VS --> Traditional["🏛️ 传统方法"]
-    VS --> CausalEngine["🚀 CausalEngine"]
-    
-    subgraph TraditionalFlow [" "]
+    subgraph ScoreGen ["决策得分生成细节"]
         direction TB
-        T1["📊 随机变量 X"]
-        T2["📈 计算期望值 E[Y|X]"]
-        T3["🎯 基于期望预测"]
-        T4["❌ 柯西分布：期望不存在"]
-        
-        T1 --> T2 --> T3 --> T4
+        SG1["🌊 噪声注入<br/>U' = U + b_noise·ε"]
+        SG2["🔄 线性变换<br/>S = W_A·U' + b_A"]
+        SG3["💫 输出: S ~ Cauchy(loc_S, scale_S)"]
+        SG1 --> SG2 --> SG3
     end
     
-    subgraph CausalFlow ["✨ 解析计算概率"]
+    Step1 -.-> ScoreGen
+    
+    Step1 --> S2["💫 决策得分 S<br/>S = [S₁, S₂, ..., S_V]"]
+    
+    S2 --> Step2["✨ 步骤2: 任务激活"]
+    
+    subgraph TaskAct ["任务激活细节"]
         direction TB
-        C1["🎲 决策得分 S ~ Cauchy"]
-        C2["⚡ 直接应用激活函数"]
-        
-        subgraph TaskExamples [" "]
-            E1["🔤 P(S > threshold)"]
-            E2["📊 Linear(S)"]  
-            E3["🔢 P(a < S ≤ b)"]
-        end
-        
-        C1 --> C2 --> TaskExamples
+        TA1["🎯 应用任务激活函数 f_k(s_k)"]
+        TA2["📊 解析计算输出概率/分布"]
+        TA1 --> TA2
     end
     
-    Traditional -.-> TraditionalFlow
-    CausalEngine -.-> CausalFlow
+    Step2 -.-> TaskAct
     
-    TraditionalFlow --> Result["🌟 突破：分布即预测"]
-    CausalFlow --> Result
+    Step2 --> Token2["🔤 词元输出<br/>(OvR) P(S_k > C_k)"]
+    Step2 --> Numeric2["📈 数值输出<br/>w_k·S_k + b_k"]
+    Step2 --> Discrete2["🔢 离散输出<br/>P(C_{k,i} < S_k ≤ C_{k,i+1})"]
+    
+    Token2 --> Final["🎉 最终决策"]
+    Numeric2 --> Final
+    Discrete2 --> Final
     
     %% 样式
-    style Title fill:#fff3e0,stroke:#f57c00,stroke-width:3px,color:#000
-    style VS fill:#f5f5f5,stroke:#9e9e9e,stroke-width:2px,color:#000
-    style Traditional fill:#ffebee,stroke:#d32f2f,stroke-width:2px,color:#000
-    style CausalEngine fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#000
-    style Result fill:#e1f5fe,stroke:#0277bd,stroke-width:3px,color:#000
+    style U2 fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+    style Step1 fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000
+    style Step2 fill:#e3f2fd,stroke:#2196f3,stroke-width:2px,color:#000
+    style S2 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+    style Final fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
     
-    style TraditionalFlow fill:#ffffff,stroke:#e0e0e0,stroke-width:1px,color:#000
-    style CausalFlow fill:#ffffff,stroke:#e0e0e0,stroke-width:1px,color:#000
-    style TaskExamples fill:#f1f8e9,stroke:#689f38,stroke-width:1px,color:#000
+    style ScoreGen fill:#fff8e1,stroke:#ffa000,stroke-width:1px,color:#000
+    style TaskAct fill:#e8eaf6,stroke:#3f51b5,stroke-width:1px,color:#000
+    
+    style Token2 fill:#e3f2fd,stroke:#1976d2,color:#000
+    style Numeric2 fill:#e8f5e9,stroke:#388e3c,color:#000
+    style Discrete2 fill:#fce4ec,stroke:#c2185b,color:#000
 ```
 
-任务激活是行动阶段的核心组成部分。它定义了一系列**基础激活函数**，这些函数独立地作用于高维决策得分向量 $S = [S_1, ..., S_V]$ 的**每一个分量 $S_k$**。这些函数构成了最底层的、确定性的因果机制。
+接下来我们讨论如何具体的从决策得分计算任务输出。
 
-模型的巧妙之处在于，它利用柯西分布的数学特性，在训练时无需对每个分量 $S_k$ 进行真正采样，而是解析地计算这些函数作用于整个分布后的概率或新分布。
+#### 阶段3：任务激活和损失函数计算
+
+##### 两个视角的统一
+
+任务激活是 CausalEngine 的核心组成部分。它定义了一系列**基础任务激活函数**，这些函数独立地作用于高维决策得分向量 $S = [S_1, ..., S_V]$ 的**每一个分量 $S_k$**。这些函数构成了最底层的、确定性的因果机制。CausalEngine 的巧妙之处在于，它利用柯西分布的数学特性，在训练时无需对每个分量 $S_k$ 进行真正采样，而是解析地计算这些函数作用于整个分布后的概率或新分布。
+
+
 
 **关键区分**：
 - **训练时（分布视角）**：我们操作的是随机变量 $S_k \sim \text{Cauchy}(\text{loc}_k, \text{scale}_k)$，通过解析计算得到激活概率或变换后的分布，无需采样。
-- **推理时（数值视角）**：我们可以从分布中采样得到具体数值 $s_k$，然后直接应用激活函数 $f_k(s_k)$ 得到确定性输出。这个体现了 DiscoSCM 的底层逻辑。 
+- **推理时（数值视角）**：我们可以从分布中采样得到具体数值 $s_k$，然后直接应用激活函数 $f_k(s_k)$ 得到确定性输出。这个体现了结构方程 $Y=f(U, \varepsilon)$ 的底层逻辑。 
 
-**核心创新**：$f_k(s_k)$ 是确定性函数，但输入 $S_k$ 的随机性导致输出的随机性。我们用随机变量本身来预测结果，而不是用其统计量（如期望）——这正是CausalEngine与传统方法的根本区别。
+
+##### 确定性任务激活函数
+
 
 对于决策得分向量 $S$ 的第 $k$ 个分量（其本身是一个随机变量 $S_k \sim \text{Cauchy}(\text{loc}_k, \text{scale}_k)$），我们定义一个作用于其任意一个实现值 $s_k$ 的基础激活函数 $f_k(s_k)$：
+
 
 1.  **词元索引激活**:
     $$f_k(s_k) = I(s_k > C_k)$$
@@ -321,7 +274,13 @@ graph TB
     $$f_k(s_k) = \sum_{i} y_i \cdot I(C_{k,i} < s_k \le C_{k,i+1})$$
     其中 $y_i$ 是有序离散输出值, 例如月份，$C_{k,i}$ 是可学习的区间边界（阈值）。
 
-##### 核心创新：用随机变量预测
+
+
+
+##### 随机变量的计算
+
+
+$f_k(s_k)$ 是确定性函数，但输入 $S_k$ 的随机性导致输出的随机性。我们用随机变量本身来预测结果，而不是用其统计量（如期望）——这正是CausalEngine与传统方法的根本区别。
 
 ```mermaid
 graph TB
@@ -378,7 +337,8 @@ graph TB
     style Insight fill:#fff3e0,stroke:#ff9800,stroke-width:3px
 ```
 
-各任务的解析计算与损失函数如下：
+##### 损失函数的计算
+CausalEngine 的一个关键优势是其任务无关性。通过定义不同的任务激活函数，同一个决策得分 $S$ 可以用于多种预测任务。各任务的解析计算与损失函数如下：
 
 ```mermaid
 graph LR
@@ -392,21 +352,21 @@ graph LR
     
     subgraph Token ["🔤 词元分类"]
         direction LR
-        T1["<b>激活与概率</b><br/>f(s_k) = I(s_k > C_k)<br/>P_k = 1/2 + arctan((μ_k - C_k)/γ_k)/π"]
+        T1["<b>任务激活与概率</b><br/>f(s_k) = I(s_k > C_k)<br/>P_k = 1/2 + arctan((μ_k - C_k)/γ_k)/π"]
         T2["<b>输出和损失</b><br/>argmax_k P_k <br/>OvR BCE Loss"]
         T1 --> T2
     end
     
     subgraph Numeric ["📊 数值回归"]
         direction LR
-        N1["<b>激活与分布</b><br/>f(s_k) = w_k·s_k + b_k<br/>Y_k ~ Cauchy(w_k·μ_k+b_k, |w_k|·γ_k)"]
+        N1["<b>任务激活与分布</b><br/>f(s_k) = w_k·s_k + b_k<br/>Y_k ~ Cauchy(w_k·μ_k+b_k, |w_k|·γ_k)"]
         N2["<b>输出和损失</b><br/>ŷ_k = w_k·μ_k + b_k <br/> Cauchy NLL Loss"]
         N1 --> N2
     end
     
     subgraph Discrete ["🔢 有序分类"]
         direction LR
-        D1["<b>激活与概率</b><br/>f(s_k) = ∑y_i·I(C_{k,i} < s_k ≤ C_{k,i+1})<br/>P(y_i) = F(C_{k,i+1}) - F(C_{k,i})"]
+        D1["<b>任务激活与概率</b><br/>f(s_k) = ∑y_i·I(C_{k,i} < s_k ≤ C_{k,i+1})<br/>P(y_i) = F(C_{k,i+1}) - F(C_{k,i})"]
         D2["<b>输出和损失</b><br/>argmax_i P(y_i) <br/>交叉熵 Loss"]
         D1 --> D2
     end
@@ -431,13 +391,10 @@ graph LR
     style Discrete fill:#fce4ec,stroke:#d32f2f,stroke-width:2px,color:#000
 ```
 
-##### 任务特定的激活函数
 
-CausalEngine 的一个关键优势是其任务无关性。通过定义不同的激活函数，同一个决策得分 $S$ 可以用于多种预测任务：
+**1. 词元索引任务激活（分类任务）**
 
-**1. 词元索引激活（分类任务）**
-
--   **目标**: 对每个分量 $k$，计算其基础激活函数输出为1的概率，即 $P(f_k(S_k) = 1)$。
+-   **目标**: 对每个分量 $k$，计算其基础任务激活函数输出为1的概率，即 $P(f_k(S_k) = 1)$。
 -   **解析推导**:
     $$P(f_k(S_k)=1) = P(I(S_k > C_k)=1) = P(S_k > C_k)$$
     利用柯西分布的累积分布函数(CDF)，我们可以直接计算这个概率：
@@ -449,31 +406,35 @@ CausalEngine 的一个关键优势是其任务无关性。通过定义不同的�
     $$\mathcal{L}_{\text{token}} = -\sum_{k=1}^V \left[ y_k \log P_k + (1-y_k) \log(1-P_k) \right]$$
     其中 $y_k$ 是真实标签的 one-hot 编码。
 
-**2. 数值激活（回归任务）**
+**2. 数值任务激活（回归任务）**
 
--   **目标**: 对每个分量 $k$，得到基础激活函数作用后，输出变量的分布。
+-   **目标**: 对每个分量 $k$，得到基础任务激活函数作用后，输出变量的分布。
+-   **参数**: 此任务激活头包含可学习的权重 $w_k$ 和偏置 $b_k$。
 -   **解析推导**: 基础函数是线性变换 $f_k(s_k) = w_k s_k + b_k$。根据柯西分布的线性稳定性：
     如果 $S_k \sim \text{Cauchy}(\text{loc}_{S_k}, \text{scale}_{S_k})$，
-    那么 $f_k(S_k) \sim \text{Cauchy}(w_k \text{loc}_{S_k} + b_k, |w_k| \text{scale}_{S_k})$。
--   **损失函数**: 对每个分量，基于这个推导出的输出分布，使用**柯西分布的负对数似然损失**。
+    那么输出 $Y_k = f_k(S_k)$ 的分布为：
+    $$Y_k \sim \text{Cauchy}(\mu_{Y_k}, \gamma_{Y_k}) = \text{Cauchy}(w_k \text{loc}_{S_k} + b_k, |w_k| \text{scale}_{S_k})$$
+-   **损失函数**: 对每个分量，基于这个推导出的输出分布，使用**柯西分布的负对数似然损失 (Cauchy NLL Loss)**。对于真实值 $y_k$，其损失为：
+    $$\mathcal{L}_{\text{reg}, k} = \log(\pi\gamma_{Y_k}) + \log\left(1 + \left(\frac{y_k - \mu_{Y_k}}{\gamma_{Y_k}}\right)^2\right)$$
 
-**3. 离散有序数值激活（有序分类任务）**
+**3. 离散有序数值任务激活（有序分类任务）**
 
--   **目标**: 对每个分量 $k$，计算其激活函数输出为特定数值 $y_i$ 的概率，即 $P(f_k(S_k) = y_i)$。
+-   **目标**: 对每个分量 $k$，计算其任务激活函数输出为特定数值 $y_i$ 的概率，即 $P(f_k(S_k) = y_i)$。
 -   **解析推导**:
     $$P(f_k(S_k)=y_i) = P(\sum_{j} y_j \cdot I(C_{k,j} < S_k \le C_{k, j+1}) = y_i) = P(C_{k,i} < S_k \le C_{k,i+1})$$
     利用柯西CDF，我们可以直接计算这个区间概率：
     $$P(C_{k,i} < S_k \le C_{k,i+1}) = F(C_{k,i+1}) - F(C_{k,i}) \\
     = \frac{1}{\pi}\left[\arctan\left(\frac{C_{k,i+1} - \text{loc}_{S_k}}{\text{scale}_{S_k}}\right) - \arctan\left(\frac{C_{k,i} - \text{loc}_{S_k}}{\text{scale}_{S_k}}\right)\right]$$
 -   **损失函数**: 将所有可能的数值 $y_i$ 视为不同类别，对每个分量使用标准的**分类交叉熵损失**。
+    $$\mathcal{L}_{\text{ordinal}, k} = -\sum_{i} y_i \log P(y_i)$$
 
-##### 任务扩展性
+##### 更多任务扩展性
 
 CausalEngine 的数学框架具有天然的扩展性。添加新任务只需：
 
-1. 定义基础激活函数 $f_k(s_k)$
+1. 定义基础任务激活函数 $f_k(s_k)$
 2. 推导其在柯西分布下的解析形式
-3. 实现相应的损失函数
+3. 实现相应的分布损失函数
 
 例如，时间预测任务可以定义为：
 $$f_k(s_k) = \exp(w_k \cdot s_k + b_k)$$
@@ -488,7 +449,7 @@ $$\mathcal{L}_{\text{total}} = \sum_{t \in \text{tasks}} w_t \cdot \mathcal{L}_t
 
 ## 推理模式：对噪声的灵活调制
 
-CausalEngine 通过一个统一的数学框架实现了对不确定性的精确控制。在推理阶段，我们通过 `temperature` 和 `do_sample` 两个参数调制已学习的外生噪声 $\mathbf{b}_{\text{noise}}$，从而在同一模型中实现从确定性推理到创造性生成的连续谱。
+CausalEngine 通过一个统一的数学框架实现了对不确定性的精确控制。在推理阶段，我们通过 `temperature` 和 `do_sample` 两个参数调制已学习的外生噪声 $\mathbf{b}_{\text{noise}}$，以实现从确定性推理到创造性生成的连续谱。
 
 ### 1. 标准模式 (Standard Mode)
 - **设置**: `do_sample=False`, `temperature > 0`
@@ -683,6 +644,6 @@ CausalEngine 提供了一个数学上完备、计算上高效的因果推理算�
 CausalEngine 不仅支持传统的词元预测，还原生支持：
 - **连续数值预测**：通过线性变换保持柯西分布性质
 - **离散有序预测**：通过区间概率的解析计算
-- **多任务学习**：通过独立的激活函数组合
+- **多任务学习**：通过独立的任务激活函数组合
 
 这种设计使得CausalEngine成为一个真正通用的智能算法，能够作为各类应用的基础引擎。其数学优雅性和工程实用性的结合，为构建下一代智能系统提供了坚实的理论基础。 

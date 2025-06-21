@@ -329,7 +329,7 @@ $$S_{k,i} \sim \text{Cauchy}(\text{loc}_{S_{k,i}}, \text{scale}_{S_{k,i}})$$
 
 其中：
 - **位置参数**：$\text{loc}_{S_{k,i}} = W_{\text{cls},k} \cdot \text{loc}_{U_i} + b_{\text{cls},k}$
-- **尺度参数**：$\text{scale}_{S_{k,i}} = (\text{scale}_{U_i} + |\mathbf{b}_{\text{noise}}|) \cdot |W_{\text{cls},k}|$$
+- **尺度参数**：$\text{scale}_{S_{k,i}} = (\text{scale}_{U_i} + |\mathbf{b}_{\text{noise}}|) \cdot |W_{\text{cls},k}|$
 
 通过反向传播，模型会自动学习噪声强度参数 $\mathbf{b}_{\text{noise}}$ 的大小，从而为不同任务适配最优的不确定性。
 
@@ -856,10 +856,10 @@ $$ \mathcal{L} = \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ \frac{1}{|S|} \sum_{
 
 CausalQwen 的核心创新在于：
 
-1. **因果分解**：将生成过程分解为"个体推断"和"基于个体的决策"
-2. **数学优雅**：利用柯西分布的性质实现高效计算
-3. **因果生成**：通过去除噪声，实现确定性的因果生成
-4. **理论基础**：基于严格的因果推理理论
+1.  **因果分解**：将生成过程分解为"个体推断"和"基于个体的决策"
+2.  **数学优雅**：利用柯西分布的性质实现高效计算
+3.  **因果生成**：通过去除噪声，实现确定性的因果生成
+4.  **理论基础**：基于严格的因果推理理论
 
 
 
