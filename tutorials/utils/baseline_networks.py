@@ -459,12 +459,12 @@ class BaselineTrainer:
         self,
         model: nn.Module,
         device: str = "cpu",
-        learning_rate: float = 0.001,
+        learning_rate: float = 1e-4,
         weight_decay: float = 0.01
     ):
         self.model = model.to(device)
         self.device = device
-        self.optimizer = torch.optim.Adam(
+        self.optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=learning_rate,
             weight_decay=weight_decay

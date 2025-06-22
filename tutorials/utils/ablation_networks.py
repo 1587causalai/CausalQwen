@@ -285,8 +285,8 @@ class AblationTrainer:
         self,
         engine: CausalEngine,
         wrapper: AblationCausalEngineWrapper,
-        lr: float = 1e-3,
-        weight_decay: float = 1e-4
+        lr: float = 1e-4,
+        weight_decay: float = 0.01
     ):
         """
         初始化训练器

@@ -331,6 +331,11 @@ class ActionNetwork(nn.Module):
             # 其中 ε ~ Cauchy(0,1) 通过逆变换采样: ε = tan(π(uniform - 0.5))
             uniform_sample = torch.rand_like(loc_U)
             epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))  # 标准柯西分布采样
+            
+            # 数值稳定性：限制极端值，避免数值溢出
+            # 柯西分布理论上可以产生无限大的值，但在实际应用中需要数值稳定性
+            epsilon = torch.clamp(epsilon, min=-10.0, max=10.0)
+            
             loc_U_final = loc_U + temperature * torch.abs(self.b_noise) * epsilon
             scale_U_final = scale_U
             

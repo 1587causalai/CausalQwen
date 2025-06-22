@@ -182,7 +182,8 @@ class ActivationHead(nn.Module):
             scale_S_cls = scale_S[:, :, self.classification_dims]
             
             # 计算概率：应用柯西分布CDF的解析公式
-            normalized_diff = (loc_S_cls - self.classification_thresholds) / scale_S_cls
+            # 添加小的epsilon防止除零错误
+            normalized_diff = (loc_S_cls - self.classification_thresholds) / (scale_S_cls + 1e-8)
             probs = 0.5 + (1 / torch.pi) * torch.atan(normalized_diff)
             
             # 填充输出
@@ -234,7 +235,7 @@ class ActivationHead(nn.Module):
                         upper_prob = torch.ones_like(loc_S_ord)
                     else:
                         upper_threshold = full_thresholds[k + 1]
-                        upper_prob = 0.5 + (1 / torch.pi) * torch.atan((upper_threshold - loc_S_ord) / scale_S_ord)
+                        upper_prob = 0.5 + (1 / torch.pi) * torch.atan((upper_threshold - loc_S_ord) / (scale_S_ord + 1e-8))
                     
                     # 下界概率
                     if k == 0:
@@ -242,7 +243,7 @@ class ActivationHead(nn.Module):
                         lower_prob = torch.zeros_like(loc_S_ord)
                     else:
                         lower_threshold = full_thresholds[k]
-                        lower_prob = 0.5 + (1 / torch.pi) * torch.atan((lower_threshold - loc_S_ord) / scale_S_ord)
+                        lower_prob = 0.5 + (1 / torch.pi) * torch.atan((lower_threshold - loc_S_ord) / (scale_S_ord + 1e-8))
                     
                     # 区间概率
                     prob_k = upper_prob - lower_prob

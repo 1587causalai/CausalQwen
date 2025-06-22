@@ -1,8 +1,17 @@
 """
-CausalEngine 基础使用教程
-演示如何使用CausalEngine进行简单的分类和回归任务
+CausalEngine 基础使用教程 (2024更新版)
+=========================================
 
-这是您开始使用CausalEngine的第一个示例！
+基于最新的基准测试协议和数学理论更新
+演示如何使用CausalEngine进行因果推理驱动的分类和回归任务
+
+核心更新:
+- 基于基准测试协议的标准化参数配置
+- 四种推理模式的完整演示
+- 固定噪声vs自适应噪声的对比实验设计
+- 三种任务激活机制的应用示例
+
+这是您开始使用CausalEngine的第一个完整示例！
 """
 
 import sys
@@ -212,7 +221,7 @@ def demo_classification_task():
     # 训练传统神经网络
     print("   训练传统神经网络...")
     baseline_model = create_baseline_classifier(input_size, num_classes)
-    baseline_trainer = BaselineTrainer(baseline_model, device, learning_rate=0.001)
+    baseline_trainer = BaselineTrainer(baseline_model, device, learning_rate=1e-4, weight_decay=0.01)
     baseline_trainer.train_classification(train_loader, test_loader, num_epochs=50)
     
     # 评估传统模型
@@ -236,7 +245,7 @@ def demo_classification_task():
     # 训练CausalEngine
     print("   训练CausalEngine...")
     causal_model = create_full_causal_classifier(input_size, num_classes)
-    causal_trainer = BaselineTrainer(causal_model, device, learning_rate=0.001)
+    causal_trainer = BaselineTrainer(causal_model, device, learning_rate=1e-4, weight_decay=0.01)
     causal_trainer.train_classification(train_loader, test_loader, num_epochs=50)
     
     # 评估CausalEngine（多种推理模式）
@@ -349,7 +358,7 @@ def demo_regression_task():
     # 训练传统神经网络
     print("   训练传统神经网络...")
     baseline_model = create_baseline_regressor(input_size, output_size)
-    baseline_trainer = BaselineTrainer(baseline_model, device, learning_rate=0.001)
+    baseline_trainer = BaselineTrainer(baseline_model, device, learning_rate=1e-4, weight_decay=0.01)
     baseline_trainer.train_regression(train_loader, test_loader, num_epochs=50)
     
     # 评估传统模型
@@ -372,7 +381,7 @@ def demo_regression_task():
     # 训练CausalEngine
     print("   训练CausalEngine...")
     causal_model = create_full_causal_regressor(input_size, output_size)
-    causal_trainer = BaselineTrainer(causal_model, device, learning_rate=0.001)
+    causal_trainer = BaselineTrainer(causal_model, device, learning_rate=1e-4, weight_decay=0.01)
     causal_trainer.train_regression(train_loader, test_loader, num_epochs=50)
     
     # 评估CausalEngine（多种推理模式）
@@ -421,33 +430,57 @@ def demo_regression_task():
 
 def demo_causality_vs_correlation():
     """
-    演示因果推理vs相关性推理的区别
+    演示因果推理vs相关性推理的区别 (基于最新理论)
     """
-    print("\n🧠 因果推理 vs 相关性推理")
-    print("=" * 40)
+    print("\n🧠 因果推理 vs 相关性推理 (2024理论更新)")
+    print("=" * 60)
     
-    print("\n理论说明:")
-    print("• 传统神经网络: 基于统计相关性进行预测")
-    print("• CausalEngine: 基于因果关系进行推理")
-    print("\n关键区别:")
-    print("1. 传统方法: P(Y|X) - 给定输入X，预测输出Y的概率")
-    print("2. 因果方法: Y = f(U, ε) - 个体特征U + 因果法则f + 外生噪声ε")
-    print("\n因果推理的优势:")
-    print("• 更好的泛化能力")
-    print("• 可解释的决策过程")
-    print("• 鲁棒的不确定性量化")
-    print("• 支持反事实推理")
+    print("\n📐 理论框架对比:")
+    print("  传统神经网络: P(Y|X) - 统计相关性建模")
+    print("  CausalEngine: Y = f(U, ε) - 个体因果机制建模")
     
-    print("\n温度参数的作用:")
-    print("• 温度 = 0: 纯确定性因果推理")
-    print("• 温度 > 0: 引入认识不确定性")
-    print("• do_sample = True: 探索个体身份空间")
+    print("\n🔬 核心区别:")
+    print("  1. 建模对象:")
+    print("     传统: 数据的统计分布 → 模式识别")
+    print("     因果: 个体的内在特征 → 因果推理")
     
-    print("\n四种推理模式:")
-    print("1. Causal (T=0, any): 纯因果推理")
-    print("2. Standard (T>0, do_sample=False): 带不确定性的决策")
-    print("3. Sampling (T>0, do_sample=True): 身份探索")
-    print("4. Compatible: 兼容传统模式")
+    print("\n  2. 不确定性来源:")
+    print("     传统: 数据噪声和模型不确定性")
+    print("     因果: 个体差异(U)和外生噪声(ε)的解耦")
+    
+    print("\n  3. 推理机制:")
+    print("     传统: 直接映射 X → Y")
+    print("     因果: 三阶段 E → U → S → Y")
+    
+    print("\n🚀 因果推理的革命性优势:")
+    print("  ✨ 泛化能力: 基于因果机制的跨域迁移")
+    print("  ✨ 可解释性: 归因-行动-激活的清晰链条")
+    print("  ✨ 不确定性量化: 个体不确定性与环境不确定性分离")
+    print("  ✨ 反事实推理: 支持'如果...会怎样'的推理")
+    print("  ✨ 身份探索: 理解同一个体在不同情境下的表现")
+    
+    print("\n🌡️ 四种推理模式的深度解析:")
+    print("  1. 因果模式 (T=0):")
+    print("     哲学: 在无外生干扰下个体的必然选择")
+    print("     应用: 确定性决策、硬分类、点估计")
+    
+    print("\n  2. 标准模式 (T>0, do_sample=False):")
+    print("     哲学: 承认环境不确定性对决策的影响")
+    print("     应用: 不确定性量化、软决策、置信区间")
+    
+    print("\n  3. 采样模式 (T>0, do_sample=True):")
+    print("     哲学: 探索个体在随机扰动下的多样表现")
+    print("     应用: 创造性生成、多样性探索、蒙特卡洛")
+    
+    print("\n  4. 兼容模式:")
+    print("     哲学: 与传统方法对齐，便于性能比较")
+    print("     应用: 基准测试、渐进式迁移")
+    
+    print("\n🎯 基准测试协议中的应用:")
+    print("  固定噪声实验: 理解噪声强度对性能的影响")
+    print("  自适应噪声实验: 验证模型自主学习噪声的能力")
+    print("  四模式对比: 评估不同推理模式的适用场景")
+    print("  架构消融: 量化因果架构相对传统方法的优势")
 
 
 def visualize_results(classification_results, regression_results):
@@ -544,17 +577,35 @@ def main():
     visualize_results(classification_results, regression_results)
     
     # 6. 总结
-    print("\n🎉 基础教程完成！")
-    print("\n📖 下一步学习建议:")
-    print("1. 查看 tutorials/01_classification/ 了解更多分类任务")
-    print("2. 查看 tutorials/02_regression/ 了解更多回归任务")
-    print("3. 查看 tutorials/03_ablation_studies/ 了解消融实验")
-    print("4. 阅读 causal_engine/MATHEMATICAL_FOUNDATIONS.md 了解数学原理")
+    print("\n🎉 CausalEngine基础教程完成！(2024更新版)")
+    print("=" * 60)
     
-    print("\n🔗 相关资源:")
-    print("• 项目文档: causal_engine/README.md")
-    print("• 数学理论: causal_engine/MATHEMATICAL_FOUNDATIONS.md")
-    print("• 架构说明: causal_engine/ONE_PAGER.md")
+    print("\n📊 本教程涵盖内容:")
+    print("  ✅ 因果推理vs相关性推理的理论对比")
+    print("  ✅ 四种推理模式的实际应用")
+    print("  ✅ 分类和回归任务的端到端演示")
+    print("  ✅ 基于基准协议的标准化配置")
+    
+    print("\n📖 推荐学习路径 (基于最新教程体系):")
+    print("  1. 理论深入: tutorials/00_getting_started/theoretical_foundations.py")
+    print("  2. 基准协议: tutorials/00_getting_started/benchmark_protocol_intro.py")
+    print("  3. 分类应用: tutorials/01_classification/ (基于新实验设计)")
+    print("  4. 回归应用: tutorials/02_regression/ (基于新实验设计)")
+    print("  5. 消融实验: tutorials/03_ablation_studies/ (固定vs自适应噪声)")
+    print("  6. 高级主题: tutorials/04_advanced_topics/ (四种推理模式)")
+    
+    print("\n🔗 核心资源 (最新版本):")
+    print("  📐 数学基础: causal_engine/MATHEMATICAL_FOUNDATIONS_CN.md")
+    print("  🧪 实验协议: causal_engine/misc/benchmark_strategy.md")
+    print("  📊 项目总览: causal_engine/ONE_PAGER.md")
+    print("  🏗️ 架构文档: causal_engine/README.md")
+    
+    print("\n🎯 关键收获:")
+    print("  🧠 CausalEngine基于个体选择变量实现真正的因果推理")
+    print("  🎲 柯西分布线性稳定性提供解析不确定性传播")
+    print("  🌡️ 温度参数实现从确定性到随机性的统一调制")
+    print("  🔄 三阶段架构提供清晰可解释的推理链条")
+    print("  📈 基准测试协议确保科学严谨的性能评估")
 
 
 if __name__ == "__main__":

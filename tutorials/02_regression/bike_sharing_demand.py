@@ -191,7 +191,7 @@ def run_ablation_experiment(data_dict):
     baseline_trainer = BaselineTrainer(
         model=baseline_model,
         device=device,
-        learning_rate=0.001,
+        learning_rate=1e-4,
         weight_decay=0.01
     )
     
@@ -226,7 +226,7 @@ def run_ablation_experiment(data_dict):
     ablated_trainer = BaselineTrainer(
         model=ablated_model,
         device=device,
-        learning_rate=0.001,
+        learning_rate=1e-4,
         weight_decay=0.01
     )
     
@@ -261,7 +261,7 @@ def run_ablation_experiment(data_dict):
     full_trainer = BaselineTrainer(
         model=full_model,
         device=device,
-        learning_rate=0.001,
+        learning_rate=1e-4,
         weight_decay=0.01
     )
     

@@ -77,7 +77,7 @@ mlp_model = TraditionalMLPClassifier(
     hidden_sizes=[64, 32],
     dropout_rate=0.1
 )
-mlp_optimizer = torch.optim.Adam(mlp_model.parameters(), lr=0.001)
+mlp_optimizer = torch.optim.AdamW(mlp_model.parameters(), lr=1e-4, weight_decay=0.01)
 print(f"✓ 创建成功: {type(mlp_model).__name__}")
 
 # 2.2 CausalEngine消融版本（仅使用loc）
@@ -91,7 +91,7 @@ ablation_engine, ablation_wrapper = create_ablation_experiment(
     num_classes=3,
     device='cpu'
 )
-ablation_trainer = AblationTrainer(ablation_engine, ablation_wrapper, lr=0.001)
+ablation_trainer = AblationTrainer(ablation_engine, ablation_wrapper, lr=1e-4)
 print(f"✓ 创建成功: CausalEngine (消融模式)")
 
 # 2.3 CausalEngine完整版本（使用loc+scale）
@@ -105,7 +105,7 @@ full_engine, full_wrapper = create_ablation_experiment(
     num_classes=3,
     device='cpu'
 )
-full_trainer = AblationTrainer(full_engine, full_wrapper, lr=0.001)
+full_trainer = AblationTrainer(full_engine, full_wrapper, lr=1e-4)
 print(f"✓ 创建成功: CausalEngine (完整模式)")
 
 # 3. 训练模型

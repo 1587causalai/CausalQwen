@@ -41,7 +41,7 @@ print(f"✓ Engine创建成功: {type(engine)}")
 print(f"✓ Wrapper创建成功: {type(wrapper)}")
 
 # 创建训练器
-trainer = AblationTrainer(engine, wrapper, lr=0.01)
+trainer = AblationTrainer(engine, wrapper, lr=1e-4)
 print(f"✓ Trainer创建成功: {type(trainer)}")
 
 # 准备测试数据

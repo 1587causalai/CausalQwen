@@ -51,10 +51,12 @@ class CauchyMath:
             pdf: 概率密度值 [batch_size, seq_len, dim]
         """
         # 标准化变量：z = (x - μ) / γ
-        z = (x - loc) / scale
+        # 添加小的epsilon防止除零错误
+        z = (x - loc) / (scale + 1e-8)
         
         # PDF公式：f(x) = 1/(π·γ) * 1/(1 + z²)
-        pdf = 1.0 / (torch.pi * scale * (1.0 + z * z))
+        # 添加小的epsilon防止除零错误
+        pdf = 1.0 / (torch.pi * (scale + 1e-8) * (1.0 + z * z))
         
         return pdf
     
@@ -73,7 +75,8 @@ class CauchyMath:
             cdf: 累积概率值 [batch_size, seq_len, dim] ∈ [0, 1]
         """
         # 标准化变量：z = (x - μ) / γ
-        z = (x - loc) / scale
+        # 添加小的epsilon防止除零错误
+        z = (x - loc) / (scale + 1e-8)
         
         # CDF公式：F(x) = 1/2 + (1/π)arctan(z)
         cdf = 0.5 + (1.0 / torch.pi) * torch.atan(z)
@@ -118,10 +121,13 @@ class CauchyMath:
         Returns:
             log_pdf: 对数概率密度值 [batch_size, seq_len, dim]
         """
-        z = (x - loc) / scale
+        # 标准化变量：z = (x - μ) / γ
+        # 添加小的epsilon防止除零错误
+        z = (x - loc) / (scale + 1e-8)
         
         # 对数PDF：log f(x) = -log(π) - log(γ) - log(1 + z²)
-        log_pdf = -torch.log(torch.tensor(torch.pi)) - torch.log(scale) - torch.log(1.0 + z * z)
+        # 添加小的epsilon防止log(0)错误
+        log_pdf = -torch.log(torch.tensor(torch.pi)) - torch.log(scale + 1e-8) - torch.log(1.0 + z * z)
         
         return log_pdf
     
@@ -373,7 +379,8 @@ class CausalEngine(nn.Module):
         elif isinstance(threshold, torch.Tensor) and threshold.dim() == 1:
             threshold = threshold.unsqueeze(0).unsqueeze(0)
             
-        normalized_diff = (loc_S - threshold) / scale_S
+        # 添加小的epsilon防止除零错误
+        normalized_diff = (loc_S - threshold) / (scale_S + 1e-8)
         probs = 0.5 + (1 / torch.pi) * torch.atan(normalized_diff)
         return probs
     
