@@ -11,42 +11,69 @@
 
 ## 理论发现：因果推理的数学必然性
 
+DiscoSCM 是首个将个体置于核心地位的因果建模框架，是我们研究因果关系的基础.
+
 
 ### 从DiscoSCM到个体选择变量$U$
 
+当我们面临"如何实现真正的因果预测"这一根本问题时，传统的统计机器学习方法试图通过学习条件分布$P(Y|X)$来解决，但这种方法存在着根本性的局限——它无法捕捉真正的因果关系结构。
 
 ```mermaid
 graph LR
-    %% 理论发现的核心路径 - 横向流畅布局
+    %% 从DiscoSCM到个体选择变量U - 美观布局版
     
-    Traditional["🏛️ 传统机器学习<br/>P(Y|X)<br/>统计关联"] 
+    Start["📚 如何实现因果预测？"]
     
-    Problem["❌ 核心挑战<br/>分布偏移<br/>脆弱性"]
+    Start --> Challenge
     
-    Discovery["💡 关键洞察<br/>个体选择变量<br/>U"] 
+    subgraph Challenge ["🤔 面临的挑战"]
+        direction TB
+        Traditional["📊 传统方法<br/>学习P(Y|X)"] 
+        Arrow["..."]
+        Question["因果关系建模？"]
+        Traditional --> Arrow --> Question
+    end
     
-    SCM["📐 因果模型<br/>Y = f(U, ε)"]
+    Challenge --> Discovery
     
-    Breakthrough["🌟 理论突破<br/>柯西分布<br/>因果数学语言"]
+    subgraph Discovery ["💡 DiscoSCM关键发现"]
+        direction TB
+        Insight["✨ 核心洞察<br/>必须引入外生变量U"]
+        
+        subgraph DualNature ["🔄 U的双重身份"]
+            direction LR
+            Identity1["👤 个体选择变量<br/>U=u 选择特定个体"]
+            Identity2["🧬 个体因果表征<br/>u 包含内在属性"]
+        end
+        
+        Insight --> DualNature
+    end
     
-    Traditional ==> Problem ==> Discovery ==> SCM ==> Breakthrough
+    Discovery --> Result["⚡ 因果生成公式<br/>Y = f(U, ε)"]
     
     %% 样式设计
-    style Traditional fill:#ffebee,stroke:#d32f2f,stroke-width:3px
-    style Problem fill:#fff3e0,stroke:#f57c00,stroke-width:3px
-    style Discovery fill:#e8f5e9,stroke:#4caf50,stroke-width:3px
-    style SCM fill:#e3f2fd,stroke:#2196f3,stroke-width:3px
-    style Breakthrough fill:#fff8e1,stroke:#ffc107,stroke-width:4px
+    style Start fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000
+    style Challenge fill:#fff8e1,stroke:#ff8f00,stroke-width:2px,color:#000
+    style Discovery fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+    style DualNature fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
+    style Result fill:#ffebee,stroke:#d32f2f,stroke-width:4px,color:#000
+    
+    style Traditional fill:#ffecb3,stroke:#ffa000,color:#000
+    style Arrow fill:transparent,stroke:none,color:#000
+    style Question fill:#fff3e0,stroke:#f57c00,color:#000
+    style Insight fill:#f8bbd9,stroke:#e91e63,color:#000
+    style Identity1 fill:#bbdefb,stroke:#1976d2,color:#000
+    style Identity2 fill:#c8e6c9,stroke:#388e3c,color:#000
 ```
-基于Distribution-consistency Structural Causal Models (DiscoSCM)的理论框架，我识别出了因果建模的核心数学结构。传统的统计学习试图建模条件分布$P(Y|X)$，但真正的因果推理需要分解这一过程：
 
-**核心洞察**：任何因果系统都必然包含一个外生的"个体选择变量"$U$，它具有双重身份：
+正是在这一背景下，DiscoSCM框架提出了革命性的解决方案。**DiscoSCM的核心洞察**是：任何真正的因果系统都必然包含一个外生的"个体选择变量"$U$，它具有双重身份：
+
 1. **个体选择变量**：$U=u$代表从所有可能个体中"选择"了特定个体$u$
 2. **个体因果表征**：向量$u \in \mathbb{R}^d$包含了该个体所有内在的、驱动其行为的潜在属性
 
-数学上，这意味着因果生成必须表示为：
+这一发现的数学表达是：
 $$Y = f(U, \varepsilon)$$
-其中$f$是对所有个体普适的因果机制，$U$是个体选择变量，$\varepsilon$是外生噪声。关键是：**相同的因果律$f$应用于不同个体$U=u$时，产生不同的结果$Y$，个体差异是系统性差异的最终来源**。
+其中$f$是对所有个体普适的因果机制，$U$是个体选择变量，$\varepsilon$是外生噪声。**关键洞察**在于：相同的因果律$f$应用于不同个体$U=u$时，产生不同的结果$Y$，个体差异成为了系统性差异的最终来源。
 
 ### 柯西分布的理论必然性
 
