@@ -358,15 +358,74 @@ $$\mathcal{L}_{\text{clf}} = -\sum_{k=1}^K [y_k \log(P_k) + (1-y_k) \log(1-P_k)]
 
 ## 4. 实现路线图
 
-### 4.1 V1.0 核心分类器实现
+### 4.1 数学等价性与消融实验基础
+
+**重要理论发现**：CausalEngine分类器在特定条件下可实现与传统方法的控制对比，为消融实验提供理论基础。
+
+#### 4.1.1 冻结机制用于分类任务
+
+```python
+def freeze_abduction_to_identity(causal_classifier):
+    """
+    冻结AbductionNetwork为恒等映射，用于分类任务的消融实验
+    
+    这允许我们验证因果分类相比传统Softmax的真实贡献
+    """
+    abduction = causal_classifier.causal_engine.abduction
+    
+    if hasattr(abduction, '_loc_is_identity_candidate') and abduction._loc_is_identity_candidate:
+        with torch.no_grad():
+            causal_size = abduction.causal_size
+            abduction.loc_net.weight.copy_(torch.eye(causal_size))
+            abduction.loc_net.bias.zero_()
+            
+        abduction.loc_net.weight.requires_grad = False
+        abduction.loc_net.bias.requires_grad = False
+        return True
+    return False
+
+# 消融实验设计
+baseline_classifier = MLPCausalClassifier(causal_size=input_size)
+freeze_success = freeze_abduction_to_identity(baseline_classifier)
+
+if freeze_success:
+    # 使用OvR决策函数，但Abduction为恒等
+    # 可以与完整CausalEngine进行公平的结构化对比
+    pass
+```
+
+#### 4.1.2 分类任务的数学差异
+
+**传统Softmax分类**:
+```
+P_k = exp(z_k) / Σ_j exp(z_j)    # 全局竞争归一化
+```
+
+**CausalEngine OvR分类（冻结模式）**:
+```
+U = I(x) = x                     # 恒等Abduction  
+S_k = W_k × U + b_k              # 每类独立Action
+P_k = 1/2 + (1/π)arctan(S_k/γ_k) # 独立OvR激活
+```
+
+**核心差异**: 即使在冻结模式下，OvR策略仍保持类别独立性，这是噪声鲁棒性的根本来源。
+
+#### 4.1.3 消融实验的意义
+
+1. **策略分离**: 将因果推理能力与OvR决策策略分开验证
+2. **噪声鲁棒性源头**: 确认鲁棒性来自OvR而非复杂的因果建模
+3. **公平基准**: 在相同网络结构下对比不同决策策略的效果
+
+### 4.2 V1.0 核心分类器实现
 **重点**: 专注多分类任务，实现完整的sklearn风格接口
 
-- [ ] 实现 `MLPCausalClassifier` 基础类
-- [ ] 集成CausalEngine核心功能（AbductionNetwork + ActionNetwork）
-- [ ] 实现词元激活函数（固定阈值 $C_k = 0$）
-- [ ] 实现OvR分类策略和BCE损失
-- [ ] 标准sklearn接口：`predict()`, `predict_proba()`, `score()`
-- [ ] 基础参数验证和错误处理
+- [x] 实现 `MLPCausalClassifier` 基础类
+- [x] 集成CausalEngine核心功能（AbductionNetwork + ActionNetwork）
+- [x] 实现词元激活函数（固定阈值 $C_k = 0$）
+- [x] 实现OvR分类策略和BCE损失
+- [x] 标准sklearn接口：`predict()`, `predict_proba()`, `score()`
+- [x] 基础参数验证和错误处理
+- [x] **新增**: 冻结机制支持，为消融实验提供理论基础
 
 ### 4.2 V1.1 增强功能
 - [ ] 多分类策略优化（OvR vs OvO vs Softmax对比）

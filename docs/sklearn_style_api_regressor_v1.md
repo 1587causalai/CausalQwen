@@ -243,6 +243,78 @@ class MLPCausalRegressor:
         return predictions
 ```
 
+### 4.4 数学等价性与消融实验基础
+
+**重要理论发现**：CausalEngine在特定条件下与传统MLP数学等价，这为消融实验提供了理论基础。
+
+#### 4.4.1 等价性条件
+
+当满足以下条件时，CausalEngine与传统线性变换数学等价：
+
+1. **恒等映射条件**: `causal_size == input_size` 且 `AbductionNetwork.loc_net` 冻结为恒等矩阵
+2. **确定性条件**: `temperature = 0` 且 `do_sample = False`
+3. **兼容模式**: 使用 `compatible` 模式或直接取 `loc_S` 作为输出
+
+#### 4.4.2 冻结机制实现
+
+```python
+def freeze_abduction_to_identity(causal_regressor):
+    """
+    冻结AbductionNetwork为恒等映射，用于消融实验
+    
+    这允许我们验证CausalEngine相比传统方法的真实贡献
+    """
+    abduction = causal_regressor.causal_engine.abduction
+    
+    # 检查是否为恒等映射候选（input_size == causal_size）
+    if hasattr(abduction, '_loc_is_identity_candidate') and abduction._loc_is_identity_candidate:
+        with torch.no_grad():
+            # 设置权重为恒等矩阵，偏置为零
+            causal_size = abduction.causal_size
+            abduction.loc_net.weight.copy_(torch.eye(causal_size))
+            abduction.loc_net.bias.zero_()
+            
+        # 冻结参数，防止训练时更新
+        abduction.loc_net.weight.requires_grad = False
+        abduction.loc_net.bias.requires_grad = False
+        
+        return True
+    else:
+        return False
+
+# 使用示例：消融实验
+baseline_regressor = MLPCausalRegressor(causal_size=input_size)  # 关键：相等维度
+freeze_success = freeze_abduction_to_identity(baseline_regressor)
+
+if freeze_success:
+    # 此时baseline_regressor在数学上等价于传统MLP
+    # 可以与完整CausalEngine进行公平对比
+    pass
+```
+
+#### 4.4.3 数学表达式
+
+**传统线性变换**:
+```
+y = W × x + b
+```
+
+**CausalEngine（冻结模式）**:
+```
+U = I(x) = x                    # 恒等Abduction
+S = W_action × U + b_action     # Action变换  
+y = S                           # 回归Activation
+```
+
+因此：**CausalEngine（冻结） ≡ 传统线性变换**
+
+#### 4.4.4 消融实验价值
+
+1. **理论验证**: 验证CausalEngine架构的数学正确性
+2. **公平对比**: 提供与传统方法的严格基准
+3. **贡献分解**: 量化因果推理相对于简单变换的真实提升
+4. **可信度增强**: 证明性能提升来自因果机制而非架构复杂性
+
 **架构对比与数学差异**：
 
 | 组件 | MLPRegressor | MLPCausalRegressor |
