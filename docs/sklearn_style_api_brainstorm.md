@@ -33,6 +33,10 @@ predictions = reg.predict(X_test)
 - ✅ **丰富属性**: 训练后可查看权重、损失历史等
 - ✅ **错误处理**: 友好的错误信息和警告
 
+
+
+我们 MLPCausalRegressor 和 MLPRegressor 唯一的不同就是最后一个输出层？前者是一个最简单的 CausalEngine, 后者就是一个线性层！ 
+
 ## 2. CausalEngine 当前架构分析
 
 ### 2.1 现有组件结构
@@ -77,16 +81,22 @@ for epoch in range(num_epochs):
 
 ```python
 # 理想的使用方式 - 简单如sklearn
-from causal_engine.sklearn import MLPCausalRegressor
+from causal_engine.sklearn import CausalRegressor, CausalClassifier
 
 # 回归任务 - 3行代码搞定
-reg = MLPCausalRegressor()  # 智能默认配置
+reg = CausalRegressor()  # 智能默认配置
 reg.fit(X_train, y_train)
 predictions = reg.predict(X_test)
 
+# 分类任务 - 同样简单
+clf = CausalClassifier() 
+clf.fit(X_train, y_train)
+predictions = clf.predict(X_test)
+probabilities = clf.predict_proba(X_test)
+
 # 高级用法 - 仍然简洁
-reg = MLPCausalRegressor(
-    hidden_layer_sizes=(64, 32),  # 网络结构（sklearn兼容）
+reg = CausalRegressor(
+    hidden_layers=(64, 32),  # 网络结构
     max_iter=1000,          # 训练轮数
     inference_mode='standard', # 推理模式
     random_state=42         # 随机种子
@@ -102,45 +112,45 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 # 交叉验证
-scores = cross_val_score(MLPCausalRegressor(), X, y, cv=5)
+scores = cross_val_score(CausalRegressor(), X, y, cv=5)
 
 # 网格搜索
 param_grid = {
-    'hidden_layer_sizes': [(32,), (64,), (64, 32)],
+    'hidden_layers': [(32,), (64,), (64, 32)],
     'inference_mode': ['standard', 'causal']
 }
-grid_search = GridSearchCV(MLPCausalRegressor(), param_grid, cv=3)
+grid_search = GridSearchCV(CausalRegressor(), param_grid, cv=3)
 
 # 管道集成
 pipeline = Pipeline([
     ('scaler', StandardScaler()),
-    ('causal', MLPCausalRegressor())
+    ('causal', CausalRegressor())
 ])
 ```
 
 ## 4. 核心设计方案
 
-### 4.1 API接口设计 - V1.0 专注回归
+### 4.1 API接口设计
 
 ```python
-class MLPCausalRegressor(BaseEstimator, RegressorMixin):
-    """MLP因果回归器 - sklearn风格接口"""
+class CausalRegressor(BaseEstimator, RegressorMixin):
+    """因果回归器 - sklearn风格接口"""
     
     def __init__(self, 
-                 hidden_layer_sizes=(64, 32),    # 网络结构（与sklearn兼容）
-                 max_iter=1000,                  # 最大迭代次数
-                 learning_rate=0.001,            # 学习率
-                 inference_mode='standard',      # 推理模式
-                 early_stopping=True,            # 早停
-                 validation_fraction=0.1,        # 验证集比例
-                 random_state=None,              # 随机种子
-                 verbose=False):                 # 训练日志
+                 hidden_layers=(64, 32),      # 网络结构
+                 max_iter=1000,               # 最大迭代次数
+                 learning_rate=0.001,         # 学习率
+                 inference_mode='standard',   # 推理模式
+                 early_stopping=True,         # 早停
+                 validation_fraction=0.1,     # 验证集比例
+                 random_state=None,           # 随机种子
+                 verbose=False):              # 训练日志
         pass
     
     def fit(self, X, y, sample_weight=None):
         """训练模型"""
         # 自动数据预处理
-        # 自动网络构建  
+        # 自动网络构建
         # 自动训练循环
         return self
     
@@ -163,13 +173,24 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
     def loss_curve_(self):
         """训练损失曲线"""
         pass
+
+class CausalClassifier(BaseEstimator, ClassifierMixin):
+    """因果分类器 - sklearn风格接口"""
+    
+    def predict_proba(self, X):
+        """预测概率"""
+        pass
+    
+    def predict_log_proba(self, X):
+        """预测对数概率"""
+        pass
 ```
 
 ### 4.2 智能默认配置策略
 
 ```python
 # 根据数据规模自动调整网络结构
-def _auto_hidden_layer_sizes(n_features, n_samples):
+def _auto_hidden_layers(n_features, n_samples):
     """根据特征数和样本数智能推荐网络结构"""
     if n_features <= 10:
         return (32,)
@@ -195,14 +216,14 @@ AUTO_CONFIG = {
 
 ```python
 # 默认使用 - 适合99%的使用场景
-reg = MLPCausalRegressor()  # inference_mode='standard'
+reg = CausalRegressor()  # inference_mode='standard'
 
 # 实验对比 - 看看causal模式是否能带来提升
-reg_causal = MLPCausalRegressor(inference_mode='causal')
+reg_causal = CausalRegressor(inference_mode='causal')
 
 # 性能对比
-standard_score = cross_val_score(MLPCausalRegressor(), X, y, cv=5)
-causal_score = cross_val_score(MLPCausalRegressor(inference_mode='causal'), X, y, cv=5)
+standard_score = cross_val_score(CausalRegressor(), X, y, cv=5)
+causal_score = cross_val_score(CausalRegressor(inference_mode='causal'), X, y, cv=5)
 ```
 
 **推理模式定位**:
@@ -240,7 +261,7 @@ U'_i = U_i + b_noise · ε  # ε ~ Cauchy(0, 1)
 #### 未来API设计潜力
 ```python
 # 未来可能的高级API (暂不实现)
-reg = MLPCausalRegressor(
+reg = CausalRegressor(
     train_inference_mode='sampling',  # 训练时用采样模式
     test_inference_mode='standard'    # 测试时用标准模式
 )
@@ -253,33 +274,25 @@ reg = MLPCausalRegressor(
 
 ## 5. 实现路线图
 
-### 5.1 V1.0 当前版本：MLPCausalRegressor 核心实现
-**重点**：专注回归任务，打造完整可用的sklearn风格接口
-
+### 5.1 第一阶段：核心API构建
 - [ ] 创建 `causal_engine.sklearn` 子模块
-- [ ] 实现 `MLPCausalRegressor` 基础类
-- [ ] 集成现有CausalEngine核心功能（AbductionNetwork + ActionNetwork + ActivationHead）
-- [ ] 实现自动训练循环和标准sklearn接口
-- [ ] 基础参数验证和错误处理
-- [ ] 简单的使用示例和文档
+- [ ] 实现 `CausalRegressor` 基础类
+- [ ] 实现 `CausalClassifier` 基础类
+- [ ] 集成现有CausalEngine核心功能
 
-### 5.2 V1.1 优化增强
+### 5.2 第二阶段：智能化增强
 - [ ] 实现自动网络结构推荐
-- [ ] 添加early stopping和validation
+- [ ] 实现自动超参数优化
 - [ ] 提供causal推理模式作为standard模式的对比选项
+- [ ] 添加训练过程可视化
 - [ ] 完善错误处理和警告
-- [ ] sklearn兼容性测试
-
-### 5.3 V2.0 扩展功能
-- [ ] 实现 `MLPCausalClassifier` 分类接口
-- [ ] 添加特征重要性分析
-- [ ] 训练过程可视化
 - [ ] **实验性**: 探索训练阶段不同推理模式的效果差异
 
-### 5.4 V3.0 生态集成
+### 5.3 第三阶段：生态集成
+- [ ] sklearn兼容性测试
 - [ ] 与pandas DataFrame深度集成
+- [ ] 添加特征重要性分析
 - [ ] 集成模型解释工具
-- [ ] 性能优化和大规模数据支持
 
 ## 6. 使用场景对比
 
@@ -307,138 +320,33 @@ reg = lgb.LGBMRegressor()
 reg.fit(X_train, y_train)
 
 # CausalEngine风格 (目标)
-from causal_engine.sklearn import MLPCausalRegressor
-reg = MLPCausalRegressor()  # 同样简洁，但是因果推理！
+from causal_engine.sklearn import CausalRegressor
+reg = CausalRegressor()  # 同样简洁，但是因果推理！
 reg.fit(X_train, y_train)
 ```
 
-## 7. 核心设计差异：MLPCausalRegressor vs MLPRegressor 🧮
+## 7. 技术实现要点
 
-### 7.1 设计哲学：仅替换输出层 ✨
+### 7.1 关键挑战
+1. **参数映射**: sklearn参数 → CausalEngine内部参数
+2. **训练循环**: 封装复杂的训练逻辑
+3. **状态管理**: 模型训练状态的保存和恢复
+4. **错误处理**: 友好的错误信息
+5. **性能优化**: 保持原有性能优势
 
-**核心洞察**: MLPCausalRegressor 和 MLPRegressor 的**唯一区别**就是最后一个输出层！
-- **MLPRegressor**: 线性输出层 `y = W·h + b`
-- **MLPCausalRegressor**: CausalEngine输出层（归因→行动→激活）
-
-这种设计的优雅之处：
-- ✅ **最小化改动**: 保持sklearn的所有优秀特性
-- ✅ **最大化收益**: 获得完整的因果推理能力
-- ✅ **无缝替换**: 可以直接替代MLPRegressor使用
-
-### 7.2 网络结构对比
-
+### 7.2 架构设计
 ```python
-# 传统MLPRegressor架构
-输入层 → 隐藏层们 → 线性输出层 → 确定性预测值
-  X    →   MLPs   →  y = W·h + b  →    ŷ
-
-# MLPCausalRegressor架构（仅最后一层不同！）  
-输入层 → 隐藏层们 → CausalEngine → 分布输出 → 概率预测
-  X    →   MLPs   → (归因+行动+激活) → S~Cauchy → P(Y)
-```
-
-**关键优势**: 
-- 🚀 **训练效率**: 大部分网络结构完全相同，训练复杂度相当
-- 🚀 **参数规模**: 仅CausalEngine部分增加少量参数
-- 🚀 **收益巨大**: 从确定性预测升级到分布建模和因果推理
-
-### 7.3 CausalEngine的独特Forward Pass
-
-#### 第1阶段：归因推断 (Abduction)
-```python
-# 输入: 特征向量 h
-μ_U = loc_net(h)           # 个体中心位置
-γ_U = softplus(scale_net(h))  # 个体群体多样性
-# 输出: U ~ Cauchy(μ_U, γ_U) - 个体选择变量分布
-```
-
-#### 第2阶段：行动决策 (Action)
-```python
-# 外生噪声注入
-U' = U + b_noise · ε  # ε ~ Cauchy(0,1)
-# U' ~ Cauchy(μ_U, γ_U + |b_noise|)
-
-# 线性因果变换
-S = W_A @ U' + b_A
-# S ~ Cauchy(loc_S, scale_S) - 决策得分分布
-```
-
-### 7.4 损失函数的根本差异
-
-#### 传统回归：均方误差
-```python
-# 预测确定值
-y_pred = W @ h + b
-loss = MSE(y_true, y_pred)
-```
-
-#### CausalEngine回归：柯西分布似然
-```python
-# 预测分布参数
-Y ~ Cauchy(w_k·loc_S_k + b_k, |w_k|·scale_S_k)
-# 柯西分布负对数似然损失
-loss = log(π·γ_Y) + log(1 + ((y_true - μ_Y)/γ_Y)²)
-```
-
-#### 传统分类：Softmax + 交叉熵
-```python
-# 竞争性归一化
-p_i = exp(logit_i) / Σexp(logit_j)
-loss = -Σ y_i log(p_i)
-```
-
-#### CausalEngine分类：OvR + 柯西CDF
-```python
-# 独立二元判断 (One-vs-Rest)
-P(S_k > C_k) = 1/2 + arctan((loc_S_k - C_k)/scale_S_k)/π
-loss = -Σ[y_k log P_k + (1-y_k) log(1-P_k)]
-```
-
-### 7.4 核心哲学差异
-
-| 维度 | 传统方法 | CausalEngine |
-|------|----------|--------------|
-| **预测对象** | 期望值 E[Y\|X] | 整个分布 P(Y\|X) |
-| **随机性建模** | 输出层采样 | 个体选择+外生噪声 |
-| **不确定性** | 隐式（通过dropout等） | 显式（柯西分布scale参数） |
-| **决策机制** | 竞争性（softmax） | 独立性（OvR） |
-| **数学基础** | 统计关联 | 因果机制 |
-
-**关键洞察**: "**分布本身就是预测！**" 
-- 传统方法：预测一个点 → 加入噪声 → 随机输出
-- CausalEngine：预测分布 → 分布采样 → 随机输出
-
-## 8. 技术实现要点
-
-### 8.1 关键挑战
-1. **分布损失计算**: 实现柯西分布的高效似然计算
-2. **参数映射**: sklearn参数 → CausalEngine内部参数
-3. **训练循环**: 封装复杂的因果推理训练逻辑
-4. **状态管理**: 模型训练状态的保存和恢复
-5. **错误处理**: 友好的错误信息
-6. **性能优化**: 保持解析计算的性能优势
-
-### 8.2 架构设计 - V1.0 简化版本
-```python
-# V1.0 内部架构（专注回归）
-causal_engine/sklearn/
-├── __init__.py       # 导出MLPCausalRegressor
-├── regressor.py      # MLPCausalRegressor核心实现
-├── _base.py          # 基础工具函数和验证
-└── _config.py        # 默认配置和自动推荐
-
-# V2.0+ 扩展架构
-causal_engine/sklearn/
-├── __init__.py       # 导出所有接口
-├── regressor.py      # MLPCausalRegressor实现
-├── classifier.py     # MLPCausalClassifier实现（V2.0+）
-├── _base.py          # 基础类和接口
-├── _utils.py         # 工具函数
-├── _validation.py    # 参数验证
+# 内部架构
+sklearn_api/
+├── base.py           # 基础类和接口
+├── regressor.py      # CausalRegressor实现
+├── classifier.py     # CausalClassifier实现  
+├── utils.py          # 工具函数
+├── validation.py     # 参数验证
 └── _config.py        # 默认配置
 ```
 
-## 9. 下一步讨论要点
+## 8. 下一步讨论要点
 
 1. **API细节确认**: 具体的参数名称和默认值
 2. **训练策略**: 如何封装训练循环，保持灵活性
@@ -456,38 +364,3 @@ causal_engine/sklearn/
 
 **🎯 期待反馈**:
 请提供您对这个设计方案的具体想法、需求和建议！
-
----
-
-## 10. V1.0 开发重点确认 ✅
-
-### 10.1 当前版本明确目标
-- **专注任务**: 回归任务 (`MLPCausalRegressor`)
-- **核心功能**: 实现完整的sklearn风格接口
-- **设计原则**: 简单、实用、可扩展
-
-### 10.2 V1.0 最小可行产品（MVP）
-```python
-# V1.0 目标体验
-from causal_engine.sklearn import MLPCausalRegressor
-
-# 零配置使用
-reg = MLPCausalRegressor()
-reg.fit(X_train, y_train)
-predictions = reg.predict(X_test)
-
-# sklearn兼容性
-from sklearn.model_selection import cross_val_score
-scores = cross_val_score(MLPCausalRegressor(), X, y, cv=5)
-print(f"CV Score: {scores.mean():.3f} (+/- {scores.std()*2:.3f})")
-```
-
-### 10.3 后续版本规划
-- **V1.1**: 优化和增强功能
-- **V2.0**: 添加 `MLPCausalClassifier` 分类支持
-- **V3.0**: 生态集成和高级功能
-
-### 10.4 开发策略
-- 🎯 **渐进式开发**: 先做好回归，再扩展分类
-- 🎯 **用户驱动**: 基于实际使用反馈进行迭代
-- 🎯 **质量优先**: 确保每个版本都是完整可用的
