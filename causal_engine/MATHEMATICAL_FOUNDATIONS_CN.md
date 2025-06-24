@@ -1,649 +1,597 @@
 # CausalEngine 数学基础
 
-## 摘要
+> **核心创新**: 基于因果推理的通用智能算法，首次实现不确定性的解析运算  
+> **理论基石**: [Distribution-consistency Structural Causal Models](https://arxiv.org/abs/2401.15911)  
+> **技术突破**: 利用柯西分布的线性稳定性，避免大规模采样
 
-CausalEngine 是一种基于因果推理的通用智能算法。它通过数学上严格的两阶段架构——归因（Abduction）和行动（Action）——实现了从证据到决策的完整因果链条。该算法的核心创新在于利用柯西分布的线性稳定性，首次实现了对不确定性的解析运算，从而避免了传统方法依赖的大规模采样。
+## 1. 核心哲学与数学框架
 
-## 核心数学框架
+### 1.1 因果推理的本质
 
-### 基本原理
+CausalEngine 基于一个深刻洞察：**真正的智能是理解，而非模仿**。传统机器学习通过学习 $P(Y|X)$ 来模拟数据分布，而 CausalEngine 通过学习因果机制来理解世界运行的本质规律。
 
-为了真正实现因果推理，我们需要一个能够对个体的内在基因进行建模的框架。本项目的理论基石 ([arXiv:2401.15911](https://arxiv.org/abs/2401.15911)) 从数学上证明，为了构建一个能够灵活表达反事实的因果模型，引入一个外生的 **"个体选择变量" $U$** 是必要的。 $U$ 是理解本模型所有魔法的关键。它有两个核心身份：
+```mermaid
+graph TB
+    subgraph Traditional["传统机器学习范式"]
+        direction TB
+        T1["学习条件分布 P(Y|X)"]
+        T2["从分布中采样结果"]
+        T3["模仿表面统计规律"]
+        T1 --> T2 --> T3
+    end
+    
+    subgraph Causal["CausalEngine 因果范式"]
+        direction TB
+        C1["学习因果机制 Y = f(U,ε)"]
+        C2["理解个体差异与规律"]
+        C3["基于理解进行推理"]
+        C1 --> C2 --> C3
+    end
+    
+    subgraph Comparison["核心差异"]
+        direction TB
+        Diff["🔄 模仿 vs 理解<br/>📊 统计规律 vs 因果机制<br/>🎲 采样 vs 推理<br/>🔒 固定 vs 反事实"]
+    end
+    
+    Traditional --> Comparison
+    Causal --> Comparison
+    
+    classDef traditionalStyle fill:#ffebee,stroke:#c62828,stroke-width:2px
+    classDef causalStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef comparisonStyle fill:#e1f5fe,stroke:#0277bd,stroke-width:3px
+    
+    class Traditional,T1,T2,T3 traditionalStyle
+    class Causal,C1,C2,C3 causalStyle
+    class Comparison,Diff comparisonStyle
+```
 
-1.  **个体选择变量 (Individual Selection Variable)**：一次具体的赋值 $U=u$ 代表着从所有可能的个体中"选中"了某一个特定个体 `u`。
-2.  **个体因果表征 (Individual Causal Representation)**：被选中的向量 $u$ 本身，就包含了该个体所有内在的、驱动其行为的潜在属性。
+### 1.2 个体选择变量 U 的双重身份
 
-**核心思想**：相同 treatment $t$ 下，普适的因果律 ($Y=f(t;u, \varepsilon)$) 应用于不同的个体 ($u$) 与外生噪声 ($\varepsilon$)，从而产生了不同的反事实结果 ($Y(t)$)。$U$ 是所有个体性系统性差异的最终来源，而 $\varepsilon$ 则代表了不可控的、非系统性的随机扰动。
+为了真正实现因果推理，我们引入**个体选择变量 $U$**——这是理解 CausalEngine 所有"魔法"的关键：
 
-因此 CausalEngine 基于以下核心数学框架：
+**身份一：个体选择变量**
+- $U=u$ 代表从所有可能个体中"选择"了特定个体 $u$
+
+**身份二：个体因果表征**  
+- 向量 $u$ 包含该个体所有内在的、驱动其行为的潜在属性
+
+```mermaid
+graph TB
+    subgraph Universe["个体宇宙"]
+        direction TB
+        Individual1["个体1: 保守型"]
+        Individual2["个体2: 冒险型"] 
+        Individual3["个体3: 平衡型"]
+        Individual4["..."]
+    end
+    
+    subgraph Selection["个体选择过程"]
+        direction TB
+        Evidence["📊 观测证据 X"]
+        Inference["🔍 推断过程"]
+        Choice["🎯 选择 U=u₂"]
+        Evidence --> Inference --> Choice
+    end
+    
+    subgraph Representation["因果表征空间"]
+        direction TB
+        Vector["向量 u₂ = [0.8, -0.3, 0.6, ...]"]
+        Meaning["风险偏好: 高<br/>耐心程度: 低<br/>学习能力: 中"]
+        Properties["驱动行为的<br/>内在属性"]
+        Vector --> Meaning --> Properties
+    end
+    
+    Universe --> Selection
+    Selection --> Representation
+    Individual2 -.-> Choice
+    
+    classDef universeStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef selectionStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef reprStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    
+    class Universe,Individual1,Individual2,Individual3,Individual4 universeStyle
+    class Selection,Evidence,Inference,Choice selectionStyle
+    class Representation,Vector,Meaning,Properties reprStyle
+```
+
+### 1.3 核心数学框架
+
+CausalEngine 基于结构因果模型的数学框架：
 
 $$Y = f(U, \varepsilon)$$
 
 其中：
-- $Y$: 观测结果
-- $U$: 个体选择变量（Individual Choice Variable）
-- $\varepsilon$: 外生噪声（Exogenous Noise）
-- $f$: 普适因果机制（Universal Causal Mechanism）
+- **$Y$**: 观测结果
+- **$U$**: 个体选择变量（Individual Choice Variable）
+- **$\varepsilon$**: 外生噪声（Exogenous Noise）  
+- **$f$**: 普适因果机制（Universal Causal Mechanism）
 
-### CausalEngine 架构
+**关键洞察**：
+- **复杂性在表征**：从混乱证据 $X$ 推断真正表征 $U$ 是高度非线性的
+- **简洁性在规律**：一旦找到正确表征 $u$，因果规律 $f$ 本身是简单线性的
+- **一致性在机制**：函数 $f$ 对所有个体普适，个体差异完全体现在 $u$ 中
 
-CausalEngine 的设计基于一个深刻的洞察：真正的智能不是模仿，而是理解。这种理解通过两个核心阶段实现：
+## 2. CausalEngine 三阶段架构
 
-1. **归因（Abduction）**：从观测推断个体的内在表征
-2. **行动（Action）**：基于个体表征生成决策得分
-3. **任务激活（Task Activation）**：将决策得分转化为任务特定的输出
+### 2.1 整体架构图
 
 ```mermaid
 graph TB
-    %% 简洁版本：CausalEngine 两阶段架构
+    Input["📥 输入证据 E<br/>观测数据/上下文"]
     
-    Evidence["📊 证据 E<br/>输入数据/观测"]
-    
-    Evidence --> Stage1["🔍 归因推断(Abduction)<br/>证据 → 个体<br/>U ~ Cauchy(μ_U, γ_U)"]
-    
-    Stage1 --> Stage2["⚡ 行动决策(Action)<br/>个体 → 决策 → 输出"]
-    
-    subgraph Stage2_Detail ["行动阶段细节"]
+    subgraph Stage1["🔍 阶段1: 归因推断 (Abduction)"]
         direction TB
-        Modes["🔧 推理模式<br/>🌡️ 标准: 扩大不确定性<br/>🎲 采样: 探索多样性<br/>⚖️ 因果: 纯粹推理"]
-        Step2_1["💫 决策得分生成<br/>S = W·(U + b_noise·ε) + b"]
-        Step2_1 --> Modes
+        S1_Title["证据 → 个体表征"]
+        S1_Process["推断个体分布<br/>U ~ Cauchy(μ_U, γ_U)"]
+        S1_Networks["双网络并行计算<br/>loc_net(E) ⊕ scale_net(E)"]
+        S1_Title --> S1_Process --> S1_Networks
     end
     
-    Stage2 -.-> Stage2_Detail
-    
-    Stage2 --> MultiTask["🎯 任务激活"]
-    
-    subgraph Tasks ["支持的任务类型"]
-        direction LR
-        Token["🔤 词元分类<br/>(OvR) P(S_k > C_k)"] ~~~ Numeric["📈 数值回归<br/>w_k·S_k + b_k"] ~~~ Discrete["🔢 有序分类<br/>P(C_i < S_k ≤ C_{i+1})"]
-    end
-    
-    MultiTask --> Tasks
-    
-
-    
-    %% 样式
-    style Evidence fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000
-    style Stage1 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:3px,color:#000
-    style Stage2 fill:#fff3e0,stroke:#f57c00,stroke-width:3px,color:#000
-    style Stage2_Detail fill:#fff8e1,stroke:#ffa000,stroke-width:1px,color:#000
-    style MultiTask fill:#e1f5fe,stroke:#0277bd,stroke-width:3px,color:#000
-    style Tasks fill:#f5f5f5,stroke:#616161,stroke-width:1px,color:#000
-    style Modes fill:#e0f2f1,stroke:#00796b,stroke-width:2px,color:#000
-    
-    style Token fill:#e3f2fd,stroke:#1976d2,color:#000
-    style Numeric fill:#e8f5e9,stroke:#388e3c,color:#000
-    style Discrete fill:#fce4ec,stroke:#c2185b,color:#000
-```
-
-
-CausalEngine 通过三个独立且可组合的阶段运作：
-
-#### 阶段1：归因推断（Abduction）
-**证据 → 个体**
-
-给定证据 $E$，推断个体选择变量 $U \sim \text{Cauchy}(\mu_U, \gamma_U)$，其中参数由独立的网络计算：
-
-
-```mermaid
-graph TB
-    %% 归因推断：双网络并行架构
-    
-    Evidence["📊 证据 E<br/>输入数据/观测"]
-    
-    Evidence --> LocNet & ScaleNet
-    
-    subgraph DualNet ["归因推断网络 Abduction"]
-        direction LR
-        LocNet["📍 位置网络<br/>μ_U = loc_net(E)"]
-        ScaleNet["📏 尺度网络<br/>γ_U=softplus(scale_net(E))"]
-    end
-    
-    LocNet & ScaleNet -->  Distribution["🎲 个体表征变量分布<br/>U ~ Cauchy(μ_U, γ_U)"]
-    
-    %% 样式设计
-    style Evidence fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000
-    style DualNet fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,color:#000
-    style LocNet fill:#e3f2fd,stroke:#1976d2,stroke-width:2px,color:#000
-    style ScaleNet fill:#e3f2fd,stroke:#1976d2,stroke-width:2px,color:#000
-    style Distribution fill:#fce4ec,stroke:#c2185b,stroke-width:3px,color:#000
-```
-
-$$\mu_U = \text{loc\_net}(E)$$
-$$\gamma_U = \text{softplus}(\text{scale\_net}(E)) = \log(1 + \exp(\text{scale\_net}(E)))$$
-
-数学表示：
-$$p(U|E) = \frac{1}{\pi\gamma_U} \cdot \frac{1}{1 + \left(\frac{U - \mu_U}{\gamma_U}\right)^2}$$
-
-#### 阶段2：行动决策（Action）
-
-结构方程 $Y=f(U, \varepsilon)$ 被分解成两个过程: 1）生成决策得分；2）应用任务激活函数。
-
-##### 2.1 决策得分生成
-
-```mermaid
-graph TB
-    %% 行动网络：两步变换生成决策得分
-    
-    U["🎲 输入：个体因果表征<br/>U ~ Cauchy(μ, γ)<br/>来自归因阶段"]
-    
-    U --> ActionNet
-    
-    subgraph ActionNet ["行动网络 Action Network"]
+    subgraph Stage2["⚡ 阶段2: 行动决策 (Action)"]
         direction TB
-        
-        subgraph Step1 ["🌊 步骤1: 外生噪声注入"]
-            direction LR
-            Noise["ε ~ Cauchy(0,1)"] 
-            NoiseOp["U' = U + b_noise·ε"]
-            Result1["U' ~ Cauchy(μ,γ+|b_noise|)"]
-            Noise --> NoiseOp --> Result1
-        end
-        
-        subgraph Step2 ["🔄 步骤2: 线性因果变换"]
-            direction LR
-            Transform["S = W_A · U' + b_A"]
-            Params["loc_S = μ · W_A^T + b_A<br/>scale_S=(γ + |b_noise|)|W_A^T|"]
-            Result2["S ~ Cauchy(loc_S, scale_S)"]
-            Transform --> Params --> Result2
-        end
-        
-        Step1 --> Step2
+        S2_Title["个体表征 → 决策得分"]
+        S2_Process["线性因果变换<br/>S = W_A·(U + b_noise·ε) + b_A"]
+        S2_Properties["利用柯西分布<br/>线性稳定性"]
+        S2_Title --> S2_Process --> S2_Properties
     end
     
-    ActionNet --> Output["💫 决策得分向量<br/>S = [S₁, S₂, ..., S_V]<br/>每个 S_k 都是随机变量"]
-    
-    %% 样式设计
-    style U fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000
-    style ActionNet fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000
-    style Step1 fill:#fff8e1,stroke:#ff9800,stroke-width:2px,color:#000
-    style Step2 fill:#e8f5ff,stroke:#2196f3,stroke-width:2px,color:#000
-    style Output fill:#e1f5fe,stroke:#0277bd,stroke-width:3px,color:#000
-    style Result1 fill:#ffecb3,stroke:#ffa000,stroke-width:1px,color:#000
-    style Result2 fill:#bbdefb,stroke:#1976d2,stroke-width:1px,color:#000
-```
-
-在训练阶段，模型通过以下步骤生成决策得分：
-
-1.  **注入外生噪声**:
-    -   **基本原理**: 核心思想是对个体表征 $U$ 注入一个标准柯西分布的噪声 $\varepsilon \sim \text{Cauchy}(0, 1)$，其强度由一个可学习的参数向量 $\mathbf{b}_{\text{noise}}$ 控制。变换后的随机变量 $U'$ 为：
-        $$U' = U + \mathbf{b}_{\text{noise}} \cdot \varepsilon$$
-    -   **解析推导**: 根据柯西分布的线性稳定性，我们可以推导出 $U'$ 的分布。
-        -   首先，我们有 $U \sim \text{Cauchy}(\mu_U, \gamma_U)$。
-        -   其次，缩放后的噪声项 $\mathbf{b}_{\text{noise}} \cdot \varepsilon \sim \text{Cauchy}(0, |\mathbf{b}_{\text{noise}}|)$。
-        -   因此，两个独立的柯西变量之和的分布为：
-            $$U' \sim \text{Cauchy}(\mu_U + 0, \gamma_U + |\mathbf{b}_{\text{noise}}|) = \text{Cauchy}(\mu_U, \gamma_U + |\mathbf{b}_{\text{noise}}|)$$
-    -   **计算实现**: 这个推导允许我们在计算中完全避免采样，直接通过对尺度参数进行加法操作来高效地实现噪声注入。
-
-2.  **应用线性因果律**: 对这个包含了噪声的分布 $U'$ 应用一个线性变换（由权重 $W_A$ 和偏置 $b_A$ 定义），得到决策得分分布 $S$。根据柯西分布的线性稳定性：
-    $$\text{loc}_S = (\mu_U) W_A^T + b_A$$
-    $$\text{scale}_S = (\gamma_U + |\mathbf{b}_{\text{noise}}|) |W_A^T|$$
-
-通过反向传播，模型会自动学习噪声强度参数 $\mathbf{b}_{\text{noise}}$ 的大小，从而为不同任务适配最优的不确定性。
-
-
-##### 2.2 确定性计算任务输出
-
-因果关系的链路是： 接收代表个体的分布 $U \sim \text{Cauchy}(\mu_U, \gamma_U)$，通过因果机制生成决策得分 $S$，并最终转化为任务特定的输出。
-
-```mermaid
-graph TB
-    %% 行动阶段内部结构
-    
-    U2["🎲 个体分布 U<br/>（来自归因阶段）"]
-    
-    U2 --> Step1["💫 步骤1: 决策得分生成"]
-    
-    subgraph ScoreGen ["决策得分生成细节"]
+    subgraph Stage3["🎯 阶段3: 任务激活 (Task Activation)"]
         direction TB
-        SG1["🌊 噪声注入<br/>U' = U + b_noise·ε"]
-        SG2["🔄 线性变换<br/>S = W_A·U' + b_A"]
-        SG3["💫 输出: S ~ Cauchy(loc_S, scale_S)"]
-        SG1 --> SG2 --> SG3
+        S3_Title["决策得分 → 任务输出"]
+        S3_Tasks["多任务支持<br/>分类/回归/序列生成"]
+        S3_Modes["多推理模式<br/>standard/sampling/causal"]
+        S3_Title --> S3_Tasks --> S3_Modes
     end
     
-    Step1 -.-> ScoreGen
+    Input --> Stage1 --> Stage2 --> Stage3
     
-    Step1 --> S2["💫 决策得分 S<br/>S = [S₁, S₂, ..., S_V]"]
+    Output["📤 任务特定输出<br/>预测/分类/生成"]
+    Stage3 --> Output
     
-    S2 --> Step2["✨ 步骤2: 任务激活"]
-    
-    subgraph TaskAct ["任务激活细节"]
-        direction TB
-        TA1["🎯 应用任务激活函数 f_k(s_k)"]
-        TA2["📊 解析计算输出概率/分布"]
-        TA1 --> TA2
-    end
-    
-    Step2 -.-> TaskAct
-    
-    Step2 --> Token2["🔤 词元输出<br/>(OvR) P(S_k > C_k)"]
-    Step2 --> Numeric2["📈 数值输出<br/>w_k·S_k + b_k"]
-    Step2 --> Discrete2["🔢 离散输出<br/>P(C_{k,i} < S_k ≤ C_{k,i+1})"]
-    
-    Token2 --> Final["🎉 最终决策"]
-    Numeric2 --> Final
-    Discrete2 --> Final
-    
-    %% 样式
-    style U2 fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
-    style Step1 fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000
-    style Step2 fill:#e3f2fd,stroke:#2196f3,stroke-width:2px,color:#000
-    style S2 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
-    style Final fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
-    
-    style ScoreGen fill:#fff8e1,stroke:#ffa000,stroke-width:1px,color:#000
-    style TaskAct fill:#e8eaf6,stroke:#3f51b5,stroke-width:1px,color:#000
-    
-    style Token2 fill:#e3f2fd,stroke:#1976d2,color:#000
-    style Numeric2 fill:#e8f5e9,stroke:#388e3c,color:#000
-    style Discrete2 fill:#fce4ec,stroke:#c2185b,color:#000
-```
-
-接下来我们讨论如何具体的从决策得分计算任务输出。
-
-#### 阶段3：任务激活和损失函数计算
-
-##### 两个视角的统一
-
-任务激活是 CausalEngine 的核心组成部分。它定义了一系列**基础任务激活函数**，这些函数独立地作用于高维决策得分向量 $S = [S_1, ..., S_V]$ 的**每一个分量 $S_k$**。这些函数构成了最底层的、确定性的因果机制。CausalEngine 的巧妙之处在于，它利用柯西分布的数学特性，在训练时无需对每个分量 $S_k$ 进行真正采样，而是解析地计算这些函数作用于整个分布后的概率或新分布。
-
-
-
-**关键区分**：
-- **训练时（分布视角）**：我们操作的是随机变量 $S_k \sim \text{Cauchy}(\text{loc}_k, \text{scale}_k)$，通过解析计算得到激活概率或变换后的分布，无需采样。
-- **推理时（数值视角）**：我们可以从分布中采样得到具体数值 $s_k$，然后直接应用激活函数 $f_k(s_k)$ 得到确定性输出。这个体现了结构方程 $Y=f(U, \varepsilon)$ 的底层逻辑。 
-
-
-##### 确定性任务激活函数
-
-
-对于决策得分向量 $S$ 的第 $k$ 个分量（其本身是一个随机变量 $S_k \sim \text{Cauchy}(\text{loc}_k, \text{scale}_k)$），我们定义一个作用于其任意一个实现值 $s_k$ 的基础激活函数 $f_k(s_k)$：
-
-
-1.  **词元索引激活**:
-    $$f_k(s_k) = I(s_k > C_k)$$
-    其中 $I(\cdot)$ 是指示函数，$C_k$ 是第 $k$ 个分量专属的可学习类别阈值。
-
-2.  **数值激活**:
-    $$f_k(s_k) = w_k s_k + b_k$$
-    其中 $w_k$ 和 $b_k$ 是第 $k$ 个分量专属的可学习线性变换参数。
-
-3.  **离散有序数值激活**:
-    $$f_k(s_k) = \sum_{i} y_i \cdot I(C_{k,i} < s_k \le C_{k,i+1})$$
-    其中 $y_i$ 是有序离散输出值, 例如月份，$C_{k,i}$ 是可学习的区间边界（阈值）。
-
-
-
-
-##### 随机变量的计算
-
-
-$f_k(s_k)$ 是确定性函数，但输入 $S_k$ 的随机性导致输出的随机性。我们用随机变量本身来预测结果，而不是用其统计量（如期望）——这正是CausalEngine与传统方法的根本区别。
-
-```mermaid
-graph TB
-    %% 核心标题
-    Title["💡 <b>CausalEngine 核心创新</b><br/><i>直接用随机变量预测</i>"]
-    
-    Title --> Compare
-    
-    %% 对比区
-    subgraph Compare [" "]
+    %% 核心特性标注
+    subgraph Features["🌟 核心特性"]
         direction LR
-        
-        Traditional["🏛️ <b>传统方法</br> E[Y|X]"]
-        
-        VS["<b>VS</b>"]
-        
-        CausalEngine["🚀 <b>CausalEngine</b><br/>S_k ~ Cauchy → f_k(·) → 预测<br/>✅ 分布即预测"]
-        
-        Traditional ~~~ VS ~~~ CausalEngine
+        F1["解析计算<br/>无需采样"]
+        F2["不确定性<br/>显式建模"]
+        F3["因果推理<br/>反事实支持"]
+        F4["个体差异<br/>精确捕获"]
     end
     
-    Compare --> Functions
-    
-    %% 激活函数展示
-    subgraph Functions ["<b>三种激活函数 f_k(·)</b>"]
-        direction LR
-        Token["🔤 词元<br/>P(S_k > C_k)"]
-        Numeric["📊 数值<br/>w_k·S_k + b_k"]  
-        Ordinal["🔢 有序<br/>P(C_k,i < S_k ≤ C_k,i+1)"]
-        
-        Token ~~~ Numeric ~~~ Ordinal
-    end
-    
-    Functions --> Insight
-    
-    %% 核心洞察
-    Insight["⚡ <b>关键洞察</b><br/>分布本身就是预测！<br/>随机 S_k + 确定函数 f_k  <br/> = 随机输出 Y_k"]
-    
-    
-    %% 哲学意义
-    
-    %% 样式美化
-    style Title fill:#fff8e1,stroke:#ff9800,stroke-width:3px
-    style Compare fill:#f8f9fa,stroke:#dee2e6,stroke-width:1px
-    style Traditional fill:#ffebee,stroke:#d32f2f,stroke-width:2px
-    style CausalEngine fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
-    style VS fill:transparent,stroke:none
-    
-    style Functions fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style Token fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px
-    style Numeric fill:#e8f5e9,stroke:#388e3c,stroke-width:1px
-    style Ordinal fill:#fce4ec,stroke:#c2185b,stroke-width:1px
-    
-    style Insight fill:#fff3e0,stroke:#ff9800,stroke-width:3px
-```
-
-##### 损失函数的计算
-CausalEngine 的一个关键优势是其任务无关性。通过定义不同的任务激活函数，同一个决策得分 $S$ 可以用于多种预测任务。各任务的解析计算与损失函数如下：
-
-```mermaid
-graph LR
-    %% 输入
-    Input["🎯 <b>输入</b><br/>决策得分向量 S<br/>S_k ~ Cauchy(μ_k, γ_k)"]
-    
-    %% 直接连接到三个并行任务分支
-    Input --> Token
-    Input --> Numeric
-    Input --> Discrete
-    
-    subgraph Token ["🔤 词元分类"]
-        direction LR
-        T1["<b>任务激活与概率</b><br/>f(s_k) = I(s_k > C_k)<br/>P_k = 1/2 + arctan((μ_k - C_k)/γ_k)/π"]
-        T2["<b>输出和损失</b><br/>argmax_k P_k <br/>OvR BCE Loss"]
-        T1 --> T2
-    end
-    
-    subgraph Numeric ["📊 数值回归"]
-        direction LR
-        N1["<b>任务激活与分布</b><br/>f(s_k) = w_k·s_k + b_k<br/>Y_k ~ Cauchy(w_k·μ_k+b_k, |w_k|·γ_k)"]
-        N2["<b>输出和损失</b><br/>ŷ_k = w_k·μ_k + b_k <br/> Cauchy NLL Loss"]
-        N1 --> N2
-    end
-    
-    subgraph Discrete ["🔢 有序分类"]
-        direction LR
-        D1["<b>任务激活与概率</b><br/>f(s_k) = ∑y_i·I(C_{k,i} < s_k ≤ C_{k,i+1})<br/>P(y_i) = F(C_{k,i+1}) - F(C_{k,i})"]
-        D2["<b>输出和损失</b><br/>argmax_i P(y_i) <br/>交叉熵 Loss"]
-        D1 --> D2
-    end
-    
-    %% 输出整合
-    Token --> Output
-    Numeric --> Output
-    Discrete --> Output
-    
-    Output["🎯 <b>统一输出</b><br/>多任务结果<br/>L = ∑w_t·L_t"]
-    
-    %% 注释
-    Input -.-> Note["📌 <b>关键点</b><br/>S_k 是随机的"]
+    Stage1 -.-> F4
+    Stage2 -.-> F1
+    Stage3 -.-> F2
+    Output -.-> F3
     
     %% 样式定义
-    style Input fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#000
-    style Output fill:#e0f2f1,stroke:#00796b,stroke-width:3px,color:#000
-    style Note fill:#fffde7,stroke:#fbc02d,stroke-width:2px,color:#000
+    classDef inputStyle fill:#e1f5fe,stroke:#01579b,stroke-width:3px
+    classDef stage1Style fill:#f3e5f5,stroke:#7b1fa2,stroke-width:3px
+    classDef stage2Style fill:#fff3e0,stroke:#f57c00,stroke-width:3px
+    classDef stage3Style fill:#e8f5e8,stroke:#2e7d32,stroke-width:3px
+    classDef outputStyle fill:#ffebee,stroke:#c62828,stroke-width:3px
+    classDef featureStyle fill:#fafafa,stroke:#616161,stroke-width:1px
     
-    style Token fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px,color:#000
-    style Numeric fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#000
-    style Discrete fill:#fce4ec,stroke:#d32f2f,stroke-width:2px,color:#000
+    class Input inputStyle
+    class Stage1,S1_Title,S1_Process,S1_Networks stage1Style
+    class Stage2,S2_Title,S2_Process,S2_Properties stage2Style
+    class Stage3,S3_Title,S3_Tasks,S3_Modes stage3Style
+    class Output outputStyle
+    class Features,F1,F2,F3,F4 featureStyle
 ```
 
+### 2.2 阶段1：归因推断（Abduction）
 
-**1. 词元索引任务激活（分类任务）**
-
--   **目标**: 对每个分量 $k$，计算其基础任务激活函数输出为1的概率，即 $P(f_k(S_k) = 1)$。
--   **解析推导**:
-    $$P(f_k(S_k)=1) = P(I(S_k > C_k)=1) = P(S_k > C_k)$$
-    利用柯西分布的累积分布函数(CDF)，我们可以直接计算这个概率：
-    $$P(S_k > C_k) = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\text{loc}_{S_k} - C_k}{\text{scale}_{S_k}}\right)$$
--   **多分类决策机制**: 对于词汇表中的所有词元 $k \in \{1, 2, ..., V\}$，每个词元都有独立的激活概率 $P_k$。最终的词元选择采用 **OvR (One-vs-Rest)** 策略：
-    $$\text{selected\_token} = \arg\max_k P_k = \arg\max_k P(S_k > C_k)$$
-    这种独立判断的方式与传统的 Softmax 不同，每个词元的选择概率不需要归一化，允许模型表达更灵活的不确定性。
--   **损失函数**: 基于每个分量的概率，对每个分量使用**二元交叉熵损失**：
-    $$\mathcal{L}_{\text{token}} = -\sum_{k=1}^V \left[ y_k \log P_k + (1-y_k) \log(1-P_k) \right]$$
-    其中 $y_k$ 是真实标签的 one-hot 编码。
-
-**2. 数值任务激活（回归任务）**
-
--   **目标**: 对每个分量 $k$，得到基础任务激活函数作用后，输出变量的分布。
--   **参数**: 此任务激活头包含可学习的权重 $w_k$ 和偏置 $b_k$。
--   **解析推导**: 基础函数是线性变换 $f_k(s_k) = w_k s_k + b_k$。根据柯西分布的线性稳定性：
-    如果 $S_k \sim \text{Cauchy}(\text{loc}_{S_k}, \text{scale}_{S_k})$，
-    那么输出 $Y_k = f_k(S_k)$ 的分布为：
-    $$Y_k \sim \text{Cauchy}(\mu_{Y_k}, \gamma_{Y_k}) = \text{Cauchy}(w_k \text{loc}_{S_k} + b_k, |w_k| \text{scale}_{S_k})$$
--   **损失函数**: 对每个分量，基于这个推导出的输出分布，使用**柯西分布的负对数似然损失 (Cauchy NLL Loss)**。对于真实值 $y_k$，其损失为：
-    $$\mathcal{L}_{\text{reg}, k} = \log(\pi\gamma_{Y_k}) + \log\left(1 + \left(\frac{y_k - \mu_{Y_k}}{\gamma_{Y_k}}\right)^2\right)$$
-
-**3. 离散有序数值任务激活（有序分类任务）**
-
--   **目标**: 对每个分量 $k$，计算其任务激活函数输出为特定数值 $y_i$ 的概率，即 $P(f_k(S_k) = y_i)$。
--   **解析推导**:
-    $$P(f_k(S_k)=y_i) = P(\sum_{j} y_j \cdot I(C_{k,j} < S_k \le C_{k, j+1}) = y_i) = P(C_{k,i} < S_k \le C_{k,i+1})$$
-    利用柯西CDF，我们可以直接计算这个区间概率：
-    $$P(C_{k,i} < S_k \le C_{k,i+1}) = F(C_{k,i+1}) - F(C_{k,i}) \\
-    = \frac{1}{\pi}\left[\arctan\left(\frac{C_{k,i+1} - \text{loc}_{S_k}}{\text{scale}_{S_k}}\right) - \arctan\left(\frac{C_{k,i} - \text{loc}_{S_k}}{\text{scale}_{S_k}}\right)\right]$$
--   **损失函数**: 将所有可能的数值 $y_i$ 视为不同类别，对每个分量使用标准的**分类交叉熵损失**。
-    $$\mathcal{L}_{\text{ordinal}, k} = -\sum_{i} y_i \log P(y_i)$$
-
-##### 更多任务扩展性
-
-CausalEngine 的数学框架具有天然的扩展性。添加新任务只需：
-
-1. 定义基础任务激活函数 $f_k(s_k)$
-2. 推导其在柯西分布下的解析形式
-3. 实现相应的分布损失函数
-
-例如，时间预测任务可以定义为：
-$$f_k(s_k) = \exp(w_k \cdot s_k + b_k)$$
-其中输出表示事件发生的时间。
-
-多任务学习时，总损失函数为各任务损失的加权和：
-$$\mathcal{L}_{\text{total}} = \sum_{t \in \text{tasks}} w_t \cdot \mathcal{L}_t$$
-
-这种设计使得CausalEngine可以同时处理分类、回归、排序等多种任务，真正实现了"一个引擎，多种应用"的愿景。
-
-
-
-## 推理模式：对噪声的灵活调制
-
-CausalEngine 通过一个统一的数学框架实现了对不确定性的精确控制。在推理阶段，我们通过 `temperature` 和 `do_sample` 两个参数调制已学习的外生噪声 $\mathbf{b}_{\text{noise}}$，以实现从确定性推理到创造性生成的连续谱。
-
-### 1. 标准模式 (Standard Mode)
-- **设置**: `do_sample=False`, `temperature > 0`
-- **机制**: 噪声被 `temperature` 缩放后，增加**尺度参数**，扩大决策的不确定性，但保持个体身份不变。
-- **数学原理**:
-  $$U' \sim \text{Cauchy}(\mu_U, \gamma_U + \text{temperature} \cdot |\mathbf{b}_{\text{noise}}|)$$
-- **哲学含义**: 模拟环境噪声使个体的判断变得更加模糊，但不改变其核心身份。
-
-### 2. 采样模式 (Sampling Mode)
-- **设置**: `do_sample=True`, `temperature > 0`
-- **机制**: 噪声被 `temperature` 缩放后，扰动**位置参数**，改变个体的身份表征，探索多样性。
-- **数学原理**: 首先采样标准柯西噪声 $\varepsilon \sim \text{Cauchy}(0, 1)$，然后：
-  $$U' \sim \text{Cauchy}(\mu_U + \text{temperature} \cdot |\mathbf{b}_{\text{noise}}| \cdot \varepsilon, \gamma_U)$$
-- **哲学含义**: 探索当个体因随机扰动而偏离其典型状态时，会做出何种不同的决策。
-
-### 3. 因果模式 (Causal Mode)
-- **设置**: `temperature = 0`
-- **机制**: 完全关闭外生噪声的影响。
-- **数学原理**:
-  $$U' \sim \text{Cauchy}(\mu_U, \gamma_U)$$
-- **哲学含义**: 个体在无外生噪声下的必然表达，是最纯粹的因果推理。
-
+**核心任务**：从观测证据推断个体的内在因果表征
 
 ```mermaid
 graph TB
-    %% 主流程：从上到下
+    Evidence["📊 输入证据 E<br/>特征/上下文/历史"]
     
-    Input["🎯 推理输入<br/>个体分布 U ~ Cauchy(μ_U, γ_U)（随机变量）<br/>已学习噪声强度 b_noise"]
-    
-    Input --> Control["⚙️ 推理控制<br/>temperature (T) & do_sample"]
-    
-    %% 将三个模式放在一个隐藏的容器中，以便统一连接
-    subgraph " "
-        direction LR %% 关键：让内部的模式水平排列
+    subgraph AbductionDetail["归因推断详细流程"]
+        direction TB
         
-        subgraph CausalMode ["⚖️ 因果模式"]
-            direction TB
-            C_Cond["条件: T = 0"]
-            C_Desc["💎 纯粹因果推理<br/>无噪声影响"]
-            C_Math["U' = U<br/>U' ~ Cauchy(μ_U, γ_U)"]
-            C_Use["应用场景:<br/>• 确定性推理<br/>• 硬决策<br/>• 点估计"]
-            C_Cond --> C_Desc --> C_Math --> C_Use
+        subgraph DualNetwork["双网络并行架构"]
+            direction LR
+            LocNet["📍 位置网络<br/>μ_U = loc_net(E)<br/>预测个体"中心""]
+            ScaleNet["📏 尺度网络<br/>γ_U = softplus(scale_net(E))<br/>预测个体"不确定性""]
         end
         
-        subgraph StandardMode ["🌡️ 标准模式"]
+        subgraph Distribution["个体表征分布"]
             direction TB
-            S_Cond["条件: T > 0, do_sample = False"]
-            S_Desc["❄️ 增加不确定性<br/>扩大尺度参数"]
-            S_Math["γ' = γ_U + T·|b_noise|<br/>U' ~ Cauchy(μ_U, γ')"]
-            S_Use["应用场景:<br/>• 稳定生成<br/>• 软决策<br/>• 置信区间"]
-            S_Cond --> S_Desc --> S_Math --> S_Use
-        end
-        
-        subgraph SamplingMode ["🎲 采样模式"]
-            direction TB
-            M_Cond["条件: T > 0, do_sample = True"]
-            M_Desc["🎨 探索多样性<br/>扰动位置参数"]
-            M_Math["ε ~ Cauchy(0,1)<br/>μ' = μ_U + T·|b_noise|·ε<br/>U' ~ Cauchy(μ', γ_U)"]
-            M_Use["应用场景:<br/>• 创造性生成<br/>• 探索边界<br/>• 蒙特卡洛"]
-            M_Cond --> M_Desc --> M_Math --> M_Use
+            Formula["U ~ Cauchy(μ_U, γ_U)"]
+            PDF["概率密度函数:<br/>p(U|E) = 1/(πγ_U) · 1/(1 + ((U-μ_U)/γ_U)²)"]
+            Meaning["包含个体所有<br/>内在因果属性"]
         end
     end
     
-    %% 连接控制与各个模式
-    Control --> CausalMode
-    Control --> StandardMode
-    Control --> SamplingMode
+    Evidence --> DualNetwork
+    DualNetwork --> Distribution
     
-    %% 连接各个模式到输出
-    CausalMode --> Output
-    StandardMode --> Output
-    SamplingMode --> Output
-    
-    subgraph Output ["🎉 输出"]
-        OutDesc["调制后的个体分布 U'（随机变量）<br/>传递给行动阶段生成决策得分 S"]
+    subgraph CauchyProperties["柯西分布的深刻含义"]
+        direction TB
+        P1["📊 重尾分布<br/>为"黑天鹅"事件保留概率"]
+        P2["🤔 无穷方差<br/>承认个体的"深刻未知""]
+        P3["🔄 线性稳定性<br/>支持解析计算"]
+        P4["🌍 开放世界<br/>诚实表达不确定性"]
     end
     
-    %% 样式 (与原版完全相同)
-    style Input fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000
-    style Control fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000
-    style Output fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
+    Distribution --> CauchyProperties
     
-    style CausalMode fill:#e3f2fd,stroke:#2196f3,stroke-width:2px,color:#000
-    style StandardMode fill:#fff8e1,stroke:#ffc107,stroke-width:2px,color:#000
-    style SamplingMode fill:#e8f5e9,stroke:#4caf50,stroke-width:2px,color:#000
+    classDef evidenceStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef networkStyle fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef distributionStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef propertyStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    
+    class Evidence evidenceStyle
+    class DualNetwork,LocNet,ScaleNet networkStyle
+    class Distribution,Formula,PDF,Meaning distributionStyle
+    class CauchyProperties,P1,P2,P3,P4 propertyStyle
 ```
 
+**数学表达**：
 
+位置网络计算个体表征的"中心"：
+$$\mu_U = \text{loc\_net}(E)$$
 
-## 结论
+尺度网络计算个体表征的"不确定性"：
+$$\gamma_U = \text{softplus}(\text{scale\_net}(E)) = \log(1 + \exp(\text{scale\_net}(E)))$$
 
+个体表征分布：
+$$U \sim \text{Cauchy}(\mu_U, \gamma_U)$$
 
+### 2.3 阶段2：行动决策（Action）
+
+**核心任务**：基于个体表征生成决策得分，体现普适因果规律
 
 ```mermaid
 graph TB
-    %% CausalEngine 完整架构 - 优化布局版
+    InputU["🎲 输入：个体表征<br/>U ~ Cauchy(μ_U, γ_U)"]
     
-    %% === 主线流程（中央垂直） ===
-    Evidence["📊 <b>证据 E</b><br/><i>输入数据/观测</i>"]
-    Stage1["🔍 <b>归因推断</b><br/><i>Abduction</i><br/>证据 → 个体"]
-    U["🎲 <b>个体选择变量 U</b><br/><i>Individual Selection Variable</i><br/>U ~ Cauchy(μ_U, γ_U)"]
-    Stage2["⚡ <b>行动决策</b><br/><i>Action</i><br/>个体 → 决策 → 输出"]
-    Output["🎯 <b>智能输出</b><br/><i>多任务结果</i>"]
-    
-    Evidence ==>|"<b>阶段 1</b>"| Stage1
-    Stage1 ==>|"<b>推断</b>"| U
-    U ==>|"<b>阶段 2</b>"| Stage2
-    Stage2 ==>|"<b>结果</b>"| Output
-    
-    %% === 归因网络（左侧） ===
-    Stage1 -.- AbdNet
-    subgraph AbdNet ["&nbsp;&nbsp;<b>归因网络</b>&nbsp;&nbsp;"]
+    subgraph ActionProcess["行动决策流程"]
         direction TB
-        Abd1["📍 位置网络<br/>μ_U = loc_net(E)"]
-        Abd2["📏 尺度网络<br/>γ_U = softplus(scale_net(E))"]
+        
+        subgraph Step1["步骤1: 外生噪声注入"]
+            direction LR
+            Noise["ε ~ Cauchy(0,1)<br/>外生随机性"]
+            Injection["U' = U + b_noise·ε<br/>噪声注入"]
+            Result1["U' ~ Cauchy(μ_U, γ_U + |b_noise|)<br/>增加不确定性"]
+        end
+        
+        subgraph Step2["步骤2: 线性因果变换"]
+            direction LR
+            Transform["S = W_A·U' + b_A<br/>因果规律应用"]
+            Linear["利用柯西分布<br/>线性稳定性"]
+            Result2["S ~ Cauchy(loc_S, scale_S)<br/>决策得分分布"]
+        end
+        
+        subgraph Mathematics["数学推导"]
+            direction TB
+            Loc["loc_S = W_A^T·μ_U + b_A"]
+            Scale["scale_S = |W_A^T|·(γ_U + |b_noise|)"]
+            Final["完全解析<br/>无需采样"]
+        end
     end
     
-    %% === 推理模式（中间左） ===
-    U -.- Modes
-    subgraph Modes ["&nbsp;&nbsp;<b>推理模式</b>&nbsp;&nbsp;"]
+    InputU --> Step1 --> Step2 --> Mathematics
+    
+    subgraph LinearStability["柯西分布线性稳定性"]
         direction TB
-        M1["⚖️ <b>因果模式</b><br/>T = 0<br/>纯粹因果推理"]
-        M2["🌡️ <b>标准模式</b><br/>T > 0, do_sample = False<br/>扩大尺度参数"]
-        M3["🎲 <b>采样模式</b><br/>T > 0, do_sample = True<br/>扰动位置参数"]
+        Property["X ~ Cauchy(μ,γ)<br/>⇓<br/>aX + b ~ Cauchy(aμ+b, |a|γ)"]
+        Advantage["🎯 优势：整个过程解析可计算<br/>🚀 无需蒙特卡洛采样<br/>⚡ 高效且精确"]
     end
     
-    %% === 行动网络（右侧） ===
-    Stage2 -.- ActNet
-    subgraph ActNet ["&nbsp;&nbsp;<b>行动网络</b>&nbsp;&nbsp;"]
-        direction TB
-        Act1["🌊 噪声注入<br/>U' = U + b_noise·ε<br/>ε ~ Cauchy(0,1)"]
-        Act2["🔄 线性变换<br/>S = W_A·U' + b_A<br/>S = [S₁, ..., S_V]"]
-        Act1 --> Act2
-    end
+    Mathematics --> LinearStability
     
-    %% === 任务激活（最右侧） ===
-    Stage2 -.- Tasks
-    subgraph Tasks ["&nbsp;&nbsp;<b>任务激活</b>&nbsp;&nbsp;"]
-        direction TB
-        Task1["🔤 <b>词元分类</b><br/>OvR策略<br/>P(S_k > C_k)"]
-        Task2["📈 <b>数值回归</b><br/>线性变换<br/>w_k·S_k + b_k"]
-        Task3["🔢 <b>有序分类</b><br/>区间概率<br/>P(C_i < S_k ≤ C_{i+1})"]
-    end
+    OutputS["📈 输出：决策得分<br/>S ~ Cauchy(loc_S, scale_S)"]
+    Mathematics --> OutputS
     
-    %% === 核心公式（底部） ===
-    Output -.-> Formula["<b>Y = f(U, ε)</b><br/><i>其中 f 是普适因果机制</i>"]
+    classDef inputStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef stepStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef mathStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef stabilityStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef outputStyle fill:#ffebee,stroke:#c62828,stroke-width:2px
     
-    %% === 样式设计 ===
-    %% 主线节点 - 渐变色彩
-    style Evidence fill:#2e7d32,stroke:#1b5e20,stroke-width:4px,color:#fff
-    style Stage1 fill:#6a1b9a,stroke:#4a148c,stroke-width:4px,color:#fff  
-    style U fill:#1565c0,stroke:#0d47a1,stroke-width:4px,color:#fff
-    style Stage2 fill:#ef6c00,stroke:#e65100,stroke-width:4px,color:#fff
-    style Output fill:#00695c,stroke:#004d40,stroke-width:4px,color:#fff
-    
-    %% 细节模块 - 半透明背景
-    style AbdNet fill:#f3e5f5ee,stroke:#7b1fa2,stroke-width:2px,color:#000
-    style Modes fill:#e0f2f1ee,stroke:#00796b,stroke-width:2px,color:#000
-    style ActNet fill:#fff3e0ee,stroke:#f57c00,stroke-width:2px,color:#000
-    style Tasks fill:#e3f2fdee,stroke:#1976d2,stroke-width:2px,color:#000
-    
-    %% 内部节点 - 浅色填充
-    style Abd1 fill:#ede7f6,color:#000
-    style Abd2 fill:#ede7f6,color:#000
-    style M1 fill:#e0f2f1,color:#000
-    style M2 fill:#e0f2f1,color:#000
-    style M3 fill:#e0f2f1,color:#000
-    style Act1 fill:#fff3e0,color:#000
-    style Act2 fill:#fff3e0,color:#000
-    style Task1 fill:#e1f5fe,color:#000
-    style Task2 fill:#e1f5fe,color:#000
-    style Task3 fill:#e1f5fe,color:#000
-    
-    %% 公式样式
-    style Formula fill:#f5f5f5,stroke:#bdbdbd,stroke-width:1px,color:#666,stroke-dasharray: 3 3
-    
-    %% 定位微调
-    classDef leftAlign text-align:left
-    classDef rightAlign text-align:right
+    class InputU inputStyle
+    class Step1,Step2,Noise,Injection,Result1,Transform,Linear,Result2 stepStyle
+    class Mathematics,Loc,Scale,Final mathStyle
+    class LinearStability,Property,Advantage stabilityStyle
+    class OutputS outputStyle
 ```
-CausalEngine 提供了一个数学上完备、计算上高效的因果推理算法。其核心贡献包括：
 
-### 理论创新
+**线性稳定性的数学魔法**：
 
-1. **统一的因果架构**：通过归因-行动两阶段，实现了从观测到决策的完整因果链条
-2. **解析不确定性运算**：利用柯西分布的线性稳定性，避免了采样开销，实现了对"可能性"的直接计算
-3. **独立决策机制**：通过OvR（One-vs-Rest）策略，每个选择具有独立的激活概率，摆脱了softmax的归一化约束
-4. **灵活的噪声控制**：通过temperature参数的数学调制，在同一框架内实现确定性和随机性的连续过渡
+柯西分布具有独特的线性稳定性质：
+$$\text{如果 } X \sim \text{Cauchy}(\mu, \gamma), \text{ 则 } aX + b \sim \text{Cauchy}(a\mu + b, |a|\gamma)$$
 
-### 实践意义
+**加法稳定性**：
+$$X_1 \sim \text{Cauchy}(\mu_1, \gamma_1), X_2 \sim \text{Cauchy}(\mu_2, \gamma_2) \Rightarrow X_1 + X_2 \sim \text{Cauchy}(\mu_1 + \mu_2, \gamma_1 + \gamma_2)$$
 
-CausalEngine 不仅支持传统的词元预测，还原生支持：
-- **连续数值预测**：通过线性变换保持柯西分布性质
-- **离散有序预测**：通过区间概率的解析计算
-- **多任务学习**：通过独立的任务激活函数组合
+**线性组合稳定性**：
+$$\sum_{i=1}^n w_i X_i \sim \text{Cauchy}\left(\sum_{i=1}^n w_i \mu_i, \sum_{i=1}^n |w_i| \gamma_i\right)$$
 
-这种设计使得CausalEngine成为一个真正通用的智能算法，能够作为各类应用的基础引擎。其数学优雅性和工程实用性的结合，为构建下一代智能系统提供了坚实的理论基础。 
+这使得整个前向传播过程完全解析化，无需任何采样！
+
+### 2.4 阶段3：任务激活（Task Activation）
+
+**核心任务**：将决策得分转化为任务特定的输出
+
+任务激活头是 CausalEngine 的最后一层，负责将通用的决策得分 $S$ 转换为具体任务需要的输出格式。不同的激活模式支持不同类型的机器学习任务。
+
+```mermaid
+graph TB
+    InputS["📈 输入：决策得分<br/>S ~ Cauchy(loc_S, scale_S)"]
+    
+    subgraph TaskTypes["支持的任务类型"]
+        direction TB
+        
+        subgraph Regression["📊 数值回归"]
+            direction TB
+            RegFormula["y = w·loc_S + b<br/>直接使用位置参数"]
+            RegOutput["连续数值输出"]
+        end
+        
+        subgraph Classification["🏷️ 分类任务"]
+            direction TB
+            ClassFormula["logits = loc_S<br/>概率 = OvR(logits)"]
+            ClassOutput["类别概率分布"]
+        end
+        
+        subgraph Sequence["📝 序列生成"]
+            direction TB
+            SeqFormula["next_token ~ P(S_k > threshold)"]
+            SeqOutput["词元序列"]
+        end
+    end
+    
+    subgraph InferenceModes["推理模式"]
+        direction TB
+        
+        Standard["🌡️ 标准模式<br/>使用完整分布信息<br/>loc_S ± scale_S"]
+        Sampling["🎲 采样模式<br/>从分布中采样<br/>s ~ Cauchy(loc_S, scale_S)"]
+        CausalMode["⚖️ 因果模式<br/>纯推理，无随机性<br/>直接使用 loc_S"]
+    end
+    
+    InputS --> TaskTypes
+    InputS --> InferenceModes
+    
+    subgraph Advantages["核心优势"]
+        direction LR
+        A1["🎯 多任务统一<br/>同一框架支持"]
+        A2["🔧 模式灵活<br/>根据需求选择"]
+        A3["📊 不确定性<br/>显式量化"]
+        A4["🧠 可解释<br/>决策过程透明"]
+    end
+    
+    TaskTypes --> Advantages
+    InferenceModes --> Advantages
+    
+    classDef inputStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef taskStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef modeStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef advantageStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    
+    class InputS inputStyle
+    class TaskTypes,Regression,Classification,Sequence,RegFormula,RegOutput,ClassFormula,ClassOutput,SeqFormula,SeqOutput taskStyle
+    class InferenceModes,Standard,Sampling,CausalMode modeStyle
+    class Advantages,A1,A2,A3,A4 advantageStyle
+```
+
+#### 数学等价性配置
+
+对于数学等价性验证，可以将任务激活头配置为恒等映射模式：
+
+```mermaid
+graph TB
+    subgraph IdentityConfig["恒等映射配置"]
+        direction TB
+        
+        subgraph Regression["回归任务恒等映射"]
+            direction TB
+            RegConfig["y = 1.0 × loc_S + 0.0<br/>直接输出位置参数"]
+            RegBenefit["与传统线性层完全等价<br/>便于数学验证"]
+        end
+        
+        subgraph Classification["分类任务恒等映射"]
+            direction TB
+            ClassConfig["logits = loc_S<br/>跳过arctan激活"]
+            ClassBenefit["与传统logits层等价<br/>支持CrossEntropy损失"]
+        end
+        
+        subgraph Purpose["配置目的"]
+            direction TB
+            MathEquiv["建立数学等价基线<br/>验证CausalEngine理论基础"]
+            Performance["为因果推理能力<br/>提供性能参考标准"]
+        end
+    end
+    
+    Regression --> Purpose
+    Classification --> Purpose
+    
+    classDef configStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef purposeStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    
+    class Regression,Classification,RegConfig,RegBenefit,ClassConfig,ClassBenefit configStyle
+    class Purpose,MathEquiv,Performance purposeStyle
+```
+
+这种恒等映射配置使得 CausalEngine 在冻结条件下与传统 MLP 完全等价，为后续的因果推理能力评估提供了可信的基线。
+
+## 3. 柯西分布：开放世界的数学语言
+
+### 3.1 为什么选择柯西分布？
+
+```mermaid
+graph TB
+    subgraph Comparison["分布对比：高斯 vs 柯西"]
+        direction TB
+        
+        subgraph Gaussian["🔔 高斯分布（传统选择）"]
+            direction TB
+            G1["指数衰减尾部<br/>P(|X| > k) ~ exp(-k²)"]
+            G2["有限方差<br/>σ² < ∞"]
+            G3["封闭世界假设<br/>极端事件概率趋零"]
+            G4["线性叠加复杂<br/>需要复杂计算"]
+        end
+        
+        subgraph Cauchy["📐 柯西分布（CausalEngine选择）"]
+            direction TB
+            C1["幂律衰减尾部<br/>P(|X| > k) ~ 1/k"]
+            C2["无穷方差<br/>σ² = ∞"]
+            C3["开放世界表达<br/>黑天鹅事件保留概率"]
+            C4["线性稳定性<br/>解析计算魔法"]
+        end
+        
+        subgraph Philosophy["深层哲学意义"]
+            direction TB
+            P1["🤔 承认未知<br/>我们永远无法完全了解个体"]
+            P2["🌍 开放世界<br/>总有意外可能发生"]
+            P3["⚡ 计算高效<br/>无需复杂积分"]
+            P4["🎯 因果本质<br/>重尾分布符合因果直觉"]
+        end
+    end
+    
+    Gaussian --> Philosophy
+    Cauchy --> Philosophy
+    
+    classDef gaussianStyle fill:#ffebee,stroke:#c62828,stroke-width:2px
+    classDef cauchyStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef philosophyStyle fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
+    
+    class Gaussian,G1,G2,G3,G4 gaussianStyle
+    class Cauchy,C1,C2,C3,C4 cauchyStyle
+    class Philosophy,P1,P2,P3,P4 philosophyStyle
+```
+
+### 3.2 柯西分布的三重价值
+
+**1. 诚实的不确定性表达**
+> "任何观测到的伟大成就，任何人都有非零的概率做出来"
+
+重尾分布为"黑天鹅"事件保留不可忽略的概率，诚实表达开放世界的深层不确定性。
+
+**2. 数学上的"深刻未知"**
+
+柯西分布的期望和方差数学上无定义：
+$$E[X] = \text{undefined}, \quad \text{Var}[X] = \text{undefined}$$
+
+这恰好对应了"我们永远无法完全知道一个个体到底是什么样的"这一哲学事实。
+
+**3. 线性稳定性（计算魔法）**
+
+柯西分布的线性稳定性使得整个前向传播过程可以完全解析化：
+
+$$X_1 + X_2 \sim \text{Cauchy}(\mu_1 + \mu_2, \gamma_1 + \gamma_2)$$
+$$w \cdot X \sim \text{Cauchy}(w \cdot \mu, |w| \cdot \gamma)$$
+
+## 4. 实际应用与优势
+
+### 4.1 与传统方法的对比
+
+```mermaid
+graph TB
+    subgraph Traditional["传统深度学习"]
+        direction TB
+        T1["学习 P(Y|X)<br/>条件分布拟合"]
+        T2["Softmax 输出<br/>竞争性归一化"]
+        T3["隐式不确定性<br/>黑盒概率"]
+        T4["采样推理<br/>蒙特卡洛方法"]
+        T5["固定模式<br/>难以反事实"]
+    end
+    
+    subgraph CausalEngine["CausalEngine"]
+        direction TB
+        C1["学习 Y=f(U,ε)<br/>因果机制建模"]
+        C2["OvR 分类<br/>独立二元判断"]
+        C3["显式不确定性<br/>scale 参数量化"]
+        C4["解析推理<br/>无需采样"]
+        C5["因果模式<br/>支持反事实"]
+    end
+    
+    subgraph Advantages["CausalEngine 优势"]
+        direction TB
+        A1["🎯 因果可解释<br/>个体+规律+噪声"]
+        A2["⚡ 计算高效<br/>解析vs采样"]
+        A3["🌡️ 不确定性<br/>显式vs隐式"]
+        A4["🔄 反事实<br/>支持vs困难"]
+        A5["🧠 可控生成<br/>个体一致性"]
+    end
+    
+    Traditional --> Advantages
+    CausalEngine --> Advantages
+    
+    classDef traditionalStyle fill:#ffebee,stroke:#c62828,stroke-width:2px
+    classDef causalStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef advantageStyle fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
+    
+    class Traditional,T1,T2,T3,T4,T5 traditionalStyle
+    class CausalEngine,C1,C2,C3,C4,C5 causalStyle
+    class Advantages,A1,A2,A3,A4,A5 advantageStyle
+```
+
+### 4.2 核心技术突破
+
+```mermaid
+graph TB
+    subgraph Breakthroughs["CausalEngine 技术突破"]
+        direction TB
+        
+        subgraph Math["🔬 数学突破"]
+            direction TB
+            M1["解析不确定性<br/>首次实现分布解析运算"]
+            M2["线性稳定性<br/>柯西分布计算魔法"]
+            M3["因果分解<br/>个体+规律+噪声"]
+        end
+        
+        subgraph Computation["⚡ 计算突破"]
+            direction TB
+            Comp1["无采样推理<br/>完全解析化前向传播"]
+            Comp2["高效训练<br/>梯度直接可计算"]
+            Comp3["多模式推理<br/>灵活适应不同需求"]
+        end
+        
+        subgraph Application["🎯 应用突破"]
+            direction TB
+            App1["可控生成<br/>个体一致性保证"]
+            App2["反事实推理<br/>原生支持"]
+            App3["不确定性量化<br/>可信AI基础"]
+        end
+    end
+    
+    Math --> Computation --> Application
+    
+    subgraph Impact["🌟 影响与意义"]
+        direction LR
+        I1["AI理论革新<br/>从模仿到理解"]
+        I2["工程实践提升<br/>效率与可控性"]
+        I3["科学研究工具<br/>因果推理平台"]
+    end
+    
+    Breakthroughs --> Impact
+    
+    classDef mathStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef compStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef appStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef impactStyle fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
+    
+    class Math,M1,M2,M3 mathStyle
+    class Computation,Comp1,Comp2,Comp3 compStyle
+    class Application,App1,App2,App3 appStyle
+    class Impact,I1,I2,I3 impactStyle
+```
+
+## 5. 总结与展望
+
+CausalEngine 代表了人工智能从"模仿"向"理解"的范式转变。通过引入个体选择变量 $U$ 和利用柯西分布的线性稳定性，我们首次实现了：
+
+1. **真正的因果推理**：基于 $Y = f(U, \varepsilon)$ 的因果机制建模
+2. **解析不确定性**：无需采样的完全解析化计算  
+3. **可控可解释**：个体差异与普适规律的清晰分离
+4. **反事实支持**：原生支持反事实推理和可控生成
+
+这不仅是技术上的突破，更是AI哲学的革新——从学习表面统计规律转向理解深层因果机制，为构建真正智能、可信、可控的AI系统奠定了坚实基础。
+
+---
+
+**文档版本**: v6.0 (图文并茂完整版)  
+**最后更新**: 2024年6月24日  
+**理论基础**: [Distribution-consistency SCM](https://arxiv.org/abs/2401.15911)  
+**技术状态**: ✅ 理论完备，实现验证
