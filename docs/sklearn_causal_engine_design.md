@@ -165,7 +165,7 @@ def predict(self, X, mode=None):
     Returns:
     --------
     predictions : array-like or dict
-        - MLPCausalRegressor: 数值数组
+        - MLPCausalRegressor: 数值数组 (一维输出时包含完整分布信息)
         - MLPCausalClassifier: 类别标签数组
         若mode != 'deterministic', 还包含分布信息
     """
@@ -637,7 +637,7 @@ print(f"CausalEngine精度: {accuracy_score(y_test_clean, causal_clf.predict(X_t
 ### 竞争优势总结
 
 **技术差异化**：
-- **数学创新**：第一个基于Cauchy分布的生产级分类器/回归器
+- **数学创新**：基于Cauchy分布的因果推理框架，在一维回归中提供完整的不确定性量化
 - **解析优势**：无采样的分布计算，极高的计算效率
 - **独特架构**：OvR策略带来的灵活性和表达能力
 
