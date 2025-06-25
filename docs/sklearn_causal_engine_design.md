@@ -1,6 +1,10 @@
 # Sklearn-Style CausalEngine 设计文档
 
-> **MLPCausalRegressor & MLPCausalClassifier 核心数学框架**
+## 核心数学框架
+
+MLPCausalRegressor & MLPCausalClassifier
+
+### 前向传播
 
 CausalEngine基于因果结构方程 $Y = f(U, E)$ 构建预测模型，其中 $U$ 为个体因果表征，$E \sim \text{Cauchy}(0, I)$ 为外生噪声。核心数学框架利用柯西分布的线性稳定性：若 $X \sim \text{Cauchy}(\mu, \gamma)$，则 $aX + b \sim \text{Cauchy}(a\mu + b, |a|\gamma)$。
 
@@ -76,23 +80,90 @@ flowchart LR
     class Input,CausalLaw,Output commonStyle
 ```
 
-输出生成：回归任务 $Y = \mu_S$，分类任务 $$P(Y=k) = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\mu_{S,k}}{\gamma_{S,k}}\right)$$
+输出生成：回归任务 $Y = \mu_S$，分类任务 $$P(Y=k) = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\mu_{S_k}}{\gamma_{S_k}}\right)$$
 
 损失函数计算：
 
 **Deterministic模式** 使用传统损失函数：
 
-回归：$$L_{MSE} = \frac{1}{N}\sum_i (y_i - \mu_{S,i})^2$$
+回归：$$L_{MSE} = \frac{1}{N}\sum_i \sum_j (y_{j,i} - \mu_{S_j,i})^2$$
 
-分类：$$L_{CE} = -\frac{1}{N}\sum_i \sum_k y_{i,k} \log \text{softmax}(\mu_{S,i})_k$$
+分类：$$L_{CE} = -\frac{1}{N}\sum_i \sum_k y_{k,i} \log \text{softmax}(\mu_{S_k,i})_k$$
 
 **因果模式** 统一使用柯西分布损失：
 
-回归柯西负对数似然：$$L_{Cauchy} = -\sum_i \log \frac{1}{\pi\gamma_{S,i}[1 + ((y_i-\mu_{S,i})/\gamma_{S,i})^2]}$$
+一维回归柯西负对数似然：$$L_{Cauchy} = -\sum_i \log \frac{1}{\pi\gamma_{S,i}[1 + ((y_i-\mu_{S,i})/\gamma_{S,i})^2]}$$
 
-分类OvR二元交叉熵：$$P_{i,k} = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\mu_{S,i,k}}{\gamma_{S,i,k}}\right)$$
+高维回归（独立假设）：$$L_{Cauchy} = -\sum_i \sum_j \log \frac{1}{\pi\gamma_{S_j,i}[1 + ((y_{j,i}-\mu_{S_j,i})/\gamma_{S_j,i})^2]}$$
 
-$$L_{OvR} = -\frac{1}{N}\sum_i \sum_k [y_{i,k} \log P_{i,k} + (1-y_{i,k}) \log (1-P_{i,k})]$$
+分类OvR二元交叉熵：$$P_{k,i} = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\mu_{S_k,i}}{\gamma_{S_k,i}}\right)$$
+
+$$L_{OvR} = -\frac{1}{N}\sum_i \sum_k [y_{k,i} \log P_{k,i} + (1-y_{k,i}) \log (1-P_{k,i})]$$
+
+### 损失函数计算的统一实现
+
+**核心设计原则**：所有损失函数都接收ActionNetwork的输出 `(loc_S, scale_S)`，保持输入签名的统一性：
+
+```python
+class CausalLossFunction:
+    def compute_loss(self, loc_S, scale_S, y_true, mode='standard'):
+        """统一的损失函数接口
+        
+        Args:
+            loc_S: ActionNetwork输出的位置参数 [batch_size, output_dim]
+            scale_S: ActionNetwork输出的尺度参数 [batch_size, output_dim] 
+            y_true: 真实标签 [batch_size, output_dim]
+            mode: 模式选择，决定损失函数类型
+            
+        Returns:
+            loss: 标量损失值
+        """
+        if mode == 'deterministic':
+            return self._compute_traditional_loss(loc_S, scale_S, y_true)
+        else:
+            return self._compute_causal_loss(loc_S, scale_S, y_true)
+    
+    def _compute_traditional_loss(self, loc_S, scale_S, y_true):
+        """Deterministic模式：使用传统损失，忽略scale_S"""
+        # 回归：MSE损失，只使用loc_S
+        # 分类：CrossEntropy损失，只使用loc_S
+        pass
+        
+    def _compute_causal_loss(self, loc_S, scale_S, y_true):
+        """因果模式：使用Cauchy分布损失，同时使用loc_S和scale_S"""
+        # 回归：Cauchy NLL，使用完整分布参数
+        # 分类：OvR BCE，基于Cauchy CDF计算概率
+        pass
+```
+
+**回归损失实现**：
+```python
+def compute_regression_loss(self, loc_S, scale_S, y_true, mode):
+    if mode == 'deterministic':
+        # 传统MSE：只使用位置参数，忽略尺度参数
+        return F.mse_loss(loc_S, y_true)
+    else:
+        # Cauchy NLL：使用完整分布参数
+        return -torch.sum(cauchy_log_pdf(y_true, loc_S, scale_S))
+```
+
+**分类损失实现**：
+```python
+def compute_classification_loss(self, loc_S, scale_S, y_true, mode):
+    if mode == 'deterministic':
+        # 传统CrossEntropy：只使用位置参数
+        return F.cross_entropy(loc_S, y_true)
+    else:
+        # OvR BCE：通过Cauchy CDF计算概率
+        probs = 0.5 + (1/torch.pi) * torch.atan(loc_S / (scale_S + 1e-8))
+        return F.binary_cross_entropy(probs, y_true)
+```
+
+**统一接口的优势**：
+- ✅ **接口一致性**：所有损失函数都接收相同的输入签名
+- ✅ **模式透明性**：损失函数内部根据mode自动选择计算方式
+- ✅ **参数复用性**：Deterministic模式可以忽略scale_S，但保持接口统一
+- ✅ **扩展性**：新增损失函数只需遵循相同的接口约定
 
 五模式系统本质是ActionNetwork的五种不同计算方式，覆盖参数空间 $(\gamma_U, b_{noise})$ 的主要有意义组合，实现从确定性建模到随机性探索的完整因果推理光谱。
 
@@ -112,7 +183,7 @@ reg = MLPCausalRegressor(
 )
 reg.fit(X_train, y_train)
 predictions = reg.predict(X_test)        # 数值输出
-distributions = reg.predict(X_test, mode='standard')  # 分布信息
+distributions = reg.predict(X_test, mode='standard')  # 分布信息（一维时完整，高维时边际）
 
 # 分类任务 - 相同的设计模式
 clf = MLPCausalClassifier(
@@ -175,18 +246,60 @@ def predict(self, X, mode=None):
 ### 分类任务的OvR策略
 
 **数学原理**：各类别独立激活判断
-$$P_k = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\mu_{S,k}}{\gamma_{S,k}}\right)$$
+$$P_{k,i} = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\mu_{S_k,i}}{\gamma_{S_k,i}}\right)$$
 
 **优势对比**：
 - **传统Softmax**：$P_k = \frac{\exp(z_k)}{\sum_j \exp(z_j)}$ (强制归一化约束)
 - **CausalEngine OvR**：$P_k$ 独立计算 (类别间无竞争约束)
 
-**分类专用接口**：
+### 概率预测的启发式方法
+
+**核心思想**：提供类似概率的不确定性量化，但承认其启发式本质
+
+#### 分类任务的predict_dist
+
+**数学定义**：
+$$P_{k,i} = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\mu_{S_k,i}}{\gamma_{S_k,i}}\right)$$
+
+**输出形状**：`[n_samples, n_classes]` - 激活概率分布
+
 ```python
 clf = MLPCausalClassifier()
-labels = clf.predict(X_test)                    # 类别预测
-probabilities = clf.predict_proba(X_test)       # 概率预测  
-ovr_dists = clf.predict(X_test, mode='standard') # OvR分布信息
+labels = clf.predict(X_test)           # 类别预测 [n_samples]
+probs = clf.predict_dist(X_test)       # 激活概率分布 [n_samples, n_classes]
+```
+
+#### 回归任务的predict_dist
+
+**数学定义**：
+$$\text{predict\_dist}(X)_{i,j} = [\mu_{S_j,i}, \gamma_{S_j,i}]$$
+
+**输出形状**：`[n_samples, output_dim, 2]` - 完整分布参数
+
+```python
+reg = MLPCausalRegressor()
+predictions = reg.predict(X_test)      # 预测值 [n_samples, output_dim]
+dist_params = reg.predict_dist(X_test)  # 分布参数 [n_samples, output_dim, 2]
+
+# 访问分布参数
+loc = dist_params[:, :, 0]    # 位置参数 μ_S
+scale = dist_params[:, :, 1]  # 尺度参数 γ_S
+```
+
+#### 集中度计算示例
+
+用户可以基于 `predict_dist()` 的输出自行计算集中度：
+
+```python
+# 分类：预测类别的激活概率
+clf_probs = clf.predict_dist(X_test)        # [n_samples, n_classes]
+clf_predictions = clf.predict(X_test)       # [n_samples]
+clf_concentration = clf_probs[range(len(clf_predictions)), clf_predictions]
+
+# 回归：相对于标准Cauchy的集中度
+reg_dist_params = reg.predict_dist(X_test)  # [n_samples, output_dim, 2]
+reg_scale = reg_dist_params[:, :, 1]        # [n_samples, output_dim]
+reg_concentration = 1.0 / reg_scale         # [n_samples, output_dim]
 ```
 
 ## 五模式参数控制
@@ -426,7 +539,7 @@ reg = MLPCausalRegressor()
 predictions = reg.predict(X_test)  # 返回数值，如sklearn
 
 # 第2层：分布信息访问
-distributions = reg.predict(X_test, mode='standard')  # 返回分布对象
+distributions = reg.predict(X_test, mode='standard')  # 返回分布对象（一维时完整联合分布，高维时边际分布）
 
 # 第3层：因果推理模式
 causal_dists = reg.predict(X_test, mode='endogenous')    # 纯因果
@@ -578,7 +691,7 @@ $$Y = f(U, \varepsilon) \quad \text{(应用普适因果机制)}$$
 ### 分类任务的OvR策略优势
 
 **CausalEngine OvR的独立性**：
-$$P_k = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\text{loc}_{S_k}}{\text{scale}_{S_k}}\right) \quad \text{(每个类别独立判断)}$$
+$$P_{k,i} = \frac{1}{2} + \frac{1}{\pi} \arctan\left(\frac{\mu_{S_k,i}}{\gamma_{S_k,i}}\right) \quad \text{(每个类别独立判断)}$$
 
 **传统Softmax的竞争性**：
 $$P_k^{\text{softmax}} = \frac{\exp(z_k)}{\sum_{j=1}^K \exp(z_j)} \quad \text{(强制归一化约束)}$$
@@ -645,4 +758,4 @@ print(f"CausalEngine精度: {accuracy_score(y_test_clean, causal_clf.predict(X_t
 - **零学习成本**：完美的sklearn兼容性
 - **渐进式能力**：从简单预测到复杂分布分析
 - **工作流简化**：从20+行预处理代码简化为1行训练代码
-- **丰富信息**：不仅有预测值，还有完整的不确定性信息
+- **丰富信息**：不仅有预测值，还有不确定性信息（一维回归时数学完备，高维时基于独立假设）
