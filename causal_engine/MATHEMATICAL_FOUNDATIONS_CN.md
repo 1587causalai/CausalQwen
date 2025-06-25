@@ -55,55 +55,16 @@ graph TB
 **身份二：个体因果表征**  
 - 向量 $u$ 包含该个体所有内在的、驱动其行为的潜在属性
 
-```mermaid
-graph TB
-    subgraph Universe["个体宇宙"]
-        direction TB
-        Individual1["个体1: 保守型"]
-        Individual2["个体2: 冒险型"] 
-        Individual3["个体3: 平衡型"]
-        Individual4["..."]
-    end
-    
-    subgraph Selection["个体选择过程"]
-        direction TB
-        Evidence["📊 观测证据 X"]
-        Inference["🔍 推断过程"]
-        Choice["🎯 选择 U=u₂"]
-        Evidence --> Inference --> Choice
-    end
-    
-    subgraph Representation["因果表征空间"]
-        direction TB
-        Vector["向量 u₂ = [0.8, -0.3, 0.6, ...]"]
-        Meaning["风险偏好: 高<br/>耐心程度: 低<br/>学习能力: 中"]
-        Properties["驱动行为的<br/>内在属性"]
-        Vector --> Meaning --> Properties
-    end
-    
-    Universe --> Selection
-    Selection --> Representation
-    Individual2 -.-> Choice
-    
-    classDef universeStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    classDef selectionStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    classDef reprStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
-    
-    class Universe,Individual1,Individual2,Individual3,Individual4 universeStyle
-    class Selection,Evidence,Inference,Choice selectionStyle
-    class Representation,Vector,Meaning,Properties reprStyle
-```
-
 ### 1.3 核心数学框架
 
 CausalEngine 基于结构因果模型的数学框架：
 
-$$Y = f(U, \varepsilon)$$
+$$Y = f(U, E)$$
 
 其中：
 - **$Y$**: 观测结果
 - **$U$**: 个体选择变量（Individual Choice Variable）
-- **$\varepsilon$**: 外生噪声（Exogenous Noise）  
+- **$E$**: 外生噪声（Exogenous Noise）  
 - **$f$**: 普适因果机制（Universal Causal Mechanism）
 
 **关键洞察**：
@@ -117,33 +78,30 @@ $$Y = f(U, \varepsilon)$$
 
 ```mermaid
 graph TB
-    Input["📥 输入证据 E<br/>观测数据/上下文"]
+    Input["📥 输入证据 X<br/>观测数据/上下文"]
     
     subgraph Stage1["🔍 阶段1: 归因推断 (Abduction)"]
-        direction TB
-        S1_Title["证据 → 个体表征"]
+        direction LR
         S1_Process["推断个体分布<br/>U ~ Cauchy(μ_U, γ_U)"]
-        S1_Networks["双网络并行计算<br/>loc_net(E) ⊕ scale_net(E)"]
-        S1_Title --> S1_Process --> S1_Networks
+        S1_Networks["双网络并行计算<br/>loc_net(X) ⊕ scale_net(X)"]
+        S1_Process ~~~ S1_Networks
     end
     
     subgraph Stage2["⚡ 阶段2: 行动决策 (Action)"]
-        direction TB
-        S2_Title["个体表征 → 决策得分"]
-        S2_Process["线性因果变换<br/>S = W_A·(U + b_noise·ε) + b_A"]
+        direction LR
+        S2_Process["线性因果变换计算S<br/>W_A·(U + b_noise·E) + b_A"]
         S2_Properties["利用柯西分布<br/>线性稳定性"]
-        S2_Title --> S2_Process --> S2_Properties
+        S2_Process ~~~ S2_Properties
     end
     
     subgraph Stage3["🎯 阶段3: 任务激活 (Task Activation)"]
-        direction TB
-        S3_Title["决策得分 → 任务输出"]
+        direction LR
         S3_Tasks["多任务支持<br/>分类/回归/序列生成"]
-        S3_Modes["多推理模式<br/>standard/sampling/causal"]
-        S3_Title --> S3_Tasks --> S3_Modes
+        S3_Modes["多推理模式<br/>Deterministic/Exogenous/Endogenous/Standard/Sampling"]
+        S3_Tasks ~~~ S3_Modes
     end
     
-    Input --> Stage1 --> Stage2 --> Stage3
+    Input --"证据 → 个体表征"--> Stage1 --"个体表征 → 决策得分"--> Stage2 --"决策得分 → 任务输出"   --> Stage3
     
     Output["📤 任务特定输出<br/>预测/分类/生成"]
     Stage3 --> Output
@@ -184,21 +142,21 @@ graph TB
 
 ```mermaid
 graph TB
-    Evidence["📊 输入证据 E<br/>特征/上下文/历史"]
+    Evidence["📊 输入证据 X<br/>特征/上下文/历史"]
     
     subgraph AbductionDetail["归因推断详细流程"]
         direction TB
         
         subgraph DualNetwork["双网络并行架构"]
-            direction LR
-            LocNet["📍 位置网络<br/>μ_U = loc_net(E)<br/>预测个体"中心""]
-            ScaleNet["📏 尺度网络<br/>γ_U = softplus(scale_net(E))<br/>预测个体"不确定性""]
+            direction TB
+            LocNet["📍 位置网络预测中心<br/>μ_U = loc_net(X)"]
+            ScaleNet["📏 尺度网络预测不确定性<br/>γ_U=softplus(scale_net(X))"]
         end
         
         subgraph Distribution["个体表征分布"]
             direction TB
             Formula["U ~ Cauchy(μ_U, γ_U)"]
-            PDF["概率密度函数:<br/>p(U|E) = 1/(πγ_U) · 1/(1 + ((U-μ_U)/γ_U)²)"]
+            PDF["概率密度函数:<br/>p(U|X) = 1/(πγ_U) · 1/(1 + ((U-μ_U)/γ_U)²)"]
             Meaning["包含个体所有<br/>内在因果属性"]
         end
     end
@@ -208,7 +166,7 @@ graph TB
     
     subgraph CauchyProperties["柯西分布的深刻含义"]
         direction TB
-        P1["📊 重尾分布<br/>为"黑天鹅"事件保留概率"]
+        P1["📊 重尾分布<br/>为黑天鹅事件保留概率"]
         P2["🤔 无穷方差<br/>承认个体的"深刻未知""]
         P3["🔄 线性稳定性<br/>支持解析计算"]
         P4["🌍 开放世界<br/>诚实表达不确定性"]
@@ -230,10 +188,10 @@ graph TB
 **数学表达**：
 
 位置网络计算个体表征的"中心"：
-$$\mu_U = \text{loc\_net}(E)$$
+$$\mu_U = \text{loc\_net}(X)$$
 
 尺度网络计算个体表征的"不确定性"：
-$$\gamma_U = \text{softplus}(\text{scale\_net}(E)) = \log(1 + \exp(\text{scale\_net}(E)))$$
+$$\gamma_U = \text{softplus}(\text{scale\_net}(X)) = \log(1 + \exp(\text{scale\_net}(X)))$$
 
 个体表征分布：
 $$U \sim \text{Cauchy}(\mu_U, \gamma_U)$$
@@ -249,40 +207,42 @@ graph TB
     subgraph ActionProcess["行动决策流程"]
         direction TB
         
-        subgraph Step1["步骤1: 外生噪声注入"]
-            direction LR
-            Noise["ε ~ Cauchy(0,1)<br/>外生随机性"]
-            Injection["U' = U + b_noise·ε<br/>噪声注入"]
-            Result1["U' ~ Cauchy(μ_U, γ_U + |b_noise|)<br/>增加不确定性"]
+        subgraph Step1["步骤1: 五模式噪声调制"]
+            direction TB
+            Formula["统一公式<br/>U' = U + b_noise·ε"]
+            Modes["五种模式<br/>deterministic/exogenous/<br/>endogenous/standard/sampling"]
         end
         
         subgraph Step2["步骤2: 线性因果变换"]
             direction LR
-            Transform["S = W_A·U' + b_A<br/>因果规律应用"]
+            Transform["S = W_A·U' + b_A<br/>线性因果关系应用"]
             Linear["利用柯西分布<br/>线性稳定性"]
-            Result2["S ~ Cauchy(loc_S, scale_S)<br/>决策得分分布"]
         end
         
-        subgraph Mathematics["数学推导"]
-            direction TB
-            Loc["loc_S = W_A^T·μ_U + b_A"]
-            Scale["scale_S = |W_A^T|·(γ_U + |b_noise|)"]
-            Final["完全解析<br/>无需采样"]
+        subgraph Mathematics["五模式数学表述"]
+            direction LR
+            Det["Deterministic:<br/>U' = μ_U"]
+            Exo["Exogenous:<br/>U' ~ Cauchy(μ_U, |b_noise|)"]
+            Endo["Endogenous:<br/>U' ~ Cauchy(μ_U, γ_U)"]
+            Std["Standard:<br/>U' ~ Cauchy(μ_U, γ_U + |b_noise|)"]
+            Samp["Sampling:<br/>U' ~ Cauchy(μ_U + b_noise·E, γ_U)"]
         end
     end
     
-    InputU --> Step1 --> Step2 --> Mathematics
     
     subgraph LinearStability["柯西分布线性稳定性"]
         direction TB
-        Property["X ~ Cauchy(μ,γ)<br/>⇓<br/>aX + b ~ Cauchy(aμ+b, |a|γ)"]
-        Advantage["🎯 优势：整个过程解析可计算<br/>🚀 无需蒙特卡洛采样<br/>⚡ 高效且精确"]
+        Property["X ~ Cauchy(μ,γ)<br/>⇓<br/>aX + b~Cauchy(aμ+b, |a|γ)"]
+        Advantage["🎯 整个过程解析可计算<br/>🚀 无需蒙特卡洛采样<br/>⚡ 高效且精确"]
     end
     
-    Mathematics --> LinearStability
+    InputU --> Step1 --> Step2 --> OutputS
+
+
+    Mathematics ~~~ LinearStability
+    Modes .-> Mathematics
     
     OutputS["📈 输出：决策得分<br/>S ~ Cauchy(loc_S, scale_S)"]
-    Mathematics --> OutputS
     
     classDef inputStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
     classDef stepStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
@@ -314,7 +274,26 @@ $$\sum_{i=1}^n w_i X_i \sim \text{Cauchy}\left(\sum_{i=1}^n w_i \mu_i, \sum_{i=1
 
 **核心任务**：将决策得分转化为任务特定的输出
 
-任务激活头是 CausalEngine 的最后一层，负责将通用的决策得分 $S$ 转换为具体任务需要的输出格式。不同的激活模式支持不同类型的机器学习任务。
+任务激活头是 CausalEngine 的最后一层，负责将通用的决策得分 $S$ 转换为具体任务需要的输出格式。
+
+**默认配置设计**：
+- **不可学习参数**：激活头采用固定的数学变换，无需训练
+- **简单高效**：避免额外的复杂性，专注于核心因果推理能力
+- **数学纯粹**：直接基于柯西分布的解析性质进行输出变换
+
+**数学公式**：
+
+回归任务激活函数（恒等映射）：
+$$y_{j,i} = \mu_{S_{j,i}}$$
+
+分类任务激活函数（柯西CDF变换）：
+$$P_{k,i} = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\mu_{S_{k,i}}}{\gamma_{S_{k,i}}}\right)$$
+
+其中所有变换参数都是固定的（无可学习权重），确保激活头的数学纯粹性。
+
+> **未来扩展**：后续版本可引入可学习的激活参数，如分类任务的可调阈值 $C_k$ 或回归任务的线性变换权重，以提升模型表达能力。
+
+不同的激活模式支持不同类型的机器学习任务。
 
 ```mermaid
 graph TB
@@ -324,96 +303,90 @@ graph TB
         direction TB
         
         subgraph Regression["📊 数值回归"]
-            direction TB
-            RegFormula["y = w·loc_S + b<br/>直接使用位置参数"]
-            RegOutput["连续数值输出"]
+            direction LR
+            RegFormula["predict: y = μ_{S_j,i}"]
+            RegOutput["predict_dist: <br/>[μ_{S_j,i}, γ_{S_j,i}]<br/>[n_samples, output_dim, 2]"]
         end
         
         subgraph Classification["🏷️ 分类任务"]
-            direction TB
-            ClassFormula["logits = loc_S<br/>概率 = OvR(logits)"]
-            ClassOutput["类别概率分布"]
+            direction LR
+            ClassFormula["predict: argmax_k P_{k,i}"]
+            ClassOutput["predict_dist: <br/>[n_samples, n_classes]<br/>OvR激活概率"]
         end
         
-        subgraph Sequence["📝 序列生成"]
-            direction TB
-            SeqFormula["next_token ~ P(S_k > threshold)"]
-            SeqOutput["词元序列"]
-        end
+        Regression ~~~ Classification
     end
     
-    subgraph InferenceModes["推理模式"]
-        direction TB
-        
-        Standard["🌡️ 标准模式<br/>使用完整分布信息<br/>loc_S ± scale_S"]
-        Sampling["🎲 采样模式<br/>从分布中采样<br/>s ~ Cauchy(loc_S, scale_S)"]
-        CausalMode["⚖️ 因果模式<br/>纯推理，无随机性<br/>直接使用 loc_S"]
+    subgraph InferenceModes["五种推理模式"]
+        direction LR
+        Det["🎯 Deterministic<br/>确定性推理<br/>γ_U=0, b_noise=0"]
+        Exo["🌍 Exogenous<br/>外生噪声推理<br/>γ_U=0, b_noise≠0"]
+        Endo["🧠 Endogenous<br/>内生不确定性推理<br/>γ_U≠0, b_noise=0"]
+        Std["⚡ Standard<br/>混合推理<br/>γ_U≠0, b_noise→scale"]
+        Samp["🎲 Sampling<br/>随机探索推理<br/>γ_U≠0, b_noise→location"]
     end
     
     InputS --> TaskTypes
     InputS --> InferenceModes
     
+    subgraph LossUnified["📊 统一损失函数接口"]
+        direction TB
+        Traditional["Deterministic模式<br/>MSE/CrossEntropy损失"]
+        Causal["因果模式(其他4种)<br/>Cauchy NLL/OvR BCE"]
+    end
+    
     subgraph Advantages["核心优势"]
-        direction LR
-        A1["🎯 多任务统一<br/>同一框架支持"]
-        A2["🔧 模式灵活<br/>根据需求选择"]
-        A3["📊 不确定性<br/>显式量化"]
-        A4["🧠 可解释<br/>决策过程透明"]
+        direction TB
+        A1["🎯 多任务统一<br/>同一框架支持所有任务"]
+        A2["🔧 模式灵活<br/>五种推理模式可选"]
+        A3["📊 不确定性<br/>显式分布建模"]
+        A4["🧠 可解释<br/>因果机制透明"]
     end
     
     TaskTypes --> Advantages
     InferenceModes --> Advantages
+    Advantages .-> LossUnified
     
     classDef inputStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
     classDef taskStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
     classDef modeStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    classDef advantageStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef lossStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef advantageStyle fill:#fce4ec,stroke:#ad1457,stroke-width:2px
     
     class InputS inputStyle
-    class TaskTypes,Regression,Classification,Sequence,RegFormula,RegOutput,ClassFormula,ClassOutput,SeqFormula,SeqOutput taskStyle
-    class InferenceModes,Standard,Sampling,CausalMode modeStyle
+    class TaskTypes,Regression,Classification,RegFormula,RegOutput,ClassFormula,ClassOutput taskStyle
+    class InferenceModes,Det,Exo,Endo,Std,Samp modeStyle
+    class LossUnified,Traditional,Causal lossStyle
     class Advantages,A1,A2,A3,A4 advantageStyle
 ```
 
 #### 数学等价性配置
 
-对于数学等价性验证，可以将任务激活头配置为恒等映射模式：
+**核心理念**：通过 Deterministic 模式实现与传统深度学习的完全数学等价，为CausalEngine提供可信的理论基线。
 
-```mermaid
-graph TB
-    subgraph IdentityConfig["恒等映射配置"]
-        direction TB
-        
-        subgraph Regression["回归任务恒等映射"]
-            direction TB
-            RegConfig["y = 1.0 × loc_S + 0.0<br/>直接输出位置参数"]
-            RegBenefit["与传统线性层完全等价<br/>便于数学验证"]
-        end
-        
-        subgraph Classification["分类任务恒等映射"]
-            direction TB
-            ClassConfig["logits = loc_S<br/>跳过arctan激活"]
-            ClassBenefit["与传统logits层等价<br/>支持CrossEntropy损失"]
-        end
-        
-        subgraph Purpose["配置目的"]
-            direction TB
-            MathEquiv["建立数学等价基线<br/>验证CausalEngine理论基础"]
-            Performance["为因果推理能力<br/>提供性能参考标准"]
-        end
-    end
-    
-    Regression --> Purpose
-    Classification --> Purpose
-    
-    classDef configStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    classDef purposeStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
-    
-    class Regression,Classification,RegConfig,RegBenefit,ClassConfig,ClassBenefit configStyle
-    class Purpose,MathEquiv,Performance purposeStyle
+**等价性配置**：
+```python
+# Deterministic模式配置
+mode = "deterministic"  # γ_U=0, b_noise=0
+# 此时 U' = μ_U（确定性），整个模型退化为标准MLP
 ```
 
-这种恒等映射配置使得 CausalEngine 在冻结条件下与传统 MLP 完全等价，为后续的因果推理能力评估提供了可信的基线。
+**数学验证**：
+
+Deterministic模式下的前向传播：
+$$U' = \mu_U = \text{loc\_net}(X)$$
+$$S = W_A \cdot U' + b_A = W_A \cdot \text{loc\_net}(X) + b_A$$
+
+任务输出：
+- **回归**：$y = \mu_S = S$（与MLP线性层等价）
+- **分类**：$\text{logits} = \mu_S = S$（与MLP+CrossEntropy等价）
+
+> **数学注记**：虽然可以将 `loc_net` 设为恒等映射来更直观地显示等价性，但由于线性变换的复合仍为线性变换，即 $W_A \cdot \text{loc\_net}(X) + b_A$ 在数学上等价于任意线性层 $W \cdot X + b$，因此当前设计已完全保证数学等价性。
+
+**等价性意义**：
+- ✅ **数学基线**：确保CausalEngine理论基础的正确性
+- ✅ **性能对比**：为因果推理能力提供可信的参考标准  
+- ✅ **渐进验证**：从确定性逐步过渡到因果推理模式
 
 ## 3. 柯西分布：开放世界的数学语言
 
@@ -425,7 +398,7 @@ graph TB
         direction TB
         
         subgraph Gaussian["🔔 高斯分布（传统选择）"]
-            direction TB
+            direction LR
             G1["指数衰减尾部<br/>P(|X| > k) ~ exp(-k²)"]
             G2["有限方差<br/>σ² < ∞"]
             G3["封闭世界假设<br/>极端事件概率趋零"]
@@ -433,7 +406,7 @@ graph TB
         end
         
         subgraph Cauchy["📐 柯西分布（CausalEngine选择）"]
-            direction TB
+            direction LR
             C1["幂律衰减尾部<br/>P(|X| > k) ~ 1/k"]
             C2["无穷方差<br/>σ² = ∞"]
             C3["开放世界表达<br/>黑天鹅事件保留概率"]
@@ -444,8 +417,7 @@ graph TB
             direction TB
             P1["🤔 承认未知<br/>我们永远无法完全了解个体"]
             P2["🌍 开放世界<br/>总有意外可能发生"]
-            P3["⚡ 计算高效<br/>无需复杂积分"]
-            P4["🎯 因果本质<br/>重尾分布符合因果直觉"]
+            P3["🎯 因果本质<br/>重尾分布符合因果直觉"]
         end
     end
     
@@ -458,10 +430,13 @@ graph TB
     
     class Gaussian,G1,G2,G3,G4 gaussianStyle
     class Cauchy,C1,C2,C3,C4 cauchyStyle
-    class Philosophy,P1,P2,P3,P4 philosophyStyle
+    class Philosophy,P1,P2,P3 philosophyStyle
 ```
 
 ### 3.2 柯西分布的三重价值
+
+> *"在反事实世界里，一切皆有可能。"*  
+> *"In the counterfactual world, everything is possible."*
 
 **1. 诚实的不确定性表达**
 > "任何观测到的伟大成就，任何人都有非零的概率做出来"
@@ -582,7 +557,7 @@ graph TB
 
 CausalEngine 代表了人工智能从"模仿"向"理解"的范式转变。通过引入个体选择变量 $U$ 和利用柯西分布的线性稳定性，我们首次实现了：
 
-1. **真正的因果推理**：基于 $Y = f(U, \varepsilon)$ 的因果机制建模
+1. **真正的因果推理**：基于 $Y = f(U, E)$ 的因果机制建模
 2. **解析不确定性**：无需采样的完全解析化计算  
 3. **可控可解释**：个体差异与普适规律的清晰分离
 4. **反事实支持**：原生支持反事实推理和可控生成

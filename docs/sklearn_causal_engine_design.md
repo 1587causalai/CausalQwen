@@ -1,5 +1,8 @@
 # Sklearn-Style CausalEngine 设计文档
 
+> *"在反事实世界里，一切皆有可能。"*  
+> *"In the counterfactual world, everything is possible."*
+
 ## 核心数学框架
 
 MLPCausalRegressor & MLPCausalClassifier
