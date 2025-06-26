@@ -1,213 +1,112 @@
-# CausalQwen: First Application of the Breakthrough CausalEngine™
+# Causal-Sklearn
 
-<div align="center">
-  
-  [![CausalEngine](https://img.shields.io/badge/Powered%20by-CausalEngine™%20v2.0-ff1744.svg)](causal_engine/)
-  [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
-  [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org)
-  [![Status](https://img.shields.io/badge/Status-Breakthrough-purple.svg)](causal_engine/README.md)
-  
-  **[CausalEngine](causal_engine/) is to AI what PageRank was to search.**
-  
-</div>
+A scikit-learn compatible implementation of CausalEngine for causal machine learning.
 
----
+## Overview
 
-## 🎉 CausalEngine v2.0 Released!
+Causal-Sklearn brings the power of causal reasoning to the familiar scikit-learn ecosystem. Built on top of the revolutionary CausalEngine™ algorithm, it provides drop-in replacements for traditional ML estimators that understand causation rather than just correlation.
 
-**Major Update**: Modular Architecture with Unified Activation Framework
+## Key Features
 
-### What's New in v2.0
-- **🔧 Modular Design**: Three independent modules working in harmony
-  - `AbductionNetwork`: From evidence to individuals (who am I?)
-    - Independent loc_net and scale_net pathways
-    - Smart initialization: identity when H=C, Xavier otherwise
-  - `ActionNetwork`: From individuals to decisions (what should I do?)
-  - `ActivationHead`: From decisions to outputs (how to express it?)
-- **🎯 Unified Activation**: Each output dimension can be either:
-  - Classification: P(S_k > C_k) for discrete choices
-  - Regression: a_k * S_k + b_k for continuous values
-- **🚀 Flexible Applications**: 
-  - Language models with confidence scores
-  - Multi-modal models with mixed outputs
-  - Scientific computing with physical constraints
-- **✅ Backward Compatible**: Existing v1.0 code continues to work
+- **Scikit-learn Compatible**: Drop-in replacements for `MLPRegressor` and `MLPClassifier`
+- **Causal Reasoning**: Goes beyond pattern matching to understand causal relationships
+- **Robust to Noise**: Superior performance in the presence of label noise and outliers
+- **Distribution Prediction**: Provides full distributional outputs, not just point estimates
+- **Multiple Modes**: Supports deterministic, standard, and sampling prediction modes
 
-### Quick Example: Mixed Classification and Regression
+## Quick Start
+
 ```python
-from causal_engine import CausalEngine
+from causal_sklearn import MLPCausalRegressor, MLPCausalClassifier
+from sklearn.datasets import make_regression, make_classification
+from sklearn.model_selection import train_test_split
 
-# Create engine with mixed outputs
-# e.g., 50k vocab (classification) + 10 confidence scores (regression)
-modes = ["classification"] * 50000 + ["regression"] * 10
-engine = CausalEngine(
-    hidden_size=768,
-    vocab_size=50010,
-    activation_modes=modes
-)
+# Regression example
+X, y = make_regression(n_samples=1000, n_features=20, noise=0.1)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
-# Use as before - the engine handles everything
-output = engine(hidden_states)
-vocab_probs = output['output'][:, :, :50000]      # Classification probabilities
-confidence = output['output'][:, :, 50000:]       # Regression values
+regressor = MLPCausalRegressor(mode='standard', random_state=42)
+regressor.fit(X_train, y_train)
+predictions = regressor.predict(X_test)
+
+# Classification example
+X, y = make_classification(n_samples=1000, n_features=20, n_classes=3)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+classifier = MLPCausalClassifier(mode='standard', random_state=42)
+classifier.fit(X_train, y_train)
+predictions = classifier.predict(X_test)
+probabilities = classifier.predict_proba(X_test)
 ```
 
----
-
-## 🌟 Introducing CausalEngine: The Algorithm of Intelligence
-
-**CausalEngine** is not just another AI model or framework. It is a fundamental breakthrough in how machines understand and make decisions. Just as PageRank revolutionized search by understanding the web's link structure, CausalEngine revolutionizes AI by understanding the causal structure of intelligence itself.
-
-This repository demonstrates the first application of CausalEngine to language modeling, creating **CausalQwen** - a language model that doesn't just predict, but truly understands.
-
-### 📚 Essential Reading
-- **[CausalEngine Overview](causal_engine/README.md)** - The algorithm that changes everything
-- **[Mathematical Foundations](causal_engine/MATHEMATICAL_FOUNDATIONS.md)** - Deep mathematical foundations
-- **[One-Pager](causal_engine/ONE_PAGER.md)** - Quick summary for executives
-
----
-
-## 🧮 The Four Axioms of CausalEngine
-
-### Axiom I: Intelligence = Abduction + Action
-From observations to self-understanding to decisions. Not pattern matching, but true reasoning.
-
-### Axiom II: Cauchy Mathematics  
-The only distribution that enables analytical causal computation without sampling.
-
-### Axiom III: Temperature-Unified Control
-One elegant parameter to control the boundary between determinism and stochasticity.
-
-### Axiom IV: Structural Equation Decisions
-Every choice computed by deterministic functions for multiple output types.
-
----
-
-## 🚀 Quick Start with CausalQwen
-
-### Installation
-```bash
-pip install torch transformers numpy
-```
-
-### Basic Usage (Qwen-Compatible Interface)
-```python
-from causal_qwen_mvp import CausalQwenMVPForCausalLM, CausalQwen2Config
-
-# Create model powered by CausalEngine
-config = CausalQwen2Config(vocab_size=32000, hidden_size=512)
-model = CausalQwenMVPForCausalLM(config)
-
-# Four Modes of Causal Reasoning:
-
-# 1. Pure Causal Mode (temperature=0)
-output = model.generate(input_ids, temperature=0, max_new_tokens=20)
-
-# 2. Standard Mode (noise → scale)
-output = model.generate(input_ids, do_sample=False, temperature=1.0, max_new_tokens=20)
-
-# 3. Sampling Mode (noise → location)  
-output = model.generate(input_ids, do_sample=True, temperature=0.8, max_new_tokens=20)
-
-# 4. Compatible Mode (traditional softmax)
-# [Used for comparison with traditional LMs]
-```
-
-### Direct CausalEngine Usage
-```python
-from causal_engine import CausalEngine
-
-# The core algorithm - works with ANY transformer
-engine = CausalEngine(hidden_size=768, vocab_size=50000)
-
-# Get features from any model (BERT, GPT, LLaMA, etc.)
-hidden_states = any_transformer_model(input_ids)
-
-# Apply causal reasoning
-output = engine(hidden_states, temperature=1.0, do_sample=True)
-decision, uncertainty = output['loc_S'], output['scale_S']
-```
-
----
-
-## 📁 Project Structure
-
-```
-CausalQwen/
-├── causal_engine/                # ⭐ THE CORE ALGORITHM ⭐
-│   ├── README.md                 # CausalEngine overview
-│   ├── MATHEMATICAL_FOUNDATIONS.md # Mathematical foundations
-│   ├── ONE_PAGER.md              # Executive summary
-│   └── engine.py                 # Pure implementation
-├── src/causal_qwen_mvp/          # Qwen-specific application
-│   ├── models.py                 # CausalQwen model
-│   ├── inference.py              # Inference engine
-│   └── training.py               # Training utilities
-├── tests/                        # Comprehensive test suite
-├── scripts/                      # Demo and validation scripts
-└── docs/                         # Mathematical documentation
-```
-
----
-
-## 🧪 Testing
+## Installation
 
 ```bash
-# Run all tests
-./run_tests.sh
-
-# Run specific test categories
-./run_tests.sh math         # Mathematical framework tests
-./run_tests.sh compatibility # Qwen compatibility tests
-./run_tests.sh generation   # Generation tests
-
-# Or use pytest directly
-pytest tests/
+pip install causal-sklearn
 ```
 
----
+For development installation:
 
-## 📊 Why CausalEngine Changes Everything
+```bash
+git clone https://github.com/yourusername/causal-sklearn.git
+cd causal-sklearn
+pip install -e ".[dev]"
+```
 
-| Traditional AI | CausalEngine-Powered AI |
-|---------------|------------------------|
-| Learns correlations | Understands causation |
-| Black box decisions | Glass box reasoning |
-| Requires sampling | Pure analytical computation |
-| Token prediction | Multi-type outputs |
-| Pattern imitation | True intelligence |
+## Models
 
----
+### MLPCausalRegressor
 
-## 🌐 The Future We're Building
+A causal neural network regressor that understands causal relationships in regression tasks.
 
-CausalEngine is our **PageRank** - the foundational technology upon which an empire of truly intelligent systems will be built. Every future product, every service, every innovation will flow from this source.
+**Key Parameters:**
+- `mode`: Prediction mode ('deterministic', 'standard', 'sampling')
+- `hidden_layer_sizes`: Architecture of hidden layers
+- `gamma_init`: Initial scale for AbductionNetwork
+- `b_noise_init`: Initial noise level for ActionNetwork
 
-CausalQwen is just the beginning. The first proof that when you understand causation, not just correlation, everything changes.
+### MLPCausalClassifier
 
----
+A causal neural network classifier for classification tasks.
 
-## 📚 Documentation
+**Key Parameters:**
+- `mode`: Prediction mode ('deterministic', 'standard', 'sampling')
+- `hidden_layer_sizes`: Architecture of hidden layers
+- `ovr_threshold_init`: Initial threshold for One-vs-Rest classification
 
-- **[Core Mathematical Framework](docs/core_mathematical_framework.md)** - The mathematics of CausalLLM
-- **[Mathematical Foundations Extended](docs/core_mathematical_framework_num_extended.md)** - Advanced theory
-- **[Position vs Scale Theory](docs/model_inference_position_and_scale.md)** - Noise dynamics
-- **[Individual Variable U Deep Dive](docs/U_deep_dive.md)** - Understanding the causal representation
+## Benchmarking
 
----
+Compare CausalEngine with traditional methods:
 
-## 📄 License
+```python
+from causal_sklearn.benchmarks import ComparisonBenchmark
 
-This project contains proprietary technology. CausalEngine™ and its core algorithms are protected intellectual property.
+benchmark = ComparisonBenchmark()
+results = benchmark.run_regression_comparison(dataset='california_housing')
+results = benchmark.run_classification_comparison(dataset='wine_quality')
+```
 
----
+## Documentation
 
-<div align="center">
-  
-**"We didn't invent CausalEngine. We discovered it.**  
-**It was always there, in the mathematics of causation,**  
-**waiting for someone to see it clearly."**
+For detailed documentation, examples, and API reference, visit: [Documentation Link]
 
-[Learn More About CausalEngine →](causal_engine/)
+## Contributing
 
-</div>
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Citation
+
+If you use Causal-Sklearn in your research, please cite:
+
+```bibtex
+@software{causal_sklearn,
+  title={Causal-Sklearn: Scikit-learn Compatible Causal Machine Learning},
+  author={CausalEngine Team},
+  year={2024},
+  url={https://github.com/yourusername/causal-sklearn}
+}
+```

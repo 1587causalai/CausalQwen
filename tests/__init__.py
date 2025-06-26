@@ -1,1 +1,1 @@
-# tests包初始化文件 
+"""Tests for causal-sklearn package."""
