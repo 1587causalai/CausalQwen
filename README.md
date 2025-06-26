@@ -89,9 +89,10 @@ results = benchmark.run_classification_comparison(dataset='wine_quality')
 ## Documentation
 
 ### Mathematical Foundations
-- **[Mathematical Foundations](docs/MATHEMATICAL_FOUNDATIONS.md)** - Complete theoretical framework
+- **[数学基础 (中文)](docs/MATHEMATICAL_FOUNDATIONS_CN.md)** - 🌟 **最核心** 完整理论框架 
+- **[Mathematical Foundations (English)](docs/MATHEMATICAL_FOUNDATIONS.md)** - Complete theoretical framework
 - **[One-Pager Summary](docs/ONE_PAGER.md)** - Executive summary of CausalEngine
-- **[All Mathematical Docs](docs/)** - Complete mathematical documentation
+- **[所有数学文档](docs/)** - 完整数学文档集合
 
 ### API Reference
 For detailed API documentation, examples, and tutorials, visit: [Documentation Link]

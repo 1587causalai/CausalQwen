@@ -1,83 +1,91 @@
-# Mathematical Documentation for Causal-Sklearn
+# Causal-Sklearn 数学文档
 
-This directory contains the complete mathematical foundations and theoretical framework for the CausalEngine algorithm implemented in causal-sklearn.
+本目录包含 causal-sklearn 中 CausalEngine 算法的完整数学基础和理论框架。
 
-## Core Mathematical Documents
+## 核心数学文档
 
-### 📐 Foundational Theory
-- **[MATHEMATICAL_FOUNDATIONS.md](MATHEMATICAL_FOUNDATIONS.md)** - Complete mathematical foundations of CausalEngine
-- **[MATHEMATICAL_FOUNDATIONS_CN.md](MATHEMATICAL_FOUNDATIONS_CN.md)** - 中文版数学基础 (Chinese version)
-- **[ONE_PAGER.md](ONE_PAGER.md)** - Executive summary of the mathematical framework
+### 📐 基础理论文档
+- **[MATHEMATICAL_FOUNDATIONS_CN.md](MATHEMATICAL_FOUNDATIONS_CN.md)** - 🌟 **最核心** CausalEngine 数学基础 (中文完整版)
+- **[MATHEMATICAL_FOUNDATIONS.md](MATHEMATICAL_FOUNDATIONS.md)** - CausalEngine 数学基础 (英文版)
+- **[ONE_PAGER.md](ONE_PAGER.md)** - 算法概览与高管摘要
 
-### 🧮 Detailed Mathematical Framework
-- **[core_mathematical_framework.md](core_mathematical_framework.md)** - Core mathematical framework
-- **[core_mathematical_framework_num_extended.md](core_mathematical_framework_num_extended.md)** - Extended numerical framework
-- **[mathematical_equivalence_deep_dive.md](mathematical_equivalence_deep_dive.md)** - Deep dive into mathematical equivalences
+### 🧮 详细数学框架
+- **[core_mathematical_framework.md](core_mathematical_framework.md)** - 核心数学框架实现细节
+- **[core_mathematical_framework_num_extended.md](core_mathematical_framework_num_extended.md)** - 扩展数值理论
+- **[mathematical_equivalence_deep_dive.md](mathematical_equivalence_deep_dive.md)** - 数学等价性深度分析
 
-### ✅ Implementation Verification
-- **[MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md](MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md)** - Verification of mathematical implementation
+### ✅ 实现验证指南
+- **[MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md](MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md)** - 数学实现正确性验证
 
-## Key Mathematical Concepts
+## 关键数学概念
 
-### The Four Axioms of CausalEngine
+### CausalEngine 四大公理
 
-1. **Intelligence = Abduction + Action**: From observations to self-understanding to decisions
-2. **Cauchy Mathematics**: The only distribution enabling analytical causal computation
-3. **Temperature-Unified Control**: Single parameter controlling determinism vs stochasticity  
-4. **Structural Equation Decisions**: Every choice computed by deterministic functions
+1. **智能 = 归纳 + 行动**：从观测到自我理解再到决策
+2. **柯西数学**：唯一支持因果推理解析计算的分布
+3. **温度统一控制**：单一参数控制确定性与随机性的边界
+4. **结构方程决策**：每个选择都由确定性函数计算
 
-### Core Mathematical Framework
+### 核心数学框架
 
-The CausalEngine algorithm is built on the structural equation:
+CausalEngine 算法基于结构因果方程：
 
 ```
 Y = f(U, ε)
 ```
 
-Where:
-- **U**: Individual causal representation (learned from context X)
-- **ε**: Exogenous noise (independent random perturbation) 
-- **f**: Universal causal mechanism (deterministic function)
+其中：
+- **U**：个体因果表征（从上下文 X 学习得到）
+- **ε**：外生噪声（独立随机扰动）
+- **f**：普适因果机制（确定性函数）
 
-### Two-Stage Architecture
+### 三阶段架构
 
-1. **Abduction Stage**: `X → U` (Evidence to Individual Representation)
-   - AbductionNetwork: Maps observations to causal representation
-   - Uses Cauchy distribution for analytical uncertainty propagation
+1. **归因推断阶段**：`X → U`（证据到个体表征）
+   - AbductionNetwork：将观测映射到因果表征
+   - 使用柯西分布实现解析不确定性传播
 
-2. **Action Stage**: `U → Y` (Individual to Decision)
-   - ActionNetwork: Maps representation to decision potential
-   - ActivationHead: Converts potential to specific outputs (classification/regression)
+2. **行动决策阶段**：`U → S`（个体表征到决策得分）
+   - ActionNetwork：将表征映射到决策潜能
+   - 利用柯西分布线性稳定性实现解析计算
 
-### Mathematical Properties
+3. **任务激活阶段**：`S → Y`（决策得分到任务输出）
+   - ActivationHead：将潜能转换为具体输出（分类/回归）
+   - 支持多种推理模式和任务类型
 
-- **Analytical Computation**: No sampling required due to Cauchy properties
-- **Heavy-Tail Robustness**: Natural handling of outliers and extreme events
-- **Undefined Moments**: Philosophical alignment with true uncertainty
-- **Scale Invariance**: Consistent behavior across different scales
+### 数学特性
 
-## Usage in Implementation
+- **解析计算**：利用柯西分布特性无需采样
+- **重尾鲁棒性**：自然处理异常值和极端事件
+- **未定义矩**：与真实不确定性哲学对齐
+- **尺度不变性**：跨不同尺度的一致行为
 
-These mathematical documents serve as the canonical reference for:
+## 实现中的使用
 
-1. **Correctness Verification**: Ensuring implementation matches theoretical framework
-2. **Parameter Understanding**: Mathematical meaning of all hyperparameters
-3. **Debugging**: Theoretical basis for troubleshooting implementation issues
-4. **Extension**: Mathematical foundation for adding new features
+这些数学文档作为权威参考用于：
 
-## Reading Order
+1. **正确性验证**：确保实现与理论框架匹配
+2. **参数理解**：所有超参数的数学含义
+3. **调试指导**：排查实现问题的理论基础
+4. **功能扩展**：添加新特性的数学基础
 
-For implementers and developers:
-1. Start with `ONE_PAGER.md` for high-level overview
-2. Read `MATHEMATICAL_FOUNDATIONS.md` for complete theory
-3. Consult `core_mathematical_framework.md` for detailed equations
-4. Use `MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md` for validation
+## 阅读顺序
 
-For researchers and theorists:
-1. Begin with `MATHEMATICAL_FOUNDATIONS.md`
-2. Deep dive into `mathematical_equivalence_deep_dive.md`
-3. Study `core_mathematical_framework_num_extended.md` for advanced theory
+### 对于实现者和开发者：
+1. 从 `ONE_PAGER.md` 开始了解高层概览
+2. 阅读 `MATHEMATICAL_FOUNDATIONS_CN.md` 获得完整理论（**最重要**）
+3. 参考 `core_mathematical_framework.md` 了解详细方程
+4. 使用 `MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md` 进行验证
 
----
+### 对于研究者和理论家：
+1. 从 `MATHEMATICAL_FOUNDATIONS_CN.md` 开始（**核心文档**）
+2. 深入研究 `mathematical_equivalence_deep_dive.md`
+3. 学习 `core_mathematical_framework_num_extended.md` 的高级理论
 
-**Note**: These documents are the authoritative mathematical specification for CausalEngine. Any implementation in causal-sklearn must strictly adhere to these mathematical definitions.
+## 重要说明
+
+> **📋 权威规范**：这些文档是 CausalEngine 的权威数学规范。causal-sklearn 中的任何实现都必须严格遵循这些数学定义。
+> 
+> **🌟 核心文档**：`MATHEMATICAL_FOUNDATIONS_CN.md` 是最核心、最完整、最准确的数学基础文档，包含最新的理论更新和图解说明。
+> 
+> **🔍 验证标准**：所有代码实现的正确性都应以这些数学文档为标准进行验证。
