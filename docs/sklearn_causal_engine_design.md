@@ -25,7 +25,7 @@ $$\begin{aligned}
 flowchart LR
     Input["输入 X"]
     MLP["特征提取<br/>H = MLP(X)"]
-    Abduction["个体推断<br/>μ_U = W_loc*H + b_loc<br/>γ_U = softplus(W_scale*H + b_scale)"]
+    Abduction["个体推断<br/>μ_U = W_loc*H + b_loc<br/>γ_U = softplus(W_scale*H + b_scale) + 1e-8"]
     Action["噪声调制 & 线性因果律<br/>ActionNetwork<br/>(模式差异核心)"]
     Output["输出生成<br/>回归: Y = μ_S<br/>分类: P(Y=k) via 柯西CDF"]
 
@@ -44,9 +44,11 @@ flowchart LR
 
 前向传播流程为 $X \xrightarrow{MLP} H \xrightarrow{Abduction} (\mu_U, \gamma_U) \xrightarrow{Action} (\mu_S, \gamma_S) \xrightarrow{Output} Y$，其中关键步骤：
 
-个体推断：$\mu_U = W_{loc} \cdot H + b_{loc}$，$\gamma_U = \text{softplus}(W_{scale} \cdot H + b_{scale})$
+个体推断：$\mu_U = W_{loc} \cdot H + b_{loc}$，$\gamma_U = \text{softplus}(W_{scale} \cdot H + b_{scale}) + \epsilon_{stable}$
 
-线性因果律：$\mu_S = W_S \cdot \mu_{U'} + b_S$，$\gamma_S = |W_S| \cdot \gamma_{U'}$
+其中 $\epsilon_{stable} = 1e\text{-}8$ 确保数值稳定性
+
+线性因果律：$\mu_S = W_A \cdot \mu_{U'} + b_A$，$\gamma_S = |W_A| \cdot \gamma_{U'}$
 
 ```mermaid
 flowchart LR
@@ -58,7 +60,7 @@ flowchart LR
     Standard["⚡ Standard<br/>μ_U' = μ_U, γ_U' = γ_U + |b_noise|"]
     Sampling["🎲 Sampling<br/>μ_U' = μ_U + b_noise*e, γ_U' = γ_U"]
 
-    CausalLaw["线性因果律<br/>μ_S = W_S*μ_U' + b_S<br/>γ_S = |W_S|*γ_U'"]
+    CausalLaw["线性因果律<br/>μ_S = W_A*μ_U' + b_A<br/>γ_S = |W_A|*γ_U'"]
     Output["输出 (μ_S, γ_S)"]
 
     Input --> Deterministic --> CausalLaw
@@ -84,6 +86,139 @@ flowchart LR
 ```
 
 输出生成：回归任务 $Y = \mu_S$，分类任务 $$P(Y=k) = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\mu_{S_k}}{\gamma_{S_k}}\right)$$
+
+### 参数初始化策略
+
+CausalEngine的数学正确性很大程度上依赖于合理的参数初始化，特别是γ_U的初始化对模型收敛和性能至关重要。
+
+#### AbductionNetwork初始化
+
+**位置网络 (loc_net) 初始化**：
+```python
+if input_size == causal_size and mlp_layers == 1:
+    # 恒等映射初始化: W_loc = I, b_loc = 0
+    self.loc_net.weight.copy_(torch.eye(causal_size))
+    self.loc_net.bias.zero_()
+else:
+    # Xavier均匀初始化
+    nn.init.xavier_uniform_(self.loc_net.weight)
+    nn.init.zeros_(self.loc_net.bias)
+```
+
+**尺度网络 (scale_net) 初始化**：
+```python
+# 最后一层特殊初始化
+last_layer = scale_net_last_linear_layer
+nn.init.uniform_(last_layer.weight, -0.01, 0.01)  # 小随机权重
+# 关键：bias设为常数gamma_init
+nn.init.constant_(last_layer.bias, gamma_init)  # 默认gamma_init=10.0
+
+# 中间层标准Xavier初始化
+for middle_layer in scale_net_middle_layers:
+    nn.init.xavier_uniform_(middle_layer.weight)
+    nn.init.zeros_(middle_layer.bias)
+```
+
+#### γ_U初始化的数学设计
+
+**核心数学公式**：
+$$\gamma_U = \text{softplus}(\text{scale\_net}(H))$$
+
+**具体初始化流程**：
+1. **bias初始化**: `nn.init.constant_(bias, gamma_init)`
+   - 默认`gamma_init=10.0`，所有维度设为相同常数
+   - 例如causal_size=4时: `[10.0, 10.0, 10.0, 10.0]`
+
+2. **权重初始化**: `nn.init.uniform_(weight, -0.01, 0.01)`
+   - 小随机权重，使输出主要由bias决定
+
+3. **softplus变换**: γ_U ≈ softplus(gamma_init) ≈ gamma_init (当gamma_init较大时)
+   - softplus(10.0) ≈ 10.0000
+   - **结果**: γ_U ≈ 10.0 (所有维度)
+
+**初始化范围特性**：
+```python
+# 统一常数初始化 (实际值)
+causal_size = 1:   γ_U ≈ [10.0]
+causal_size = 2:   γ_U ≈ [10.0, 10.0] 
+causal_size = 4:   γ_U ≈ [10.0, 10.0, 10.0, 10.0]
+causal_size = 32:  γ_U ≈ [10.0, 10.0, ..., 10.0]  # 所有维度相同
+```
+
+#### ActionNetwork初始化
+
+**线性因果律初始化**：
+```python
+# 标准Xavier初始化
+nn.init.xavier_uniform_(self.linear_law.weight)
+nn.init.zeros_(self.linear_law.bias)
+
+# 外生噪声参数
+nn.init.constant_(self.b_noise, b_noise_init)  # 默认0.1
+```
+
+#### 初始化策略的数学意义
+
+**γ_U初始化原理**：
+1. **正值保证**: softplus确保γ_U > 0，满足Cauchy分布要求
+2. **适中范围**: 10.0大小适中，避免了过小(数值不稳定)和过大(过度分散)
+3. **统一初始化**: 所有维度使用相同初始值，简化收敛行为
+4. **收敛友好**: γ_U=10.0是经验上的良好起始点，训练过程中会自适应调整
+
+**与传统初始化的对比**：
+```python
+# ❌ 传统随机初始化可能导致的问题
+γ_U_random = abs(torch.randn(causal_size))  # 可能接近0或过大
+# 问题: 接近0时数值不稳定，过大时梯度消失
+
+# ✅ CausalEngine精心设计的初始化
+γ_U_designed = F.softplus(torch.full((causal_size,), 10.0))
+# 优势: 稳定的初始值，良好的梯度性质，简化超参数调节
+```
+
+**恒等映射优化**：
+当`input_size == causal_size`且`mlp_layers == 1`时，loc_net采用恒等映射初始化：
+$$\mu_U = \text{loc\_net}(H) = I \cdot H + 0 = H$$
+
+这个优化在deterministic模式下特别重要，因为它确保了与传统MLP的完美数学等价性。
+
+#### 初始化逻辑代码位置
+
+| 组件 | 文件位置 | 函数/方法 | 具体逻辑 |
+|------|----------|-----------|----------|
+| **AbductionNetwork初始化** | `causal_engine/networks.py` | `AbductionNetwork._init_weights()` | lines 165-204 |
+| **scale_net bias常数初始化** | `causal_engine/networks.py` | `_init_weights()` line 199 | `nn.init.constant_(bias, gamma_init)` |
+| **loc_net恒等映射初始化** | `causal_engine/networks.py` | `_init_weights()` line 171 | `torch.eye(causal_size)` |
+| **ActionNetwork初始化** | `causal_engine/networks.py` | `ActionNetwork._init_weights()` | lines 292-296 |
+| **b_noise初始化** | `causal_engine/networks.py` | `_init_weights()` line 296 | `nn.init.constant_(b_noise, 0.1)` |
+| **MLP隐藏层初始化** | `causal_engine/sklearn/base.py` | `_init_weights_glorot()` | Xavier均匀初始化 |
+
+#### 初始化参数汇总
+
+```python
+# 默认初始化参数表
+CAUSAL_ENGINE_INIT_PARAMS = {
+    # AbductionNetwork
+    'gamma_init': 10.0,  # γ_U初始化常数
+    'scale_bias_init': 'constant',  # 常数初始化策略
+    'scale_weight_range': (-0.01, 0.01),  # 均匀分布范围
+    'loc_identity_enabled': True,  # H=C时自动恒等映射
+    
+    # ActionNetwork  
+    'b_noise_init': 0.1,  # 外生噪声初始值
+    'linear_init': 'xavier_uniform',  # 线性层初始化
+    
+    # 预期输出范围
+    'gamma_U_range': '~10.0',  # γ_U的期望初始值
+    'mu_U_range': 'depends_on_input',  # μ_U取决于输入H
+}
+```
+
+**关键数学不变量**：
+- ✅ γ_U始终 > 0 (Cauchy分布数学要求)
+- ✅ γ_U初始值稳定统一 (~10.0)
+- ✅ deterministic模式下μ_U = H (等价性保证)
+- ✅ 所有参数初始化数值稳定
 
 损失函数计算：
 
@@ -147,7 +282,11 @@ def compute_regression_loss(self, loc_S, scale_S, y_true, mode):
         return F.mse_loss(loc_S, y_true)
     else:
         # Cauchy NLL：使用完整分布参数
-        return -torch.sum(cauchy_log_pdf(y_true, loc_S, scale_S))
+        # 数值稳定的Cauchy对数概率密度函数
+        # log p(y|μ,γ) = -log(π) - log(γ) - log(1 + ((y-μ)/γ)²)
+        z = (y_true - loc_S) / (scale_S + 1e-8)  # 标准化
+        log_prob = -torch.log(torch.pi) - torch.log(scale_S + 1e-8) - torch.log(1 + z*z)
+        return -torch.sum(log_prob)
 ```
 
 **分类损失实现**：
@@ -158,7 +297,10 @@ def compute_classification_loss(self, loc_S, scale_S, y_true, mode):
         return F.cross_entropy(loc_S, y_true)
     else:
         # OvR BCE：通过Cauchy CDF计算概率
+        # 数值稳定性：防止除零和梯度爆炸
         probs = 0.5 + (1/torch.pi) * torch.atan(loc_S / (scale_S + 1e-8))
+        # 概率剪切：防止log(0)和log(1)的数值问题
+        probs = torch.clamp(probs, min=1e-7, max=1-1e-7)
         return F.binary_cross_entropy(probs, y_true)
 ```
 
@@ -380,12 +522,19 @@ class ActionNetwork(nn.Module):
         
         elif mode == 'sampling':
             # U' ~ Cauchy(μ_U + b_noise*ε, γ_U) - 位置扰动
-            epsilon = torch.tan(torch.pi * (torch.rand_like(loc_U) - 0.5))
+            # 标准Cauchy分布采样：ε ~ Cauchy(0,1)
+            # 使用反变换采样：ε = tan(π(u - 0.5)), u ~ Uniform(0,1)
+            u_uniform = torch.rand_like(loc_U)  # [batch_size, latent_dim]
+            epsilon = torch.tan(torch.pi * (u_uniform - 0.5))  # [batch_size, latent_dim]
             loc_U_final = loc_U + self.b_noise * epsilon
             scale_U_final = scale_U
         
         # 线性因果律 (所有模式统一)
-        loc_S = self.lm_head(loc_U_final)
+        # 位置参数变换：μ_S = W_A · μ_U' + b_A
+        loc_S = self.lm_head(loc_U_final)  # [batch_size, output_dim]
+        
+        # 尺度参数变换：γ_S = |W_A| · γ_U' (矩阵乘法)
+        # 维度: [batch_size, latent_dim] @ [latent_dim, output_dim] → [batch_size, output_dim]
         scale_S = scale_U_final @ torch.abs(self.lm_head.weight).T
         
         return loc_S, scale_S
@@ -492,6 +641,15 @@ def test_sklearn_equivalence():
     assert r2_diff < 0.001, "等价性验证失败"
     assert pred_mse < 0.001, "预测差异过大"
 ```
+Deterministic模式等价性数学原理**核心机制**：AbductionNetwork设为恒等映射 $W_{loc} = I, b_{loc} = 0$ 并冻结参数
+
+**数学等价**：
+- sklearn: $\hat{y} = W_{final} \cdot h + b_{final}$  
+- CausalEngine: $\hat{y} = W_A \cdot h + b_A$ (因为 $\mu_U = h$)
+- 等价条件: $W_A = W_{final}, b_A = b_{final}$
+
+Deterministic模式在计算损失的时候只用到了 loc_S 的信息。
+
 
 ### sklearn标准接口实现
 

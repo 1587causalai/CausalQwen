@@ -168,8 +168,8 @@ class ActivationHead(nn.Module):
         batch_size, seq_len, _ = loc_S.shape
         device = loc_S.device
         
-        # 初始化输出张量
-        output = torch.zeros(batch_size, seq_len, self.output_size, device=device)
+        # 初始化输出张量（保持输入数据类型）
+        output = torch.zeros(batch_size, seq_len, self.output_size, device=device, dtype=loc_S.dtype)
         
         # 分类激活：P(S_k > C_k) = 1/2 + (1/π)arctan((loc_S_k - C_k)/scale_S_k)
         # 这是柯西分布的累积分布函数(CDF)的解析形式
@@ -184,7 +184,7 @@ class ActivationHead(nn.Module):
             # 计算概率：应用柯西分布CDF的解析公式
             # 添加小的epsilon防止除零错误
             normalized_diff = (loc_S_cls - self.classification_thresholds) / (scale_S_cls + 1e-8)
-            probs = 0.5 + (1 / torch.pi) * torch.atan(normalized_diff)
+            probs = (0.5 + (1 / torch.pi) * torch.atan(normalized_diff)).to(loc_S.dtype)
             
             # 填充输出
             output[:, :, self.classification_dims] = probs
@@ -197,8 +197,8 @@ class ActivationHead(nn.Module):
             # 提取回归维度
             loc_S_reg = loc_S[:, :, self.regression_dims]
             
-            # 计算回归值：线性变换
-            values = self.regression_scales * loc_S_reg + self.regression_biases
+            # 计算回归值：线性变换（保持数据类型一致）
+            values = (self.regression_scales * loc_S_reg + self.regression_biases).to(loc_S.dtype)
             
             # 填充输出
             output[:, :, self.regression_dims] = values

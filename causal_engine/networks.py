@@ -58,7 +58,7 @@ class AbductionNetwork(nn.Module):
         mlp_hidden_ratio: float = 2.0,
         mlp_activation: str = 'relu',
         mlp_dropout: float = 0.0,
-        gamma_init: float = 1.0
+        gamma_init: float = 10.0
     ):
         super().__init__()
         
@@ -184,47 +184,74 @@ class AbductionNetwork(nn.Module):
                                 nn.init.zeros_(module.bias)
             
             # scale_net 初始化（总是 MLP）
-            for module in self.scale_net.modules():
-                if isinstance(module, nn.Linear):
-                    # 最后一层特殊初始化为常数输出
-                    if module is list(self.scale_net.modules())[-1]:
-                        nn.init.zeros_(module.weight)
-                        if module.bias is not None:
-                            nn.init.constant_(module.bias, gamma_init)
-                    else:
-                        nn.init.xavier_uniform_(module.weight)
-                        if module.bias is not None:
-                            nn.init.zeros_(module.bias)
+            # 修复：正确找到最后一层并初始化
+            linear_modules = [m for m in self.scale_net.modules() if isinstance(m, nn.Linear)]
+            
+            for i, module in enumerate(linear_modules):
+                if i == len(linear_modules) - 1:
+                    # 最后一层：简化初始化逻辑
+                    # 权重：接近0，忽略输入依赖
+                    nn.init.uniform_(module.weight, -0.01, 0.01)
+                    if module.bias is not None:
+                        # 偏置：直接设置为gamma_init
+                        # 这样scale_net(input) ≈ 0 * input + gamma_init = gamma_init
+                        # 然后gamma_U = softplus(gamma_init) ≈ gamma_init
+                        nn.init.constant_(module.bias, gamma_init)
+                else:
+                    # 中间层：标准Xavier初始化
+                    nn.init.xavier_uniform_(module.weight)
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
     
-    def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, hidden_states: torch.Tensor, mode: str = 'standard') -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        前向传播：从证据到个体（独立网络版本）
+        前向传播：从证据到个体（统一模式版本）
         
         数学框架：
         X ∈ R^H                    # 输入上下文特征
-        μ_U = f_loc(X)             # 位置网络：X → μ_U ∈ R^C  
-        γ_U = softplus(g_scale(X)) # 尺度网络：X → γ_U ∈ R^C_+
+        μ_U = f_loc(X, mode)       # 位置网络：X → μ_U ∈ R^C (模式自适应)  
+        γ_U = f_scale(X, mode)     # 尺度网络：X → γ_U ∈ R^C_+ (模式自适应)
         U ~ Cauchy(μ_U, γ_U)       # 输出个体分布
         
-        网络设计：
-        - loc_net: 独立的位置参数推断网络
-        - scale_net: 独立的尺度参数推断网络  
-        - softplus激活确保尺度参数为正
+        统一模式处理：
+        - deterministic: μ_U = X (恒等映射), γ_U = 0 (确定性)
+        - exogenous: μ_U = f_loc(X), γ_U = 0 (无内生不确定性)  
+        - 其他模式: μ_U = f_loc(X), γ_U = softplus(f_scale(X))
         
         Args:
             hidden_states: [batch_size, seq_len, input_size] 上下文特征
+            mode: 推理模式 ('deterministic', 'exogenous', 'endogenous', 'standard', 'sampling')
             
         Returns:
             loc_U: [batch_size, seq_len, causal_size] 个体位置参数 μ_U
             scale_U: [batch_size, seq_len, causal_size] 个体尺度参数 γ_U
         """
-        # 独立的网络路径
-        # 位置参数推断：μ_U = f_loc(X)
-        loc_U = self.loc_net(hidden_states)
         
-        # 尺度参数推断：γ_U = softplus(g_scale(X))
-        # softplus确保输出为正：softplus(x) = log(1 + exp(x)) > 0
-        scale_U = F.softplus(self.scale_net(hidden_states))
+        if mode == 'deterministic':
+            # Deterministic模式：恒等映射，无不确定性
+            # μ_U = X (需要确保维度匹配)
+            if self.input_size == self.causal_size:
+                # 维度匹配：直接恒等映射
+                loc_U = hidden_states
+            else:
+                # 维度不匹配：使用线性变换但保持确定性意图
+                loc_U = self.loc_net(hidden_states)
+            # γ_U = 0：完全确定性
+            scale_U = torch.zeros_like(loc_U)
+            
+        elif mode == 'exogenous':
+            # Exogenous模式：位置推断，但无内生不确定性
+            # μ_U = f_loc(X)：正常位置推断
+            loc_U = self.loc_net(hidden_states)
+            # γ_U = 0：无内生噪声，只依赖外生噪声
+            scale_U = torch.zeros_like(loc_U)
+            
+        else:
+            # 标准因果模式：endogenous, standard, sampling
+            # μ_U = f_loc(X)：正常位置推断
+            loc_U = self.loc_net(hidden_states)
+            # γ_U = softplus(f_scale(X))：正常尺度推断
+            scale_U = F.softplus(self.scale_net(hidden_states))
         
         return loc_U, scale_U
     
@@ -266,18 +293,24 @@ class ActionNetwork(nn.Module):
         self,
         causal_size: int,
         output_size: int,
-        b_noise_init: float = 0.1
+        b_noise_init: float = 0.1,
+        b_noise_trainable: bool = True
     ):
         super().__init__()
         
         self.causal_size = causal_size
         self.output_size = output_size
+        self.b_noise_trainable = b_noise_trainable
         
         # 线性因果律：从个体表征到决策
         self.linear_law = nn.Linear(causal_size, output_size, bias=True)
         
         # 外生噪声参数
-        self.b_noise = nn.Parameter(torch.zeros(causal_size))
+        if b_noise_trainable:
+            self.b_noise = nn.Parameter(torch.zeros(causal_size))
+        else:
+            # 注册为buffer，不参与梯度更新
+            self.register_buffer('b_noise', torch.zeros(causal_size))
         
         # 初始化
         self._init_weights(b_noise_init)
@@ -286,65 +319,73 @@ class ActionNetwork(nn.Module):
         """初始化权重"""
         nn.init.xavier_uniform_(self.linear_law.weight)
         nn.init.zeros_(self.linear_law.bias)
-        nn.init.constant_(self.b_noise, b_noise_init)
+        
+        # 初始化b_noise向量 (所有分量设为相同值)
+        with torch.no_grad():
+            self.b_noise.data.fill_(b_noise_init)
     
     def forward(
         self,
         loc_U: torch.Tensor,
         scale_U: torch.Tensor,
-        do_sample: bool = False,
-        temperature: float = 1.0
+        mode: str = 'standard'
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        前向传播：从个体到决策
-        
-        实现温度统一的噪声控制框架：
-        - temperature=0: 纯因果模式（无噪声）
-        - temperature>0 & do_sample=False: 噪声增加尺度（不确定性）
-        - temperature>0 & do_sample=True: 噪声扰动位置（身份）
+        前向传播：从个体到决策（模式感知版本）
         
         数学框架：
         U ~ Cauchy(loc_U, scale_U)  # 输入个体分布
-        ε ~ Cauchy(0, 1)            # 标准外生噪声
-        U' = f_noise(U, ε, T)       # 噪声注入函数
+        U' = U + b_noise            # 添加外生噪声（模式依赖）
         S = W_A * U' + b_A          # 线性因果律
         
         Args:
             loc_U: 个体位置参数
             scale_U: 个体尺度参数
-            do_sample: 是否采样模式
-            temperature: 温度控制
+            mode: 计算模式
+                - 'deterministic': 不添加外生噪声
+                - 'exogenous': 不添加外生噪声  
+                - 'standard': 添加外生噪声
+                - 'endogenous': 添加外生噪声
+                - 'sampling': 添加外生噪声
             
         Returns:
             loc_S: [batch_size, seq_len, output_size] 决策位置参数
             scale_S: [batch_size, seq_len, output_size] 决策尺度参数
         """
-        if temperature == 0:
-            # 纯因果模式：无噪声
-            # 数学: U' = U (恒等变换)
+        # 五模式的严格数学实现（基于MATHEMATICAL_FOUNDATIONS_CN.md）
+        if mode == 'deterministic':
+            # Deterministic: U' = μ_U（确定性，只用位置）
+            loc_U_final = loc_U
+            scale_U_final = torch.zeros_like(scale_U)
+            
+        elif mode == 'exogenous':
+            # Exogenous: U' ~ Cauchy(μ_U, |b_noise|)（外生噪声替代内生不确定性）
+            loc_U_final = loc_U
+            scale_U_final = torch.abs(self.b_noise).expand_as(scale_U)
+            
+        elif mode == 'endogenous':
+            # Endogenous: U' ~ Cauchy(μ_U, γ_U)（只用内生不确定性）
             loc_U_final = loc_U
             scale_U_final = scale_U
             
-        elif do_sample:
-            # 采样模式：噪声扰动位置
-            # 数学: U' ~ Cauchy(loc_U + T·|b_noise|·ε, scale_U)
-            # 其中 ε ~ Cauchy(0,1) 通过逆变换采样: ε = tan(π(uniform - 0.5))
-            uniform_sample = torch.rand_like(loc_U)
-            epsilon = torch.tan(torch.pi * (uniform_sample - 0.5))  # 标准柯西分布采样
+        elif mode == 'standard':
+            # Standard: U' ~ Cauchy(μ_U, γ_U + |b_noise|)（内生+外生叠加在scale）
+            loc_U_final = loc_U
+            scale_U_final = scale_U + torch.abs(self.b_noise)
             
-            # 数值稳定性：限制极端值，避免数值溢出
-            # 柯西分布理论上可以产生无限大的值，但在实际应用中需要数值稳定性
-            epsilon = torch.clamp(epsilon, min=-10.0, max=10.0)
+        elif mode == 'sampling':
+            # Sampling: U' ~ Cauchy(μ_U + b_noise·E, γ_U)（外生噪声加到位置，然后采样）
+            # 生成外生随机噪声E
+            exogenous_noise = torch.randn_like(loc_U)  # E ~ N(0,1)
+            shifted_loc = loc_U + self.b_noise * exogenous_noise  # μ_U + b_noise·E
             
-            loc_U_final = loc_U + temperature * torch.abs(self.b_noise) * epsilon
+            # 从修正后的分布采样
+            cauchy_samples = torch.distributions.Cauchy(shifted_loc, scale_U).sample()
+            loc_U_final = cauchy_samples
             scale_U_final = scale_U
             
         else:
-            # 标准模式：噪声增加尺度
-            # 数学: U' ~ Cauchy(loc_U, scale_U + T·|b_noise|)
-            # 利用柯西分布的尺度可加性
-            loc_U_final = loc_U
-            scale_U_final = scale_U + temperature * torch.abs(self.b_noise)
+            raise ValueError(f"Unknown mode: {mode}. Supported modes: deterministic, exogenous, endogenous, standard, sampling")
         
         # 应用线性因果律: S = W_A * U' + b_A
         # 利用柯西分布的线性稳定性:
@@ -352,7 +393,8 @@ class ActionNetwork(nn.Module):
         loc_S = self.linear_law(loc_U_final)  # loc_S = W_A^T * loc_U' + b_A
         
         # 尺度参数的线性传播：scale_S = |W_A^T| * scale_U'
-        # 注意：这里使用矩阵乘法而不是逐元素乘法，保持线性变换的完整性
+        # 数学验证✅：Cauchy分布线性变换 U ~ Cauchy(μ, γ) => W^T*U ~ Cauchy(W^T*μ, |W^T|*γ)
+        # γ_S = γ_U @ |W^T|，其中W_A.weight形状是[output_size, causal_size]
         scale_S = scale_U_final @ torch.abs(self.linear_law.weight).T
         
         return loc_S, scale_S 

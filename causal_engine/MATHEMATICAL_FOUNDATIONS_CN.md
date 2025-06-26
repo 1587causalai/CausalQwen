@@ -388,6 +388,94 @@ $$S = W_A \cdot U' + b_A = W_A \cdot \text{loc\_net}(X) + b_A$$
 - ✅ **性能对比**：为因果推理能力提供可信的参考标准  
 - ✅ **渐进验证**：从确定性逐步过渡到因果推理模式
 
+### 2.5 统一损失函数
+
+CausalEngine 的设计哲学之一是与传统机器学习的数学等价性。这不仅体现在模型架构上，也体现在损失函数的设计上。我们为不同的推理模式设计了不同的损失函数，确保在`deterministic`模式下与标准方法完全对等，同时在因果模式下使用更符合理论基础的损失。
+
+```mermaid
+graph TD
+    subgraph LossFunctions["CausalEngine 统一损失函数框架"]
+        direction TB
+        
+        subgraph CausalModes["🧠 因果模式 (Exogenous/Endogenous/Standard/Sampling)"]
+            direction TB
+            CausalOutput["输出: S ~ Cauchy(μ_S, γ_S)"] --> CausalLoss
+            
+            subgraph CausalLoss["基于负对数似然 (NLL)"]
+                direction TB
+                RegressionLoss["回归: 柯西NLL<br>L = log(γ_S) + log(1 + ((y-μ_S)/γ_S)²)<br>同时优化准度与不确定性"]
+                ClassificationLoss["分类: OvR BCE<br>L = -Σ [y_k log(P_k) + (1-y_k)log(1-P_k)]<br>独立判断，非竞争"]
+            end
+        end
+        
+        subgraph DeterministicMode["🎯 确定性模式 (Deterministic)"]
+            direction TB
+            DetOutput["输出: y_pred = μ_S (确定性值)"] --> DetLoss
+            
+            subgraph DetLoss["与传统ML对齐"]
+                direction TB
+                DetRegLoss["回归: 均方误差 (MSE)<br>L = (y - y_pred)²<br>标准回归损失"]
+                DetClassLoss["分类: 交叉熵 (Cross-Entropy)<br>L = -Σ y_k log(Softmax(μ_S))<br>标准分类损失"]
+            end
+        end
+        
+    end
+
+    subgraph Bridge["🌉 等价性桥梁"]
+        direction TB
+        B1["因果模式 → 确定性模式<br>当 γ_S → 0"]
+        B2["NLL/BCE → MSE/CrossEntropy<br>损失函数退化"]
+    end
+    
+    CausalModes --> Bridge
+    DeterministicMode --> Bridge
+    
+    classDef causalStyle fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef detStyle fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
+    classDef bridgeStyle fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    
+    class CausalModes,CausalOutput,CausalLoss,RegressionLoss,ClassificationLoss causalStyle
+    class DeterministicMode,DetOutput,DetLoss,DetRegLoss,DetClassLoss detStyle
+    class Bridge,B1,B2 bridgeStyle
+```
+
+#### 2.5.1 因果模式损失：基于分布的负对数似然
+
+在`exogenous`, `endogenous`, `standard`, `sampling`四种因果模式下，模型输出的是一个完整的柯西分布 $S \sim \text{Cauchy}(\mu_S, \gamma_S)$。因此，我们采用负对数似然（Negative Log-Likelihood, NLL）作为损失函数，以最大化观测数据出现的概率。
+
+**1. 回归任务：柯西NLL损失**
+
+对于回归任务，给定真实值 $y$，其损失是柯西分布的负对数似然：
+$$L_{\text{CauchyNLL}}(y, \mu_S, \gamma_S) = -\log p(y | \mu_S, \gamma_S) = \log(\pi) + \log(\gamma_S) + \log\left(1 + \left(\frac{y - \mu_S}{\gamma_S}\right)^2\right)$$
+该损失函数会同时优化预测的中心 $\mu_S$ 和不确定性 $\gamma_S$，使模型学会不仅预测得"准"，还要对自己的预测"有数"。
+
+**2. 分类任务：独立二元交叉熵损失（OvR BCE）**
+
+对于分类任务，我们采用 One-vs-Rest (OvR) 策略。每个类别 $k$ 都被视为一个独立的二元分类问题。
+首先，通过柯西CDF计算出将决策得分 $S_k$ 判定为正类的概率 $P_k$：
+$$P_{k} = P(S_k > C_{k}) = \frac{1}{2} + \frac{1}{\pi}\arctan\left(\frac{\mu_{S_{k}} - C_{k}}{\gamma_{S_{k}}}\right)$$
+其中 $C_k$ 是一个可学习或固定的决策阈值（通常默认为0）。
+
+然后，对所有类别使用二元交叉熵（Binary Cross-Entropy, BCE）计算总损失：
+$$L_{\text{OvR-BCE}} = -\sum_{k=1}^{K} [y_k \log P_k + (1-y_k) \log(1-P_k)]$$
+其中 $y_k$ 是类别 $k$ 的真实标签（0或1）。这种方法摆脱了Softmax的竞争性归一化，允许模型对每个类别做出独立、不相互排斥的判断。
+
+#### 2.5.2 确定性模式损失：与传统ML对齐
+
+在`deterministic`模式下，$\gamma_U=0$ 且 $b_{noise}=0$，因此输出的尺度 $\gamma_S=0$，分布退化为确定性值。此时，模型与标准深度学习模型在数学上等价，损失函数也相应退化。
+
+**1. 回归任务：均方误差损失（MSE）**
+
+当 $\gamma_S \to 0$ 时，柯西NLL损失在数学上并不适用。此时模型输出 $y_{pred} = \mu_S$，我们采用标准的均方误差损失：
+$$L_{\text{MSE}}(y, y_{pred}) = (y - y_{pred})^2$$
+
+**2. 分类任务：标准交叉熵损失（Cross-Entropy）**
+
+在确定性模式下，模型的输出 $\mu_S$ 等价于传统模型的logits。因此，我们使用标准的多分类交叉熵损失：
+$$L_{\text{CrossEntropy}}(y, \mu_S) = -\sum_{k=1}^{K} y_k \log(\text{Softmax}(\mu_S)_k)$$
+
+通过这种双轨设计，CausalEngine不仅推进了因果推理的边界，也坚实地植根于现有深度学习的最佳实践中，为性能对比和理论验证提供了坚固的桥梁。
+
 ## 3. 柯西分布：开放世界的数学语言
 
 ### 3.1 为什么选择柯西分布？

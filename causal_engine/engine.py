@@ -238,7 +238,8 @@ class CausalEngine(nn.Module):
         abduction_mlp_dropout: float = 0.0,
         # 噪声和初始化参数
         b_noise_init: float = 0.1,
-        gamma_init: float = 1.0,
+        b_noise_trainable: bool = True,
+        gamma_init: float = 10.0,
         classification_threshold_init: float = 0.0,
         regression_scale_init: float = 1.0,
         regression_bias_init: float = 0.0,
@@ -267,7 +268,8 @@ class CausalEngine(nn.Module):
         self.action = ActionNetwork(
             causal_size=self.causal_size,
             output_size=vocab_size,
-            b_noise_init=b_noise_init
+            b_noise_init=b_noise_init,
+            b_noise_trainable=b_noise_trainable
         )
         
         self.activation = ActivationHead(
@@ -283,28 +285,21 @@ class CausalEngine(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        do_sample: bool = False,
-        temperature: float = 1.0,
+        mode: str = 'standard',
         return_dict: bool = True,
         apply_activation: bool = True
     ) -> Dict[str, torch.Tensor]:
         """
-        完整的因果推理流程
+        完整的因果推理流程（简化版本）
         
         数学流程：
-        1. 归因推断：X → U ~ Cauchy(μ_U, γ_U)
-        2. 行动决策：U → S ~ Cauchy(loc_S, scale_S)  
-        3. 激活输出：S → Y (任务相关)
-        
-        核心公式：Y = f(U, ε)
-        - U: 个体选择变量（从上下文推断）
-        - ε: 外生噪声（可学习）
-        - f: 普适因果机制（线性 + 激活）
+        1. 归因推断：X → U ~ Cauchy(μ_U, γ_U) [模式自适应]
+        2. 行动决策：U → S ~ Cauchy(loc_S, scale_S) [线性变换+外生噪声]
+        3. 激活输出：S → Y (任务相关) [输出转换]
         
         Args:
             hidden_states: [batch_size, seq_len, hidden_size] 上下文特征
-            do_sample: 是否使用采样模式
-            temperature: 温度控制
+            mode: 推理模式 ('deterministic', 'exogenous', 'endogenous', 'standard')
             return_dict: 是否返回字典格式
             apply_activation: 是否应用激活头
             
@@ -315,22 +310,29 @@ class CausalEngine(nn.Module):
             - loc_U, scale_U: 个体分布参数
             - activation_output: 激活头的详细输出
         """
-        # Step 1: 归因推断 (Abduction)
+        # Step 1: 归因推断 (Abduction) - 模式自适应
         # 数学: X → U ~ Cauchy(μ_U, γ_U)
-        # 从观察到的证据推断出"我是谁"
-        loc_U, scale_U = self.abduction(hidden_states)
+        # Abduction网络根据mode自动输出正确的分布参数
+        loc_U, scale_U = self.abduction(hidden_states, mode=mode)
         
         # Step 2: 行动决策 (Action)  
         # 数学: U → S ~ Cauchy(loc_S, scale_S)
-        # 基于"我是谁"来决定"我该做什么"
-        loc_S, scale_S = self.action(loc_U, scale_U, do_sample, temperature)
+        # 应用线性因果律并添加外生噪声（根据mode决定）
+        loc_S, scale_S = self.action(loc_U, scale_U, mode=mode)
         
         # Step 3: 激活输出 (Activation)
         # 数学: S → Y (通过CDF、线性变换或区间概率)
         # 将抽象的决策分布转换为具体的任务输出
         if apply_activation:
-            activation_output = self.activation(loc_S, scale_S, return_dict=True)
-            output = activation_output['output']
+            if mode == 'deterministic':
+                # Deterministic模式：直接输出logits，不通过激活函数
+                # 这样才能真正等价于传统MLP + CrossEntropy
+                output = loc_S
+                activation_output = {'output': output}
+            else:
+                # 其他模式：通过激活函数输出概率
+                activation_output = self.activation(loc_S, scale_S, return_dict=True)
+                output = activation_output['output']
         else:
             activation_output = None
             output = None
