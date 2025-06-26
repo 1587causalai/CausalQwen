@@ -15,9 +15,12 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.model_selection import train_test_split
 from sklearn.datasets import make_regression, make_classification
 from sklearn.preprocessing import StandardScaler
-import tempfile
 import os
+import sys
 import warnings
+
+# 添加项目根目录到Python路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 导入我们的CausalEngine实现
 from causal_sklearn._causal_engine import create_causal_regressor, create_causal_classifier
@@ -79,7 +82,7 @@ class QuickTester:
         
         return y_noisy
     
-    def create_pytorch_model(self, input_size, output_size, hidden_sizes, task='regression'):
+    def create_pytorch_model(self, input_size, output_size, hidden_sizes):
         """创建PyTorch基线模型"""
         layers = []
         prev_size = input_size
@@ -170,7 +173,7 @@ class QuickTester:
     
     def train_causal_engine(self, X_train, y_train, X_val, y_val, task_type='regression', mode='standard',
                            hidden_sizes=(128, 64), max_epochs=5000, lr=0.01, patience=500, tol=1e-8,
-                           gamma_init=1.0, b_noise_init=1.0, ovr_threshold=0.0, verbose=True):
+                           gamma_init=1.0, b_noise_init=1.0, b_noise_trainable=True, ovr_threshold=0.0, verbose=True):
         """训练CausalEngine模型"""
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
@@ -183,7 +186,8 @@ class QuickTester:
                 hidden_size=hidden_sizes[0],
                 hidden_layers=hidden_sizes[1:],
                 gamma_init=gamma_init,
-                b_noise_init=b_noise_init
+                b_noise_init=b_noise_init,
+                b_noise_trainable=b_noise_trainable
             )
         else:
             n_classes = len(np.unique(y_train))
@@ -194,6 +198,7 @@ class QuickTester:
                 hidden_layers=hidden_sizes[1:],
                 gamma_init=gamma_init,
                 b_noise_init=b_noise_init,
+                b_noise_trainable=b_noise_trainable,
                 ovr_threshold=ovr_threshold
             )
         
@@ -263,8 +268,8 @@ class QuickTester:
     
     def test_regression(self, 
                        # 数据设置
-                       n_samples=2000, n_features=12, noise=0.1, random_state=42,
-                       anomaly_ratio=0.10,
+                       n_samples=2000, n_features=12, noise=0.3, random_state=42,
+                       anomaly_ratio=0.30,
                        
                        # 网络结构
                        hidden_layer_sizes=(128, 64), causal_size=None,
@@ -273,7 +278,7 @@ class QuickTester:
                        gamma_init=1.0, b_noise_init=1.0, b_noise_trainable=True,
                        
                        # 训练参数
-                       max_iter=5000, learning_rate=0.01, early_stopping=True,
+                       max_iter=5000, learning_rate=0.05, early_stopping=True,
                        patience=500, tol=1e-8,
                        
                        # 显示设置
@@ -360,7 +365,7 @@ class QuickTester:
         
         # 2. PyTorch基线
         if verbose: print("训练 PyTorch基线...")
-        pytorch_model = self.create_pytorch_model(n_features, 1, hidden_layer_sizes, 'regression')
+        pytorch_model = self.create_pytorch_model(n_features, 1, hidden_layer_sizes)
         pytorch_model = self.train_pytorch_model(
             pytorch_model, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, 
             epochs=max_iter, lr=learning_rate, task='regression',
@@ -391,7 +396,7 @@ class QuickTester:
         causal_det = self.train_causal_engine(
             X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled,
             'regression', 'deterministic', hidden_layer_sizes, max_iter, learning_rate,
-            patience, tol, gamma_init, b_noise_init, verbose=verbose
+            patience, tol, gamma_init, b_noise_init, b_noise_trainable, verbose=verbose
         )
         
         # 预测
@@ -423,7 +428,7 @@ class QuickTester:
         causal_std = self.train_causal_engine(
             X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled,
             'regression', 'standard', hidden_layer_sizes, max_iter, learning_rate,
-            patience, tol, gamma_init, b_noise_init, verbose=verbose
+            patience, tol, gamma_init, b_noise_init, b_noise_trainable, verbose=verbose
         )
         
         # 预测
@@ -470,7 +475,7 @@ class QuickTester:
                            # 数据设置  
                            n_samples=3000, n_features=15, n_classes=3, n_informative=None,
                            class_sep=0.3, random_state=42,
-                           label_noise_ratio=0.20, label_noise_type='flip',
+                           label_noise_ratio=0.25, label_noise_type='flip',
                            
                            # 网络结构
                            hidden_layer_sizes=(128, 64), causal_size=None,
@@ -519,7 +524,7 @@ class QuickTester:
         
         # 只对训练数据添加标签异常（保持test set干净用于真实评估）
         if label_noise_ratio > 0:
-            y_train = self.add_label_anomalies(y_train, label_noise_ratio, 'classification')
+            y_train = self.add_label_anomalies(y_train, label_noise_ratio, label_noise_type)
         
         # 分割训练数据为训练集和验证集（验证集也有噪声）
         X_train, X_val, y_train, y_val = train_test_split(
@@ -578,7 +583,7 @@ class QuickTester:
         
         # 2. PyTorch基线
         if verbose: print("训练 PyTorch基线...")
-        pytorch_model = self.create_pytorch_model(n_features, n_classes, hidden_layer_sizes, 'classification')
+        pytorch_model = self.create_pytorch_model(n_features, n_classes, hidden_layer_sizes)
         pytorch_model = self.train_pytorch_model(
             pytorch_model, X_train_scaled, y_train, X_val_scaled, y_val,
             epochs=max_iter, lr=learning_rate, task='classification',
@@ -609,7 +614,7 @@ class QuickTester:
         causal_det = self.train_causal_engine(
             X_train_scaled, y_train, X_val_scaled, y_val,
             'classification', 'deterministic', hidden_layer_sizes, max_iter, learning_rate,
-            patience, tol, gamma_init, b_noise_init, ovr_threshold_init, verbose=verbose
+            patience, tol, gamma_init, b_noise_init, b_noise_trainable, ovr_threshold_init, verbose=verbose
         )
         
         if verbose:
@@ -636,7 +641,7 @@ class QuickTester:
         causal_std = self.train_causal_engine(
             X_train_scaled, y_train, X_val_scaled, y_val,
             'classification', 'standard', hidden_layer_sizes, max_iter, learning_rate,
-            patience, tol, gamma_init, b_noise_init, ovr_threshold_init, verbose=verbose
+            patience, tol, gamma_init, b_noise_init, b_noise_trainable, ovr_threshold_init, verbose=verbose
         )
         
         if verbose:
