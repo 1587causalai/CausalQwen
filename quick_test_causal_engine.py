@@ -669,7 +669,7 @@ if __name__ == "__main__":
     GAMMA_INIT_REGRESSION = 1.0     # 回归γ_U初始化值
     GAMMA_INIT_CLASSIFICATION = 1.0 # 分类γ_U初始化值
     B_NOISE_INIT = 1.0              # 外生噪声初始值 
-    B_NOISE_TRAINABLE = False        # 外生噪声是否可训练
+    B_NOISE_TRAINABLE = True        # 外生噪声是否可训练
     OVR_THRESHOLD_INIT = 0.0        # OvR阈值初始化
     
     # 🎯 训练参数 - 早停策略配置

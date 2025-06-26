@@ -374,14 +374,16 @@ class ActionNetwork(nn.Module):
             scale_U_final = scale_U + torch.abs(self.b_noise)
             
         elif mode == 'sampling':
-            # Sampling: U' ~ Cauchy(μ_U + b_noise·E, γ_U)（外生噪声加到位置，然后采样）
-            # 生成外生随机噪声E
-            exogenous_noise = torch.randn_like(loc_U)  # E ~ N(0,1)
-            shifted_loc = loc_U + self.b_noise * exogenous_noise  # μ_U + b_noise·E
+            # Sampling: 外生噪声影响位置参数
+            # 如果 ε ~ Cauchy(0, 1)，则 b_noise·ε ~ Cauchy(0, |b_noise|)
+            # 因此 U' ~ Cauchy(μ_U, γ_U) + Cauchy(0, |b_noise|) = Cauchy(μ_U, γ_U + |b_noise|)
             
-            # 从修正后的分布采样
-            cauchy_samples = torch.distributions.Cauchy(shifted_loc, scale_U).sample()
-            loc_U_final = cauchy_samples
+            # 但如果要保持位置偏移的语义，应该：
+            # 生成标准柯西噪声
+            uniform = torch.rand_like(loc_U)
+            epsilon = torch.tan(torch.pi * (uniform - 0.5))  # ε ~ Cauchy(0, 1)
+            
+            loc_U_final = loc_U + self.b_noise * epsilon
             scale_U_final = scale_U
             
         else:
