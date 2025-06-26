@@ -197,9 +197,9 @@ class ActionNetwork(nn.Module):
         
         # 外生噪声参数
         if b_noise_trainable:
-            self.b_noise = nn.Parameter(torch.full((output_size,), b_noise_init))
+            self.b_noise = nn.Parameter(torch.full((hidden_size,), b_noise_init))
         else:
-            self.register_buffer('b_noise', torch.full((output_size,), b_noise_init))
+            self.register_buffer('b_noise', torch.full((hidden_size,), b_noise_init))
         
         self._init_weights()
     
