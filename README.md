@@ -88,7 +88,13 @@ results = benchmark.run_classification_comparison(dataset='wine_quality')
 
 ## Documentation
 
-For detailed documentation, examples, and API reference, visit: [Documentation Link]
+### Mathematical Foundations
+- **[Mathematical Foundations](docs/MATHEMATICAL_FOUNDATIONS.md)** - Complete theoretical framework
+- **[One-Pager Summary](docs/ONE_PAGER.md)** - Executive summary of CausalEngine
+- **[All Mathematical Docs](docs/)** - Complete mathematical documentation
+
+### API Reference
+For detailed API documentation, examples, and tutorials, visit: [Documentation Link]
 
 ## Contributing
 
