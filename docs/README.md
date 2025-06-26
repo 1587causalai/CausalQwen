@@ -4,17 +4,23 @@
 
 ## 核心数学文档
 
-### 📐 基础理论文档
-- **[MATHEMATICAL_FOUNDATIONS_CN.md](MATHEMATICAL_FOUNDATIONS_CN.md)** - 🌟 **最核心** CausalEngine 数学基础 (中文完整版)
+为了明确当前开发阶段的重点，我们将文档分为两类：
+
+### 🎯 CausalML for Sklearn (当前分支核心)
+
+这些文档构成了 `causal-sklearn` 实现的直接理论和数学基础，专注于解决常规的分类与回归任务。
+
 - **[ONE_PAGER.md](ONE_PAGER.md)** - 算法概览与高管摘要
+- **[MATHEMATICAL_FOUNDATIONS_CN.md](MATHEMATICAL_FOUNDATIONS_CN.md)** - 🌟 **最核心** CausalEngine 数学基础 (中文完整版)
+- **[IMPLEMENTATION_SPECIFICATION.md](IMPLEMENTATION_SPECIFICATION.md)** - 📋 **实现规范**，直接指导代码开发
+- **[mathematical_equivalence_deep_dive.md](mathematical_equivalence_deep_dive.md)** - 与传统机器学习模型的数学等价性深度分析
+- **[MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md](MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md)** - 数学实现正确性验证指南
 
-### 🧮 详细数学框架
-- **[core_mathematical_framework.md](core_mathematical_framework.md)** - 核心数学框架实现细节
-- **[core_mathematical_framework_num_extended.md](core_mathematical_framework_num_extended.md)** - 扩展数值理论
-- **[mathematical_equivalence_deep_dive.md](mathematical_equivalence_deep_dive.md)** - 数学等价性深度分析
+### 🚀 CausalLLM (未来探索方向)
 
-### ✅ 实现验证指南
-- **[MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md](MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md)** - 数学实现正确性验证
+这些文档为项目最终目标——将 CausalEngine 与大语言模型（LLM）结合——提供前瞻性的理论探索。
+- **[core_mathematical_framework.md](core_mathematical_framework.md)** - CausalQwen 核心数学框架实现细节
+- **[core_mathematical_framework_num_extended.md](core_mathematical_framework_num_extended.md)** - CausalQwen 扩展数值理论
 
 ## 关键数学概念
 
@@ -81,6 +87,8 @@ $$
 3. 学习 `core_mathematical_framework_num_extended.md` 的高级理论
 
 ## 重要说明
+
+> **🎯 当前分支目标**：值得注意的是，本项目的最终目标是将因果推理引擎与大语言模型（LLM）结合。然而，当前 `causal-sklearn-mvp` 分支的焦点是**将因果引擎应用于常规的分类和回归任务**，为 `sklearn` 生态提供一个功能强大、理论完备的因果模型。
 
 > **📋 权威规范**：这些文档是 CausalEngine 的权威数学规范。causal-sklearn 中的任何实现都必须严格遵循这些数学定义。
 > 
