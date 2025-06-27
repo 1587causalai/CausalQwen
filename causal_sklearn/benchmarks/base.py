@@ -281,19 +281,15 @@ class BaselineBenchmark:
             verbose: 是否显示详细信息
             **kwargs: 其他参数
         """
-        # 数据分割
+        # 1. 初始数据分割
         if task_type == 'classification':
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=test_size, random_state=random_state, stratify=y)
         else:
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=test_size, random_state=random_state)
-        
-        # 添加标签异常（仅训练集）
-        if anomaly_ratio > 0:
-            y_train = self.add_label_anomalies(y_train, anomaly_ratio, task_type)
-        
-        # 分割训练和验证集
+
+        # 2. 从训练集中分割出验证集
         if task_type == 'classification':
             X_train, X_val, y_train, y_val = train_test_split(
                 X_train, y_train, test_size=val_size, random_state=random_state, stratify=y_train)
@@ -301,25 +297,34 @@ class BaselineBenchmark:
             X_train, X_val, y_train, y_val = train_test_split(
                 X_train, y_train, test_size=val_size, random_state=random_state)
         
-        # 标准化
+        # 3. 标准化
+        # 特征标准化
         scaler_X = StandardScaler()
         X_train_scaled = scaler_X.fit_transform(X_train)
         X_val_scaled = scaler_X.transform(X_val)
         X_test_scaled = scaler_X.transform(X_test)
         
+        # 标签标准化（回归任务）
         if task_type == 'regression':
             scaler_y = StandardScaler()
+            # 注意：在干净的y_train上拟合scaler
             y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
             y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
             y_test_scaled = scaler_y.transform(y_test.reshape(-1, 1)).flatten()
         else:
+            # 分类任务不需要标签标准化
             y_train_scaled = y_train
             y_val_scaled = y_val
             y_test_scaled = y_test
+
+        # 4. 在标准化的训练标签上添加异常（如果需要）
+        if anomaly_ratio > 0:
+            # 注意：对已经标准化的y_train_scaled添加噪声
+            y_train_scaled = self.add_label_anomalies(y_train_scaled, anomaly_ratio, task_type)
         
         results = {}
         
-        # 训练和评估所有模型
+        # 5. 训练和评估所有模型
         results.update(self._train_sklearn_baseline(
             X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, 
             X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
