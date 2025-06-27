@@ -2,6 +2,7 @@
 CausalEngine基准测试基础模块
 
 提供统一的基准测试框架，用于比较CausalEngine与传统机器学习方法的性能。
+支持多种基准方法：神经网络、集成方法、SVM、线性方法等。
 """
 
 import numpy as np
@@ -17,6 +18,11 @@ import os
 import warnings
 
 from .._causal_engine import create_causal_regressor, create_causal_classifier
+from .methods import BaselineMethodFactory, MethodDependencyChecker, filter_available_methods
+from .method_configs import (
+    get_method_config, get_method_group, get_task_recommendations, 
+    validate_methods, expand_method_groups, list_available_methods
+)
 
 warnings.filterwarnings('ignore')
 
@@ -49,11 +55,14 @@ class BaselineBenchmark:
     """
     基准测试基类
     
-    提供统一的接口来比较CausalEngine与sklearn和PyTorch基线的性能。
+    提供统一的接口来比较CausalEngine与传统机器学习方法的性能。
+    支持配置驱动的基准方法选择，包括神经网络、集成方法、SVM、线性方法等。
     """
     
     def __init__(self):
         self.results = {}
+        self.method_factory = BaselineMethodFactory()
+        self.dependency_checker = MethodDependencyChecker()
     
     def add_label_anomalies(self, y, anomaly_ratio=0.1, anomaly_type='regression'):
         """
@@ -317,24 +326,46 @@ class BaselineBenchmark:
             y_val_scaled = y_val
             y_test_scaled = y_test
 
-        # 4. 在标准化的训练标签上添加异常（如果需要）
+        # 4. 在标准化的训练和验证标签上添加异常（如果需要）
         if anomaly_ratio > 0:
-            # 注意：对已经标准化的y_train_scaled添加噪声
+            # 注意：对已经标准化的y_train_scaled和y_val_scaled添加噪声
             y_train_scaled = self.add_label_anomalies(y_train_scaled, anomaly_ratio, task_type)
+            y_val_scaled = self.add_label_anomalies(y_val_scaled, anomaly_ratio, task_type)
         
         results = {}
         
-        # 5. 训练和评估所有模型
-        results.update(self._train_sklearn_baseline(
-            X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, 
-            X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
-        ))
+        # 5. 确定要使用的基准方法
+        baseline_methods = self._get_baseline_methods(task_type, **kwargs)
+        causal_modes = kwargs.get('causal_modes', ['deterministic', 'standard'])
         
-        results.update(self._train_pytorch_baseline(
-            X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, 
-            X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
-        ))
+        if verbose:
+            print(f"\n📊 选择的基准方法: {baseline_methods}")
+            print(f"🧠 CausalEngine模式: {causal_modes}")
         
+        # 6. 训练和评估传统基准方法
+        for method_name in baseline_methods:
+            if method_name in ['sklearn', 'sklearn_mlp']:
+                # 保持向后兼容
+                results.update(self._train_sklearn_baseline(
+                    X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, 
+                    X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
+                ))
+            elif method_name in ['pytorch', 'pytorch_mlp']:
+                # 保持向后兼容
+                results.update(self._train_pytorch_baseline(
+                    X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, 
+                    X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
+                ))
+            else:
+                # 新的基准方法
+                result = self._train_baseline_method(
+                    method_name, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled,
+                    X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
+                )
+                if result:
+                    results.update(result)
+        
+        # 7. 训练和评估CausalEngine模型
         results.update(self._train_causal_engines(
             X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, 
             X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
@@ -353,18 +384,22 @@ class BaselineBenchmark:
         if verbose: print("训练 sklearn 基线...")
         
         if task_type == 'regression':
+            # 使用外部验证集进行早停，而不是内部划分
             model = MLPRegressor(
                 hidden_layer_sizes=hidden_layer_sizes,
                 max_iter=max_iter,
                 learning_rate_init=learning_rate,
-                early_stopping=True,
-                validation_fraction=0.2,
-                n_iter_no_change=50,
-                tol=1e-4,
+                early_stopping=False,  # 关闭内部早停
                 random_state=random_state,
                 alpha=0.0001
             )
-            model.fit(X_train, y_train)
+            
+            # 手动实现早停策略，使用外部验证集
+            model = self._train_sklearn_with_external_validation(
+                model, X_train, y_train, X_val, y_val, 
+                patience=50, tol=1e-4, task_type='regression'
+            )
+            
             pred_test = model.predict(X_test)
             pred_val = model.predict(X_val)
             
@@ -385,18 +420,22 @@ class BaselineBenchmark:
                 }
             }
         else:
+            # 使用外部验证集进行早停，而不是内部划分
             model = MLPClassifier(
                 hidden_layer_sizes=hidden_layer_sizes,
                 max_iter=max_iter,
                 learning_rate_init=learning_rate,
-                early_stopping=True,
-                validation_fraction=0.2,
-                n_iter_no_change=50,
-                tol=1e-4,
+                early_stopping=False,  # 关闭内部早停
                 random_state=random_state,
                 alpha=0.0001
             )
-            model.fit(X_train, y_train)
+            
+            # 手动实现早停策略，使用外部验证集
+            model = self._train_sklearn_with_external_validation(
+                model, X_train, y_train, X_val, y_val, 
+                patience=50, tol=1e-4, task_type='classification'
+            )
+            
             pred_test = model.predict(X_test)
             pred_val = model.predict(X_val)
             
@@ -574,10 +613,33 @@ class BaselineBenchmark:
                     f"{metrics[0]:<10} {metrics[1]:<10} {metrics[2]:<10} {metrics[3]:<10}")
         lines.append("-" * 120)
         
+        # 创建方法名显示映射，用于更好的对齐
+        display_name_mapping = {
+            'MLP Pinball Median': 'MLP Pinball',  # 配置文件中的显示名称
+            'MLP Huber': 'MLP Huber',
+            'MLP Cauchy': 'MLP Cauchy', 
+            'sklearn MLP': 'sklearn',
+            'PyTorch MLP': 'pytorch',
+            'Random Forest': 'Random Forest',
+            'LightGBM': 'LightGBM',
+            'XGBoost': 'XGBoost',
+            'Ridge Regression': 'Ridge Regression',
+            # 兼容原始method_name
+            'mlp_pinball_median': 'MLP Pinball',
+            'mlp_huber': 'MLP Huber',
+            'mlp_cauchy': 'MLP Cauchy',
+            'sklearn_mlp': 'sklearn',
+            'pytorch_mlp': 'pytorch',
+            'sklearn': 'sklearn',  # 向后兼容
+            'pytorch': 'pytorch'   # 向后兼容
+        }
+        
         for method, results_dict in results.items():
             val_m = results_dict['val']
             test_m = results_dict['test']
-            lines.append(f"{method:<15} {val_m[metrics[0]]:<10.4f} {val_m[metrics[1]]:<10.4f} "
+            # 使用显示名称或原名称
+            display_name = display_name_mapping.get(method, method)
+            lines.append(f"{display_name:<15} {val_m[metrics[0]]:<10.4f} {val_m[metrics[1]]:<10.4f} "
                         f"{val_m[metrics[2]]:<10.4f} {val_m[metrics[3]]:<10.4f} "
                         f"{test_m[metrics[0]]:<10.4f} {test_m[metrics[1]]:<10.4f} "
                         f"{test_m[metrics[2]]:<10.4f} {test_m[metrics[3]]:<10.4f}")
@@ -626,3 +688,237 @@ class BaselineBenchmark:
             self.print_results(results, task_type)
         
         return results
+    
+    def _get_baseline_methods(self, task_type: str, **kwargs) -> list:
+        """
+        确定要使用的基准方法列表
+        
+        支持多种配置方式：
+        1. baseline_methods: 直接指定方法列表
+        2. baseline_config: 配置字典，包含方法列表和参数
+        3. method_group: 使用预定义的方法组合
+        4. 默认方式：向后兼容的传统方法
+        """
+        # 方式1: 直接指定方法列表
+        if 'baseline_methods' in kwargs:
+            methods = kwargs['baseline_methods']
+            if isinstance(methods, str):
+                methods = [methods]
+            
+            # 展开方法组合
+            methods = expand_method_groups(methods)
+            
+            # 过滤可用方法
+            available_methods, unavailable_methods = filter_available_methods(methods)
+            
+            if unavailable_methods:
+                print(f"⚠️ 跳过不可用的方法: {unavailable_methods}")
+            
+            return available_methods
+        
+        # 方式2: 配置字典
+        if 'baseline_config' in kwargs:
+            config = kwargs['baseline_config']
+            if isinstance(config, dict) and 'traditional_methods' in config:
+                methods = config['traditional_methods']
+                methods = expand_method_groups(methods)
+                available_methods, unavailable_methods = filter_available_methods(methods)
+                
+                if unavailable_methods:
+                    print(f"⚠️ 跳过不可用的方法: {unavailable_methods}")
+                
+                return available_methods
+        
+        # 方式3: 使用预定义方法组合
+        if 'method_group' in kwargs:
+            group_name = kwargs['method_group']
+            methods = get_method_group(group_name)
+            if not methods:
+                print(f"⚠️ 未知的方法组合: {group_name}，使用默认方法")
+                methods = ['sklearn_mlp', 'pytorch_mlp']
+            
+            available_methods, unavailable_methods = filter_available_methods(methods)
+            
+            if unavailable_methods:
+                print(f"⚠️ 跳过不可用的方法: {unavailable_methods}")
+            
+            return available_methods
+        
+        # 方式4: 任务特定推荐
+        if 'recommendation_type' in kwargs:
+            rec_type = kwargs['recommendation_type']
+            methods = get_task_recommendations(task_type, rec_type)
+            available_methods, unavailable_methods = filter_available_methods(methods)
+            
+            if unavailable_methods:
+                print(f"⚠️ 跳过不可用的方法: {unavailable_methods}")
+            
+            return available_methods
+        
+        # 默认方式：向后兼容
+        return ['sklearn', 'pytorch']
+    
+    def _train_baseline_method(self, method_name: str, X_train, y_train, X_val, y_val, 
+                              X_test, y_test, task_type: str, verbose: bool, **kwargs):
+        """
+        训练指定的基准方法
+        
+        Returns:
+            包含方法结果的字典，格式: {method_name: {val: {...}, test: {...}}}
+        """
+        try:
+            if verbose:
+                print(f"训练 {method_name}...")
+            
+            # 获取方法配置
+            method_config = get_method_config(method_name)
+            if not method_config:
+                print(f"❌ 未知方法: {method_name}")
+                return None
+            
+            # 合并参数：默认配置 + 用户传入的参数
+            method_params = method_config['params'].copy()
+            
+            # 从kwargs中提取相关参数
+            if 'baseline_config' in kwargs:
+                config = kwargs['baseline_config']
+                if isinstance(config, dict) and 'method_params' in config:
+                    user_params = config['method_params'].get(method_name, {})
+                    method_params.update(user_params)
+            
+            # 创建模型
+            model = self.method_factory.create_model(method_name, task_type, **method_params)
+            
+            # 训练和评估
+            results = self.method_factory.train_and_evaluate(
+                method_name, model, X_train, y_train, X_val, y_val, X_test, y_test, task_type
+            )
+            
+            # 返回格式化结果
+            display_name = method_config.get('name', method_name)
+            return {display_name: results}
+            
+        except Exception as e:
+            if verbose:
+                print(f"❌ 训练 {method_name} 时出错: {str(e)}")
+            return None
+    
+    def list_available_baseline_methods(self) -> dict:
+        """列出所有可用的基准方法"""
+        all_methods = list_available_methods()
+        available = {}
+        
+        for method in all_methods:
+            config = get_method_config(method)
+            available[method] = {
+                'name': config['name'],
+                'type': config['type'],
+                'available': self.method_factory.is_method_available(method)
+            }
+        
+        return available
+    
+    def print_method_availability(self):
+        """打印方法可用性报告"""
+        print("\n📦 基准方法可用性报告")
+        print("=" * 80)
+        
+        methods = self.list_available_baseline_methods()
+        
+        # 按类型分组
+        by_type = {}
+        for method, info in methods.items():
+            method_type = info['type']
+            if method_type not in by_type:
+                by_type[method_type] = []
+            by_type[method_type].append((method, info))
+        
+        # 打印各类型的方法
+        for method_type, method_list in by_type.items():
+            print(f"\n📊 {method_type.title()} Methods:")
+            print("-" * 40)
+            
+            for method, info in method_list:
+                status = "✅" if info['available'] else "❌"
+                print(f"  {status} {method:<20} - {info['name']}")
+        
+        # 打印依赖状态
+        self.dependency_checker.print_dependency_status()
+    
+    def _train_sklearn_with_external_validation(self, model, X_train, y_train, X_val, y_val, 
+                                              patience=50, tol=1e-4, task_type='regression'):
+        """
+        使用外部验证集训练sklearn模型并实现早停
+        
+        Args:
+            model: sklearn模型实例
+            X_train, y_train: 训练数据
+            X_val, y_val: 验证数据
+            patience: 早停patience
+            tol: 早停tolerance
+            task_type: 任务类型
+        
+        Returns:
+            训练好的模型
+        """
+        from sklearn.metrics import mean_squared_error, log_loss
+        
+        best_score = float('inf')
+        patience_counter = 0
+        best_model = None
+        
+        # sklearn的增量训练策略
+        for epoch in range(model.max_iter):
+            # 执行一轮训练（使用partial_fit或设置max_iter=1）
+            if hasattr(model, 'partial_fit'):
+                # 支持增量训练的模型
+                if epoch == 0:
+                    model.partial_fit(X_train, y_train)
+                else:
+                    model.partial_fit(X_train, y_train)
+            else:
+                # 不支持增量训练的模型，设置较小的max_iter并重新训练
+                temp_model = model.__class__(**model.get_params())
+                temp_model.max_iter = epoch + 1
+                temp_model.warm_start = True
+                temp_model.fit(X_train, y_train)
+                model = temp_model
+            
+            # 在验证集上评估
+            try:
+                val_pred = model.predict(X_val)
+                
+                if task_type == 'regression':
+                    val_score = mean_squared_error(y_val, val_pred)
+                else:
+                    try:
+                        val_proba = model.predict_proba(X_val)
+                        val_score = log_loss(y_val, val_proba)
+                    except:
+                        # 如果predict_proba失败，使用简单的错误率
+                        val_score = 1.0 - model.score(X_val, y_val)
+                
+                # 早停检查
+                if val_score < best_score - tol:
+                    best_score = val_score
+                    patience_counter = 0
+                    # 保存最佳模型状态
+                    best_model = model.__class__(**model.get_params())
+                    if hasattr(model, 'coefs_'):
+                        # 深拷贝训练好的参数
+                        import copy
+                        best_model = copy.deepcopy(model)
+                    else:
+                        best_model.fit(X_train, y_train)
+                else:
+                    patience_counter += 1
+                
+                if patience_counter >= patience:
+                    break
+                    
+            except Exception as e:
+                # 如果评估失败，继续训练
+                continue
+        
+        # 返回最佳模型或当前模型
+        return best_model if best_model is not None else model

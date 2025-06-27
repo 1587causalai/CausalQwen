@@ -10,32 +10,39 @@
 - 8个特征（房屋年龄、收入、人口等）
 - 目标：预测房价中位数
 
-我们将比较所有7种方法：
+我们将比较所有13种方法：
 1. sklearn MLPRegressor（传统神经网络）
 2. PyTorch MLP（传统深度学习）
-3. CausalEngine - deterministic（确定性推理）
-4. CausalEngine - exogenous（外生噪声主导）
-5. CausalEngine - endogenous（内生不确定性主导）
-6. CausalEngine - standard（内生+外生混合）
-7. CausalEngine - sampling（采样式因果推理）
+3. MLP Huber（Huber损失稳健回归）
+4. MLP Pinball Median（中位数回归）
+5. MLP Cauchy（Cauchy损失稳健回归）
+6. Random Forest（随机森林）
+7. XGBoost（梯度提升）
+8. LightGBM（轻量梯度提升）
+9. CatBoost（强力梯度提升）
+10. CausalEngine - deterministic（确定性推理）
+11. CausalEngine - exogenous（外生噪声主导）
+12. CausalEngine - endogenous（内生不确定性主导）
+13. CausalEngine - standard（内生+外生混合）
 
 关键亮点：
-- 5种CausalEngine推理模式的全面对比
+- 4种CausalEngine推理模式的全面对比
+- 9种强力传统机器学习方法（包含3种稳健回归+3种梯度提升）
 - 真实世界数据的鲁棒性测试
-- 因果推理不同模式的性能差异分析
+- 因果推理vs传统方法的性能差异分析
 
 实验设计说明
 ==================================================================
-本脚本专注于全面评估CausalEngine的5种推理模式，旨在揭示不同因果推理策略
+本脚本专注于全面评估CausalEngine的4种推理模式，旨在揭示不同因果推理策略
 在真实回归任务上的性能特点和适用场景。
 
 核心实验：全模式性能对比 (在25%标签噪声下)
 --------------------------------------------------
-- **目标**: 比较所有5种CausalEngine模式和传统方法的预测性能
+- **目标**: 比较所有4种CausalEngine模式和9种传统方法的预测性能
 - **设置**: 25%标签噪声，模拟真实世界数据质量挑战
 - **对比模型**: 
-  - 传统方法: sklearn MLPRegressor, PyTorch MLP
-  - CausalEngine: deterministic, exogenous, endogenous, standard, sampling
+  - 传统方法: sklearn MLP, PyTorch MLP, Huber MLP, Pinball MLP, Cauchy MLP, Random Forest, XGBoost, LightGBM, CatBoost
+  - CausalEngine: deterministic, exogenous, endogenous, standard
 - **分析重点**: 
   - 哪种因果推理模式表现最优？
   - 不同模式的性能特点和差异
@@ -75,35 +82,62 @@ class ComprehensiveTutorialConfig:
     VAL_SIZE = 0.2           # 验证集比例 (相对于训练集)
     RANDOM_STATE = 42        # 随机种子
     
-    # 🤖 CausalEngine参数 - 测试所有5种模式！
-    CAUSAL_MODES = ['deterministic', 'exogenous', 'endogenous', 'standard', 'sampling']
-    CAUSAL_HIDDEN_SIZES = (128, 64)              # CausalEngine隐藏层
-    CAUSAL_MAX_EPOCHS = 1000                     # 最大训练轮数
-    CAUSAL_LR = 0.01                             # CausalEngine学习率
-    CAUSAL_PATIENCE = 50                         # 早停patience
-    CAUSAL_TOL = 1e-4                            # 早停tolerance
+    # 🧠 统一神经网络配置 - 所有神经网络方法使用相同参数确保公平比较
+    # =========================================================================
+    # 🔧 在这里修改所有神经网络方法的共同参数！
+    NN_HIDDEN_SIZES = (128, 64, 32)                  # 神经网络隐藏层结构
+    NN_MAX_EPOCHS = 3000                         # 最大训练轮数
+    NN_LEARNING_RATE = 0.01                      # 学习率
+    NN_PATIENCE = 50                             # 早停patience
+    NN_TOLERANCE = 1e-4                          # 早停tolerance
+    # =========================================================================
+    
+    # 🤖 CausalEngine参数 - 测试4种有效模式（移除sampling）
+    CAUSAL_MODES = ['deterministic', 'exogenous', 'endogenous', 'standard']
+    CAUSAL_HIDDEN_SIZES = NN_HIDDEN_SIZES        # 使用统一神经网络配置
+    CAUSAL_MAX_EPOCHS = NN_MAX_EPOCHS            # 使用统一神经网络配置
+    CAUSAL_LR = NN_LEARNING_RATE                 # 使用统一神经网络配置
+    CAUSAL_PATIENCE = NN_PATIENCE                # 使用统一神经网络配置
+    CAUSAL_TOL = NN_TOLERANCE                    # 使用统一神经网络配置
     CAUSAL_GAMMA_INIT = 1.0                      # gamma初始化
     CAUSAL_B_NOISE_INIT = 1.0                    # b_noise初始化
     CAUSAL_B_NOISE_TRAINABLE = True              # b_noise是否可训练
     
-    # 🧠 传统方法参数
-    SKLEARN_HIDDEN_LAYERS = (128, 64)            # sklearn MLP隐藏层
-    SKLEARN_MAX_ITER = 1000                      # sklearn最大迭代数
-    SKLEARN_LR = 0.01                            # sklearn学习率
+    # 🧠 传统神经网络方法参数 - 使用统一配置
+    SKLEARN_HIDDEN_LAYERS = NN_HIDDEN_SIZES      # 使用统一神经网络配置
+    SKLEARN_MAX_ITER = NN_MAX_EPOCHS             # 使用统一神经网络配置
+    SKLEARN_LR = NN_LEARNING_RATE                # 使用统一神经网络配置
     
-    PYTORCH_EPOCHS = 3000                        # PyTorch训练轮数
-    PYTORCH_LR = 0.03                            # PyTorch学习率
-    PYTORCH_PATIENCE = 20                        # PyTorch早停patience
+    PYTORCH_EPOCHS = NN_MAX_EPOCHS               # 使用统一神经网络配置
+    PYTORCH_LR = NN_LEARNING_RATE                # 使用统一神经网络配置
+    PYTORCH_PATIENCE = NN_PATIENCE               # 使用统一神经网络配置
     
     # 📊 实验参数
-    ANOMALY_RATIO = 0.25                         # 标签异常比例 (25%噪声挑战)
+    ANOMALY_RATIO = 0.25                         # 标签异常比例 (核心实验默认值: 25%噪声挑战)
     SAVE_PLOTS = True                            # 是否保存图表
     VERBOSE = True                               # 是否显示详细输出
+    
+    # 🎯 基准方法配置 - 新增！支持更多传统方法对比
+    BASELINE_METHODS = [
+        'sklearn_mlp',      # sklearn神经网络  
+        'pytorch_mlp',      # PyTorch神经网络
+        'mlp_huber',        # Huber损失MLP（稳健回归）
+        'mlp_pinball_median', # Pinball损失MLP（中位数回归）
+        'mlp_cauchy',       # Cauchy损失MLP（稳健回归）
+        'random_forest',    # 随机森林
+        'xgboost',         # XGBoost
+        'lightgbm',        # LightGBM  
+        'catboost'         # CatBoost - 强力梯度提升
+    ]
+    
+    # 或者使用预定义组合：
+    # BASELINE_METHODS = 'group:comprehensive'  # 使用预定义的comprehensive组合
+    # BASELINE_METHODS = 'group:competitive'    # 使用预定义的competitive组合
     
     # 📈 可视化参数
     FIGURE_DPI = 300                             # 图表分辨率
     FIGURE_SIZE_ANALYSIS = (16, 12)              # 数据分析图表大小
-    FIGURE_SIZE_PERFORMANCE = (20, 14)           # 性能对比图表大小（更大以容纳7个方法）
+    FIGURE_SIZE_PERFORMANCE = (26, 16)           # 性能对比图表大小（更大以容纳13个方法）
     FIGURE_SIZE_MODES_COMPARISON = (18, 12)      # CausalEngine模式对比图表大小
     
     # 📁 输出目录参数
@@ -242,16 +276,24 @@ class ComprehensiveCausalModesTutorial:
             print(f"   - CausalEngine网络: {self.config.CAUSAL_HIDDEN_SIZES}")
             print(f"   - 最大训练轮数: {self.config.CAUSAL_MAX_EPOCHS}")
             print(f"   - 早停patience: {self.config.CAUSAL_PATIENCE}")
-            print(f"   - 总计对比方法: {len(self.config.CAUSAL_MODES) + 2} 种 (5种CausalEngine + 2种传统)")
+            baseline_count = len(self.config.BASELINE_METHODS)
+            total_methods = len(self.config.CAUSAL_MODES) + baseline_count
+            print(f"   - 基准方法: {self.config.BASELINE_METHODS}")
+            print(f"   - 总计对比方法: {total_methods} 种 ({len(self.config.CAUSAL_MODES)}种CausalEngine + {baseline_count}种传统)")
         
         # 使用基准测试模块
         benchmark = BaselineBenchmark()
+        
+        # 打印可用方法报告
+        if verbose:
+            benchmark.print_method_availability()
         
         # 运行基准测试
         self.results = benchmark.compare_models(
             X=self.X,
             y=self.y,
             task_type='regression',
+            baseline_methods=self.config.BASELINE_METHODS,  # 新增：使用配置的基准方法
             test_size=test_size,
             val_size=val_size,
             anomaly_ratio=anomaly_ratio,
@@ -296,21 +338,22 @@ class ComprehensiveCausalModesTutorial:
         for method, metrics in self.results.items():
             if method in self.config.CAUSAL_MODES:
                 causal_results[method] = metrics
-            elif method in ['sklearn', 'pytorch']:
+            else:
+                # 所有非CausalEngine的方法都算作传统方法
                 traditional_results[method] = metrics
         
         if verbose:
             print(f"🎯 CausalEngine模式性能对比 (共{len(causal_results)}种模式):")
             print("-" * 50)
             
-            # 按R²分数排序
-            causal_r2_scores = {mode: metrics['test']['R²'] for mode, metrics in causal_results.items()}
-            sorted_causal = sorted(causal_r2_scores.items(), key=lambda x: x[1], reverse=True)
+            # 按MdAE分数排序（越小越好）
+            causal_mdae_scores = {mode: metrics['test']['MdAE'] for mode, metrics in causal_results.items()}
+            sorted_causal = sorted(causal_mdae_scores.items(), key=lambda x: x[1])  # 升序排列
             
-            for i, (mode, r2) in enumerate(sorted_causal, 1):
+            for i, (mode, mdae) in enumerate(sorted_causal, 1):
                 mae = causal_results[mode]['test']['MAE']
-                rmse = causal_results[mode]['test']['RMSE']
-                print(f"   {i}. {mode:<12} - R²: {r2:.4f}, MAE: {mae:.3f}, RMSE: {rmse:.3f}")
+                r2 = causal_results[mode]['test']['R²']
+                print(f"   {i}. {mode:<12} - MdAE: {mdae:.3f}, MAE: {mae:.3f}, R²: {r2:.4f}")
             
             # 模式特点分析
             print(f"\n📊 模式特点分析:")
@@ -318,29 +361,29 @@ class ComprehensiveCausalModesTutorial:
             
             best_mode = sorted_causal[0][0]
             worst_mode = sorted_causal[-1][0]
-            performance_gap = sorted_causal[0][1] - sorted_causal[-1][1]
+            performance_gap = sorted_causal[-1][1] - sorted_causal[0][1]  # 最差 - 最好 (因为MdAE越小越好)
             
-            print(f"   🏆 最佳模式: {best_mode} (R² = {sorted_causal[0][1]:.4f})")
-            print(f"   📉 最弱模式: {worst_mode} (R² = {sorted_causal[-1][1]:.4f})")
-            print(f"   📏 性能差距: {performance_gap:.4f} ({performance_gap/sorted_causal[-1][1]*100:.1f}%)")
+            print(f"   🏆 最佳模式: {best_mode} (MdAE = {sorted_causal[0][1]:.3f})")
+            print(f"   📉 最弱模式: {worst_mode} (MdAE = {sorted_causal[-1][1]:.3f})")
+            print(f"   📏 性能差距: {performance_gap:.3f} ({performance_gap/sorted_causal[0][1]*100:.1f}%)")
             
-            # 与传统方法比较
+            # 与传统方法比较（基于MdAE）
             if traditional_results:
                 print(f"\n🆚 CausalEngine vs 传统方法:")
                 print("-" * 40)
                 
-                traditional_r2_scores = {method: metrics['test']['R²'] for method, metrics in traditional_results.items()}
-                best_traditional = max(traditional_r2_scores.keys(), key=lambda x: traditional_r2_scores[x])
-                best_traditional_r2 = traditional_r2_scores[best_traditional]
+                traditional_mdae_scores = {method: metrics['test']['MdAE'] for method, metrics in traditional_results.items()}
+                best_traditional = min(traditional_mdae_scores.keys(), key=lambda x: traditional_mdae_scores[x])  # 最小MdAE最好
+                best_traditional_mdae = traditional_mdae_scores[best_traditional]
                 
-                print(f"   最佳传统方法: {best_traditional} (R² = {best_traditional_r2:.4f})")
-                print(f"   最佳CausalEngine: {best_mode} (R² = {sorted_causal[0][1]:.4f})")
+                print(f"   最佳传统方法: {best_traditional} (MdAE = {best_traditional_mdae:.3f})")
+                print(f"   最佳CausalEngine: {best_mode} (MdAE = {sorted_causal[0][1]:.3f})")
                 
-                improvement = (sorted_causal[0][1] - best_traditional_r2) / abs(best_traditional_r2) * 100
+                improvement = (best_traditional_mdae - sorted_causal[0][1]) / best_traditional_mdae * 100  # 正值表示CausalEngine更好
                 print(f"   性能提升: {improvement:+.2f}%")
                 
                 # 统计有多少CausalEngine模式优于最佳传统方法
-                better_modes = sum(1 for _, r2 in sorted_causal if r2 > best_traditional_r2)
+                better_modes = sum(1 for _, mdae in sorted_causal if mdae < best_traditional_mdae)
                 print(f"   优于传统方法的CausalEngine模式: {better_modes}/{len(sorted_causal)}")
         
         return causal_results, traditional_results
@@ -357,21 +400,18 @@ class ComprehensiveCausalModesTutorial:
         print("\n📊 创建全面性能可视化图表")
         print("-" * 40)
         
-        # 准备数据 - 按照逻辑顺序排列：传统方法 + CausalEngine模式
-        methods_order = ['sklearn', 'pytorch'] + self.config.CAUSAL_MODES
-        methods = [m for m in methods_order if m in self.results]
+        # 准备数据 - 分类排列：传统方法 + CausalEngine模式
+        traditional_methods = [m for m in self.results.keys() if m not in self.config.CAUSAL_MODES]
+        causal_methods = [m for m in self.config.CAUSAL_MODES if m in self.results]
+        methods = traditional_methods + causal_methods
         
         # 为不同类型的方法设置颜色
         colors = []
         for method in methods:
-            if method == 'sklearn':
-                colors.append('#1f77b4')  # 蓝色
-            elif method == 'pytorch':
-                colors.append('#ff7f0e')  # 橙色
-            elif method in self.config.CAUSAL_MODES:
-                colors.append('#2ca02c')  # 绿色系
+            if method in self.config.CAUSAL_MODES:
+                colors.append('#2ca02c')  # 绿色系 - CausalEngine
             else:
-                colors.append('#d62728')  # 红色
+                colors.append('#1f77b4')  # 蓝色系 - 传统方法
         
         metrics = ['MAE', 'MdAE', 'RMSE', 'R²']
         
@@ -388,18 +428,27 @@ class ComprehensiveCausalModesTutorial:
             axes[i].set_title(f'{metric} (Test Set)', fontweight='bold')
             axes[i].set_ylabel(metric)
             
-            # 设置X轴标签
+            # 设置X轴标签 - 智能处理各种方法名
             method_labels = []
             for method in methods:
-                if method == 'sklearn':
+                if method in self.config.CAUSAL_MODES:
+                    method_labels.append(f'CausalEngine\n({method})')
+                elif 'sklearn' in method.lower() or method == 'sklearn':
                     method_labels.append('sklearn\nMLP')
-                elif method == 'pytorch':
+                elif 'pytorch' in method.lower() or method == 'pytorch':
                     method_labels.append('PyTorch\nMLP')
                 else:
-                    method_labels.append(f'CausalEngine\n({method})')
+                    # 其他传统方法，简化显示名称
+                    display_name = method.replace('_', ' ').title()
+                    if len(display_name) > 12:
+                        # 长名称分行显示
+                        words = display_name.split()
+                        if len(words) > 1:
+                            display_name = f"{words[0]}\n{' '.join(words[1:])}"
+                    method_labels.append(display_name)
             
             axes[i].set_xticks(range(len(methods)))
-            axes[i].set_xticklabels(method_labels, rotation=45, ha='right')
+            axes[i].set_xticklabels(method_labels, rotation=45, ha='right', fontsize=8)
             
             # 添加数值标签
             for bar, value in zip(bars, values):
@@ -467,27 +516,27 @@ class ComprehensiveCausalModesTutorial:
         ax1.legend()
         ax1.grid(True, alpha=0.3)
         
-        # 右图：R²性能排名
-        r2_scores = [(method, self.results[method]['test']['R²']) for method in causal_methods]
-        r2_scores.sort(key=lambda x: x[1], reverse=True)
+        # 右图：MdAE性能排名（越小越好）
+        mdae_scores = [(method, self.results[method]['test']['MdAE']) for method in causal_methods]
+        mdae_scores.sort(key=lambda x: x[1])  # 按升序排列，因为MdAE越小越好
         
-        methods_sorted = [item[0] for item in r2_scores]
-        r2_values = [item[1] for item in r2_scores]
+        methods_sorted = [item[0] for item in mdae_scores]
+        mdae_values = [item[1] for item in mdae_scores]
         
-        bars = ax2.bar(range(len(methods_sorted)), r2_values, color=colors[:len(methods_sorted)], alpha=0.8)
+        bars = ax2.bar(range(len(methods_sorted)), mdae_values, color=colors[:len(methods_sorted)], alpha=0.8)
         ax2.set_xlabel('CausalEngine Modes')
-        ax2.set_ylabel('R² Score')
-        ax2.set_title('CausalEngine Modes R² Performance Ranking')
+        ax2.set_ylabel('MdAE (Median Absolute Error)')
+        ax2.set_title('CausalEngine Modes MdAE Performance Ranking')
         ax2.set_xticks(range(len(methods_sorted)))
         ax2.set_xticklabels(methods_sorted, rotation=45)
         
         # 添加数值标签
-        for bar, value in zip(bars, r2_values):
+        for bar, value in zip(bars, mdae_values):
             height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                    f'{value:.4f}', ha='center', va='bottom', fontweight='bold')
+            ax2.text(bar.get_x() + bar.get_width()/2., height + height*0.02,
+                    f'{value:.3f}', ha='center', va='bottom', fontweight='bold')
         
-        # 高亮最佳模式
+        # 高亮最佳模式（MdAE最小的）
         bars[0].set_color('gold')
         bars[0].set_edgecolor('red')
         bars[0].set_linewidth(3)
@@ -522,62 +571,63 @@ class ComprehensiveCausalModesTutorial:
         print(f"   - 数据集大小: {self.X.shape[0]:,} 样本 × {self.X.shape[1]} 特征")
         print(f"   - 异常标签比例: {self.config.ANOMALY_RATIO:.1%}")
         
-        # 性能排名
-        print(f"\n🏆 总体性能排名 (按R²分数):")
+        # 性能排名（按MdAE分数，越小越好）
+        print(f"\n🏆 总体性能排名 (按MdAE分数):")
         print("-" * 50)
         
-        all_r2_scores = [(method, metrics['test']['R²']) for method, metrics in self.results.items()]
-        all_r2_scores.sort(key=lambda x: x[1], reverse=True)
+        all_mdae_scores = [(method, metrics['test']['MdAE']) for method, metrics in self.results.items()]
+        all_mdae_scores.sort(key=lambda x: x[1])  # 升序排列，MdAE越小越好
         
-        for i, (method, r2) in enumerate(all_r2_scores, 1):
+        for i, (method, mdae) in enumerate(all_mdae_scores, 1):
             method_type = "CausalEngine" if method in self.config.CAUSAL_MODES else "Traditional"
-            print(f"   {i:2d}. {method:<15} ({method_type:<12}) - R²: {r2:.4f}")
+            r2 = self.results[method]['test']['R²']
+            print(f"   {i:2d}. {method:<15} ({method_type:<12}) - MdAE: {mdae:.3f}, R²: {r2:.4f}")
         
-        # CausalEngine优势分析
+        # CausalEngine优势分析（基于MdAE）
         print(f"\n🎯 CausalEngine模式分析:")
         print("-" * 40)
         
-        causal_results = [(method, metrics['test']['R²']) for method, metrics in self.results.items() 
+        causal_results = [(method, metrics['test']['MdAE']) for method, metrics in self.results.items() 
                          if method in self.config.CAUSAL_MODES]
-        traditional_results = [(method, metrics['test']['R²']) for method, metrics in self.results.items() 
+        traditional_results = [(method, metrics['test']['MdAE']) for method, metrics in self.results.items() 
                               if method in ['sklearn', 'pytorch']]
         
         if causal_results and traditional_results:
-            best_causal = max(causal_results, key=lambda x: x[1])
-            best_traditional = max(traditional_results, key=lambda x: x[1])
+            best_causal = min(causal_results, key=lambda x: x[1])  # 最小MdAE最好
+            best_traditional = min(traditional_results, key=lambda x: x[1])  # 最小MdAE最好
             
-            print(f"   最佳CausalEngine模式: {best_causal[0]} (R² = {best_causal[1]:.4f})")
-            print(f"   最佳传统方法: {best_traditional[0]} (R² = {best_traditional[1]:.4f})")
+            print(f"   最佳CausalEngine模式: {best_causal[0]} (MdAE = {best_causal[1]:.3f})")
+            print(f"   最佳传统方法: {best_traditional[0]} (MdAE = {best_traditional[1]:.3f})")
             
-            improvement = (best_causal[1] - best_traditional[1]) / abs(best_traditional[1]) * 100
+            improvement = (best_traditional[1] - best_causal[1]) / best_traditional[1] * 100  # 正值表示CausalEngine更好
             print(f"   性能提升: {improvement:+.2f}%")
             
             # 统计优于传统方法的CausalEngine模式数量
-            better_causal_count = sum(1 for _, r2 in causal_results if r2 > best_traditional[1])
+            better_causal_count = sum(1 for _, mdae in causal_results if mdae < best_traditional[1])
             print(f"   优于最佳传统方法的CausalEngine模式: {better_causal_count}/{len(causal_results)}")
         
-        # 关键发现
+        # 关键发现（基于MdAE）
         print(f"\n💡 关键发现:")
         print("-" * 20)
         
-        if len(all_r2_scores) > 0:
-            top_method = all_r2_scores[0]
+        if len(all_mdae_scores) > 0:
+            top_method = all_mdae_scores[0]  # MdAE最小的方法最好
             if top_method[0] in self.config.CAUSAL_MODES:
-                print(f"   ✅ CausalEngine模式 '{top_method[0]}' 取得最佳性能")
-                print(f"   ✅ 因果推理相对传统方法显示出明显优势")
+                print(f"   ✅ CausalEngine模式 '{top_method[0]}' 在MdAE指标上取得最佳性能")
+                print(f"   ✅ 因果推理在稳健性方面显示出明显优势")
             else:
-                print(f"   ⚠️ 传统方法 '{top_method[0]}' 在此数据集上表现最优")
+                print(f"   ⚠️ 传统方法 '{top_method[0]}' 在MdAE指标上表现最优")
                 print(f"   ⚠️ 建议进一步调优CausalEngine参数")
             
-            # 检查CausalEngine模式间的差异
+            # 检查CausalEngine模式间的差异（基于MdAE）
             if len(causal_results) > 1:
-                causal_r2_values = [r2 for _, r2 in causal_results]
-                causal_std = np.std(causal_r2_values)
-                print(f"   📊 CausalEngine模式间性能标准差: {causal_std:.4f}")
-                if causal_std < 0.01:
-                    print(f"   📈 不同CausalEngine模式性能较为接近")
+                causal_mdae_values = [mdae for _, mdae in causal_results]
+                causal_std = np.std(causal_mdae_values)
+                print(f"   📊 CausalEngine模式间MdAE标准差: {causal_std:.4f}")
+                if causal_std < 0.02:
+                    print(f"   📈 不同CausalEngine模式MdAE性能较为接近")
                 else:
-                    print(f"   📈 不同CausalEngine模式存在显著性能差异")
+                    print(f"   📈 不同CausalEngine模式MdAE存在显著性能差异")
 
 
 def main():
@@ -627,7 +677,8 @@ def main():
     print("📋 实验总结:")
     print(f"   - 使用了真实世界的加州房价数据集 ({tutorial.X.shape[0]:,} 样本)")
     print(f"   - 测试了所有 {len(config.CAUSAL_MODES)} 种CausalEngine推理模式")
-    print(f"   - 与 2 种传统方法进行了全面对比")
+    print(f"   - 与 {len(config.BASELINE_METHODS)} 种传统方法进行了全面对比")
+    print(f"   - 基准方法包括: {', '.join(config.BASELINE_METHODS[:3])}等")
     print(f"   - 在 {config.ANOMALY_RATIO:.0%} 标签噪声环境下验证了鲁棒性")
     print("   - 提供了详细的模式特点分析和可视化")
     
