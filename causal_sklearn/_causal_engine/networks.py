@@ -254,6 +254,7 @@ class ActionNetwork(nn.Module):
             # 生成标准柯西噪声：ε ~ Cauchy(0, 1)
             uniform = torch.rand_like(mu_U)
             epsilon = torch.tan(torch.pi * (uniform - 0.5))  # ε ~ Cauchy(0, 1)
+            # TODO: epsilon 的似然应该需要用于计算损失， 我们需要加权的损失
             
             mu_U_final = mu_U + self.b_noise.unsqueeze(0) * epsilon
             gamma_U_final = gamma_U
