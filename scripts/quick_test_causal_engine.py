@@ -475,7 +475,7 @@ class QuickTester:
                            # 数据设置  
                            n_samples=3000, n_features=15, n_classes=3, n_informative=None,
                            class_sep=0.3, random_state=42,
-                           label_noise_ratio=0.25, label_noise_type='flip',
+                           label_noise_ratio=0.3, label_noise_type='flip',
                            
                            # 网络结构
                            hidden_layer_sizes=(128, 64), causal_size=None,

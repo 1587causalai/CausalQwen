@@ -89,7 +89,7 @@ class TutorialConfig:
     CAUSAL_B_NOISE_TRAINABLE = True              # b_noise是否可训练
     
     # 🧠 传统方法参数
-    SKLEARN_HIDDEN_LAYERS = (128, 64)            # sklearn MLP隐藏层
+    SKLEARN_HIDDEN_LAYERS = (128, 64, 32)            # sklearn MLP隐藏层
     SKLEARN_MAX_ITER = 1000                      # sklearn最大迭代数
     SKLEARN_LR = 0.01                            # sklearn学习率
     
@@ -103,8 +103,8 @@ class TutorialConfig:
     VERBOSE = True                               # 是否显示详细输出
     
     # 🛡️ 鲁棒性测试参数 - 设计为验证"CausalEngine鲁棒性优势"的假设
-    ROBUSTNESS_ANOMALY_RATIOS = [0.0, 0.1, 0.2, 0.3]  # 4个关键噪声水平就足够
-    RUN_ROBUSTNESS_TEST = False                   # 是否运行鲁棒性测试
+    ROBUSTNESS_ANOMALY_RATIOS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]  # 5个关键噪声水平就足够
+    RUN_ROBUSTNESS_TEST = True                   # 是否运行鲁棒性测试
     
     # 📈 可视化参数
     FIGURE_DPI = 300                             # 图表分辨率
