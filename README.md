@@ -69,40 +69,7 @@ python examples/real_world_regression_tutorial.py
 - 📈 4个核心指标的完整对比（MAE、MdAE、RMSE、R²）
 - 🛡️ 鲁棒性测试验证算法在噪声环境中的优势
 
-## Installation
-
-```bash
-pip install causal-sklearn
-```
-
-For development installation:
-
-```bash
-git clone https://github.com/yourusername/causal-sklearn.git
-cd causal-sklearn
-pip install -e ".[dev]"
-```
-
-## Models
-
-### MLPCausalRegressor
-
-A causal neural network regressor that understands causal relationships in regression tasks.
-
-**Key Parameters:**
-- `mode`: Prediction mode ('deterministic', 'standard', 'sampling')
-- `hidden_layer_sizes`: Architecture of hidden layers
-- `gamma_init`: Initial scale for AbductionNetwork
-- `b_noise_init`: Initial noise level for ActionNetwork
-
-### MLPCausalClassifier
-
-A causal neural network classifier for classification tasks.
-
-**Key Parameters:**
-- `mode`: Prediction mode ('deterministic', 'standard', 'sampling')
-- `hidden_layer_sizes`: Architecture of hidden layers
-- `ovr_threshold_init`: Initial threshold for One-vs-Rest classification
+#
 
 ## 🔬 基准测试与性能验证
 
@@ -127,6 +94,9 @@ results = benchmark.compare_models(
     causal_modes=['deterministic', 'standard'],
     verbose=True
 )
+
+# 快速测试版本 (使用较小数据集)
+# results = benchmark.compare_models(X=X[:1000], y=y[:1000], ...)
 
 # 打印详细结果
 benchmark.print_results(results, 'regression')

@@ -113,7 +113,7 @@ class TutorialConfig:
     FIGURE_SIZE_ROBUSTNESS = (16, 12)            # 鲁棒性测试图表大小 (4个子图)
     
     # 📁 输出目录参数
-    OUTPUT_DIR = "results"                       # 输出目录名称
+    OUTPUT_DIR = "results/california_housing_regression"                       # 输出目录名称
 
 
 class CaliforniaHousingTutorial:
