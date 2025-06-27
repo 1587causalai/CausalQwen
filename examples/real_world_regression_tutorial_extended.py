@@ -83,7 +83,7 @@ class TutorialConfig:
     # 🧠 统一神经网络配置 - 所有神经网络方法使用相同参数确保公平比较
     # =========================================================================
     # 🔧 在这里修改所有神经网络方法的共同参数！
-    NN_HIDDEN_SIZES = (128, 64, 64)                 # 神经网络隐藏层结构
+    NN_HIDDEN_SIZES = (128, 64)                 # 神经网络隐藏层结构
     NN_MAX_EPOCHS = 3000                            # 最大训练轮数
     NN_LEARNING_RATE = 0.01                         # 学习率
     NN_PATIENCE = 50                                # 早停patience
@@ -98,7 +98,7 @@ class TutorialConfig:
     CAUSAL_PATIENCE = NN_PATIENCE                   # 使用统一神经网络配置
     CAUSAL_TOL = NN_TOLERANCE                       # 使用统一神经网络配置
     CAUSAL_GAMMA_INIT = 1.0                         # gamma初始化
-    CAUSAL_B_NOISE_INIT = 0.1                       # b_noise初始化
+    CAUSAL_B_NOISE_INIT = 0.3                       # b_noise初始化
     CAUSAL_B_NOISE_TRAINABLE = True                 # b_noise是否可训练
     
     # 🧠 传统神经网络方法参数 - 使用统一配置
@@ -127,7 +127,7 @@ class TutorialConfig:
     VERBOSE = True                                  # 是否显示详细输出
     
     # 🛡️ 鲁棒性测试参数 - 验证"CausalEngine鲁棒性优势"的假设
-    ROBUSTNESS_ANOMALY_RATIOS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]  # 6个关键噪声水平
+    ROBUSTNESS_ANOMALY_RATIOS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]  # 噪声水平
     RUN_ROBUSTNESS_TEST = True                      # 是否运行鲁棒性测试
     
     # 📈 可视化参数
