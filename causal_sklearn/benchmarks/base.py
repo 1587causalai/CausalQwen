@@ -19,6 +19,7 @@ import warnings
 
 from .._causal_engine import create_causal_regressor, create_causal_classifier
 from .methods import BaselineMethodFactory, MethodDependencyChecker, filter_available_methods
+from ..utils import add_label_anomalies
 from .method_configs import (
     get_method_config, get_method_group, get_task_recommendations, 
     validate_methods, expand_method_groups, list_available_methods
@@ -64,47 +65,6 @@ class BaselineBenchmark:
         self.method_factory = BaselineMethodFactory()
         self.dependency_checker = MethodDependencyChecker()
     
-    def add_label_anomalies(self, y, anomaly_ratio=0.1, anomaly_type='regression'):
-        """
-        给标签添加异常 - 用于测试模型的鲁棒性
-        
-        Args:
-            y: 原始标签
-            anomaly_ratio: 异常比例 (0.0-1.0)
-            anomaly_type: 'regression'(回归异常) 或 'classification'(分类翻转)
-        """
-        y_noisy = y.copy()
-        n_anomalies = int(len(y) * anomaly_ratio)
-        
-        if n_anomalies == 0:
-            return y_noisy
-            
-        anomaly_indices = np.random.choice(len(y), n_anomalies, replace=False)
-        
-        if anomaly_type == 'regression':
-            # 回归异常：简单而强烈的异常
-            y_std = np.std(y)
-            
-            for idx in anomaly_indices:
-                # 随机选择异常类型
-                if np.random.random() < 0.5:
-                    # 策略1: 3倍标准差偏移
-                    sign = np.random.choice([-1, 1])
-                    y_noisy[idx] = y[idx] + sign * 3.0 * y_std
-                else:
-                    # 策略2: 10倍缩放
-                    scale_factor = np.random.choice([0.1, 10.0])  # 极端缩放
-                    y_noisy[idx] = y[idx] * scale_factor
-                
-        elif anomaly_type == 'classification':
-            # 分类异常：标签翻转
-            unique_labels = np.unique(y)
-            for idx in anomaly_indices:
-                other_labels = unique_labels[unique_labels != y[idx]]
-                if len(other_labels) > 0:
-                    y_noisy[idx] = np.random.choice(other_labels)
-        
-        return y_noisy
     
     def train_pytorch_model(self, model, X_train, y_train, X_val=None, y_val=None, 
                           epochs=1000, lr=0.001, task='regression', patience=50, tol=1e-4):
@@ -328,9 +288,26 @@ class BaselineBenchmark:
 
         # 4. 在标准化的训练和验证标签上添加异常（如果需要）
         if anomaly_ratio > 0:
-            # 注意：对已经标准化的y_train_scaled和y_val_scaled添加噪声
-            y_train_scaled = self.add_label_anomalies(y_train_scaled, anomaly_ratio, task_type)
-            y_val_scaled = self.add_label_anomalies(y_val_scaled, anomaly_ratio, task_type)
+            if verbose:
+                print(f"🔥 为训练集和验证集添加 {anomaly_ratio:.1%} 的标签异常...")
+            
+            regression_anomaly_strategy = kwargs.get('regression_anomaly_strategy', 'shuffle')
+            classification_anomaly_strategy = kwargs.get('classification_anomaly_strategy', 'flip')
+            
+            y_train_scaled = add_label_anomalies(
+                y_train_scaled, 
+                anomaly_ratio, 
+                task_type,
+                regression_anomaly_strategy=regression_anomaly_strategy,
+                classification_anomaly_strategy=classification_anomaly_strategy
+            )
+            y_val_scaled = add_label_anomalies(
+                y_val_scaled, 
+                anomaly_ratio, 
+                task_type,
+                regression_anomaly_strategy=regression_anomaly_strategy,
+                classification_anomaly_strategy=classification_anomaly_strategy
+            )
         
         results = {}
         

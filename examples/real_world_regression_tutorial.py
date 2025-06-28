@@ -77,25 +77,35 @@ class TutorialConfig:
     VAL_SIZE = 0.2           # 验证集比例 (相对于训练集)
     RANDOM_STATE = 42        # 随机种子
     
-    # 🤖 CausalEngine参数
+    # 🧠 统一神经网络配置 - 所有神经网络方法使用相同参数确保公平比较
+    # =========================================================================
+    # 🔧 在这里修改所有神经网络方法的共同参数！
+    NN_HIDDEN_SIZES = (128, 64, 32)                 # 神经网络隐藏层结构
+    NN_MAX_EPOCHS = 1000                            # 最大训练轮数
+    NN_LEARNING_RATE = 0.01                         # 学习率
+    NN_PATIENCE = 50                                # 早停patience
+    NN_TOLERANCE = 1e-4                             # 早停tolerance
+    # =========================================================================
+    
+    # 🤖 CausalEngine参数 - 使用统一神经网络配置
     CAUSAL_MODES = ['deterministic', 'standard']  # 可选: ['deterministic', 'exogenous', 'endogenous', 'standard', 'sampling']
-    CAUSAL_HIDDEN_SIZES = (128, 64)              # CausalEngine隐藏层
-    CAUSAL_MAX_EPOCHS = 1000                     # 最大训练轮数
-    CAUSAL_LR = 0.01                             # CausalEngine学习率
-    CAUSAL_PATIENCE = 50                         # 早停patience
-    CAUSAL_TOL = 1e-4                            # 早停tolerance
+    CAUSAL_HIDDEN_SIZES = NN_HIDDEN_SIZES          # 使用统一神经网络配置
+    CAUSAL_MAX_EPOCHS = NN_MAX_EPOCHS              # 使用统一神经网络配置
+    CAUSAL_LR = NN_LEARNING_RATE                   # 使用统一神经网络配置
+    CAUSAL_PATIENCE = NN_PATIENCE                  # 使用统一神经网络配置
+    CAUSAL_TOL = NN_TOLERANCE                      # 使用统一神经网络配置
     CAUSAL_GAMMA_INIT = 1.0                      # gamma初始化
     CAUSAL_B_NOISE_INIT = 1.0                    # b_noise初始化
     CAUSAL_B_NOISE_TRAINABLE = True              # b_noise是否可训练
     
-    # 🧠 传统方法参数
-    SKLEARN_HIDDEN_LAYERS = (128, 64, 32)            # sklearn MLP隐藏层
-    SKLEARN_MAX_ITER = 1000                      # sklearn最大迭代数
-    SKLEARN_LR = 0.01                            # sklearn学习率
+    # 🧠 传统方法参数 - 使用统一配置
+    SKLEARN_HIDDEN_LAYERS = NN_HIDDEN_SIZES         # 使用统一神经网络配置
+    SKLEARN_MAX_ITER = NN_MAX_EPOCHS                # 使用统一神经网络配置
+    SKLEARN_LR = NN_LEARNING_RATE                   # 使用统一神经网络配置
     
-    PYTORCH_EPOCHS = 3000                        # PyTorch训练轮数
-    PYTORCH_LR = 0.03                            # PyTorch学习率
-    PYTORCH_PATIENCE = 20                        # PyTorch早停patience
+    PYTORCH_EPOCHS = NN_MAX_EPOCHS                  # 使用统一神经网络配置
+    PYTORCH_LR = NN_LEARNING_RATE                   # 使用统一神经网络配置
+    PYTORCH_PATIENCE = NN_PATIENCE                  # 使用统一神经网络配置
     
     # 📊 实验参数
     ANOMALY_RATIO = 0.25                         # 标签异常比例 (核心实验默认值: 25%噪声挑战)

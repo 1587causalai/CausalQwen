@@ -24,6 +24,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 导入我们的CausalEngine实现
 from causal_sklearn._causal_engine import create_causal_regressor, create_causal_classifier
+from causal_sklearn.utils import add_label_anomalies
 
 warnings.filterwarnings('ignore')
 
@@ -40,47 +41,6 @@ class QuickTester:
     def __init__(self):
         self.results = {}
     
-    def add_label_anomalies(self, y, anomaly_ratio=0.1, anomaly_type='regression'):
-        """
-        给标签添加异常 - 更实用的异常模拟
-        
-        Args:
-            y: 原始标签
-            anomaly_ratio: 异常比例 (0.0-1.0)
-            anomaly_type: 'regression'(回归异常) 或 'classification'(分类翻转)
-        """
-        y_noisy = y.copy()
-        n_anomalies = int(len(y) * anomaly_ratio)
-        
-        if n_anomalies == 0:
-            return y_noisy
-            
-        anomaly_indices = np.random.choice(len(y), n_anomalies, replace=False)
-        
-        if anomaly_type == 'regression':
-            # 回归异常：简单而强烈的异常
-            y_std = np.std(y)
-            
-            for idx in anomaly_indices:
-                # 随机选择异常类型
-                if np.random.random() < 0.5:
-                    # 策略1: 3倍标准差偏移
-                    sign = np.random.choice([-1, 1])
-                    y_noisy[idx] = y[idx] + sign * 3.0 * y_std
-                else:
-                    # 策略2: 10倍缩放
-                    scale_factor = np.random.choice([0.1, 10.0])  # 极端缩放
-                    y_noisy[idx] = y[idx] * scale_factor
-                
-        elif anomaly_type == 'classification':
-            # 分类异常：标签翻转
-            unique_labels = np.unique(y)
-            for idx in anomaly_indices:
-                other_labels = unique_labels[unique_labels != y[idx]]
-                if len(other_labels) > 0:
-                    y_noisy[idx] = np.random.choice(other_labels)
-        
-        return y_noisy
     
     def create_pytorch_model(self, input_size, output_size, hidden_sizes):
         """创建PyTorch基线模型"""
@@ -312,7 +272,7 @@ class QuickTester:
         
         # 只对训练数据添加标签异常（保持test set干净用于真实评估）
         if anomaly_ratio > 0:
-            y_train = self.add_label_anomalies(y_train, anomaly_ratio, 'regression')
+            y_train = add_label_anomalies(y_train, anomaly_ratio, 'regression')
         
         # 分割训练数据为训练集和验证集（验证集也有异常）
         X_train, X_val, y_train, y_val = train_test_split(
@@ -524,7 +484,7 @@ class QuickTester:
         
         # 只对训练数据添加标签异常（保持test set干净用于真实评估）
         if label_noise_ratio > 0:
-            y_train = self.add_label_anomalies(y_train, label_noise_ratio, label_noise_type)
+            y_train = add_label_anomalies(y_train, label_noise_ratio, 'classification', classification_anomaly_strategy='shuffle')
         
         # 分割训练数据为训练集和验证集（验证集也有噪声）
         X_train, X_val, y_train, y_val = train_test_split(
