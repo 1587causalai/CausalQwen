@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from typing import Optional
+import inspect
 
 from ._causal_engine import create_causal_regressor
 
@@ -94,7 +95,8 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         n_iter_no_change=10,
         tol=1e-4,
         random_state=None,
-        verbose=False
+        verbose=False,
+        alpha=0.0
     ):
         self.repre_size = repre_size
         self.causal_size = causal_size
@@ -112,6 +114,7 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         self.tol = tol
         self.random_state = random_state
         self.verbose = verbose
+        self.alpha = alpha
         
         # Will be set during fit
         self.engine_ = None
@@ -182,7 +185,8 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
             abduction_hidden_layers=self.abduction_hidden_layers,
             gamma_init=self.gamma_init,
             b_noise_init=self.b_noise_init,
-            b_noise_trainable=self.b_noise_trainable
+            b_noise_trainable=self.b_noise_trainable,
+            alpha=self.alpha
         )
         
         # Setup optimizer

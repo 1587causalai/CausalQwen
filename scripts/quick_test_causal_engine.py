@@ -58,6 +58,7 @@ REGRESSION_CONFIG = {
     'gamma_init': 1.0,
     'b_noise_init': 1.0,
     'b_noise_trainable': True,
+    'alpha': 0.0, # L2正则化系数, Optim 中的 weight_decay
     
     # 训练参数
     'max_iter': 3000,
@@ -94,6 +95,7 @@ CLASSIFICATION_CONFIG = {
     'b_noise_init': 1.0,
     'b_noise_trainable': True,
     'ovr_threshold': 0.0,
+    'alpha': 0.0001,
     
     # 训练参数
     'max_iter': 3000,
@@ -224,10 +226,10 @@ def train_sklearn_regressor(data, config):
         learning_rate_init=config['learning_rate'],
         early_stopping=True,
         validation_fraction=config['validation_fraction'],
-        n_iter_no_change=50,
-        tol=1e-4,
+        n_iter_no_change=config['patience'],
+        tol=config['tol'],
         random_state=config['random_state'],
-        alpha=0.0001
+        alpha=config['alpha']
     )
     
     model.fit(data['scaled']['X_train'], data['scaled']['y_train'])
@@ -277,7 +279,7 @@ def train_pytorch_regressor(data, config):
             tol=config['tol'],
             random_state=config['random_state'],
             verbose=config['verbose'],
-            alpha=0.0001
+            alpha=config['alpha']
         ))
     ])
     
@@ -306,7 +308,7 @@ def train_pytorch_classifier(data, config):
             tol=config['tol'],
             random_state=config['random_state'],
             verbose=config['verbose'],
-            alpha=0.0001
+            alpha=config['alpha']
         ))
     ])
     
@@ -341,7 +343,8 @@ def train_causal_regressor(data, config, mode='standard'):
             n_iter_no_change=config['patience'],
             tol=config['tol'],
             random_state=config['random_state'],
-            verbose=config['verbose']
+            verbose=config['verbose'],
+            alpha=config['alpha']
         ))
     ])
     
@@ -377,7 +380,8 @@ def train_causal_classifier(data, config, mode='standard'):
             n_iter_no_change=config['patience'],
             tol=config['tol'],
             random_state=config['random_state'],
-            verbose=config['verbose']
+            verbose=config['verbose'],
+            alpha=config['alpha']
         ))
     ])
     

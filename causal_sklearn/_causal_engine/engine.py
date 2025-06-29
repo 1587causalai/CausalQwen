@@ -12,6 +12,7 @@ CausalEngine Core Implementation for sklearn-compatible ML tasks
 
 import torch
 import torch.nn as nn
+import torch.optim as optim
 from typing import Tuple, Optional
 
 from .networks import Perception, Abduction, Action
@@ -46,6 +47,7 @@ class CausalEngine(nn.Module):
         b_noise_trainable: 外生噪声是否可训练
         ovr_threshold: 分类任务的OvR阈值
         learnable_threshold: 是否可学习阈值
+        alpha: 正则化参数
     """
     
     def __init__(
@@ -63,7 +65,8 @@ class CausalEngine(nn.Module):
         b_noise_init: float = 0.1,
         b_noise_trainable: bool = True,
         ovr_threshold: float = 0.0,
-        learnable_threshold: bool = False
+        learnable_threshold: bool = False,
+        alpha: float = 0.0
     ):
         super().__init__()
         
@@ -115,6 +118,9 @@ class CausalEngine(nn.Module):
             ovr_threshold=ovr_threshold,
             learnable_threshold=learnable_threshold
         )
+        
+        # Optimizer
+        self.optimizer = optim.Adam(self.parameters(), lr=0.001, weight_decay=alpha)
     
     def _get_decision_scores(
         self, 

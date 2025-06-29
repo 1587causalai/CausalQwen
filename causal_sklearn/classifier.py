@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from typing import Optional
+import inspect
 
 from ._causal_engine import create_causal_classifier
 
@@ -96,7 +97,8 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
         n_iter_no_change=10,
         tol=1e-4,
         random_state=None,
-        verbose=False
+        verbose=False,
+        alpha=0.0
     ):
         self.repre_size = repre_size
         self.causal_size = causal_size
@@ -115,6 +117,7 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
         self.tol = tol
         self.random_state = random_state
         self.verbose = verbose
+        self.alpha = alpha
         
         # Will be set during fit
         self.engine_ = None
@@ -190,11 +193,12 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
             gamma_init=self.gamma_init,
             b_noise_init=self.b_noise_init,
             b_noise_trainable=self.b_noise_trainable,
-            ovr_threshold=self.ovr_threshold
+            ovr_threshold=self.ovr_threshold,
+            alpha=self.alpha
         )
         
         # Setup optimizer
-        optimizer = optim.Adam(self.engine_.parameters(), lr=self.learning_rate)
+        optimizer = optim.Adam(self.engine_.parameters(), lr=self.learning_rate, weight_decay=self.alpha)
         
         # Training loop
         best_val_loss = float('inf')
