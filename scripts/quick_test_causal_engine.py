@@ -12,7 +12,6 @@ import torch.optim as optim
 from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, median_absolute_error
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.model_selection import train_test_split
 from sklearn.datasets import make_regression, make_classification
 from sklearn.preprocessing import StandardScaler
 import os
@@ -24,7 +23,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 导入我们的CausalEngine实现
 from causal_sklearn._causal_engine import create_causal_regressor, create_causal_classifier
-from causal_sklearn.utils import add_label_anomalies
+from causal_sklearn.regressor import MLPCausalRegressor
+from causal_sklearn.utils import causal_split
 
 warnings.filterwarnings('ignore')
 
@@ -143,8 +143,8 @@ class QuickTester:
             model = create_causal_regressor(
                 input_size=input_size,
                 output_size=output_size,
-                hidden_size=hidden_sizes[0],
-                hidden_layers=hidden_sizes[1:],
+                causal_size=hidden_sizes[0],
+                abd_hidden_layers=hidden_sizes[1:],
                 gamma_init=gamma_init,
                 b_noise_init=b_noise_init,
                 b_noise_trainable=b_noise_trainable
@@ -154,8 +154,8 @@ class QuickTester:
             model = create_causal_classifier(
                 input_size=input_size,
                 n_classes=n_classes,
-                hidden_size=hidden_sizes[0],
-                hidden_layers=hidden_sizes[1:],
+                causal_size=hidden_sizes[0],
+                abd_hidden_layers=hidden_sizes[1:],
                 gamma_init=gamma_init,
                 b_noise_init=b_noise_init,
                 b_noise_trainable=b_noise_trainable,
@@ -238,7 +238,7 @@ class QuickTester:
                        gamma_init=1.0, b_noise_init=1.0, b_noise_trainable=True,
                        
                        # 训练参数
-                       max_iter=5000, learning_rate=0.05, early_stopping=True,
+                       max_iter=5000, learning_rate=0.01,
                        patience=500, tol=1e-8,
                        
                        # 显示设置
@@ -266,28 +266,24 @@ class QuickTester:
         X, y = make_regression(n_samples=n_samples, n_features=n_features, 
                               noise=noise, random_state=random_state)
         
-        # 先分割数据：保持test set干净
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=random_state)
+        # 使用 causal_split 进行3分割，自动处理异常注入
+        # 注意：MLPCausalRegressor有自己的验证集分割，所以我们只需要train/test分割
+        # 但为了与PyTorch基线公平比较（它需要外部验证集），我们仍然进行3分割
+        X_train, X_val, X_test, y_train, y_val, y_test = causal_split(
+            X, y, test_size=0.2, val_size=0.25, random_state=random_state,
+            anomaly_ratio=anomaly_ratio, anomaly_type='regression')
         
-        # 只对训练数据添加标签异常（保持test set干净用于真实评估）
-        if anomaly_ratio > 0:
-            y_train = add_label_anomalies(y_train, anomaly_ratio, 'regression')
-        
-        # 分割训练数据为训练集和验证集（验证集也有异常）
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_train, y_train, test_size=0.25, random_state=random_state)
-        
-        # 标准化
+        # 为了与sklearn/pytorch基线模型公平比较，我们先对它们进行训练
+        # 它们需要手动进行数据缩放
         scaler_X = StandardScaler()
         X_train_scaled = scaler_X.fit_transform(X_train)
         X_val_scaled = scaler_X.transform(X_val)
         X_test_scaled = scaler_X.transform(X_test)
         
         scaler_y = StandardScaler()
-        y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
-        y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
-        y_test_scaled = scaler_y.transform(y_test.reshape(-1, 1)).flatten()
+        y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).ravel()
+        y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).ravel()
+        # y_test不进行缩放，因为我们将在原始尺度上评估所有模型
         
         results = {}
         
@@ -297,29 +293,35 @@ class QuickTester:
             hidden_layer_sizes=hidden_layer_sizes,
             max_iter=max_iter,
             learning_rate_init=learning_rate,
-            early_stopping=early_stopping,
-            validation_fraction=0.2,
+            early_stopping=True,
+            validation_fraction=0.2, # Sklearn MLP自己的验证集分割
             n_iter_no_change=50,
             tol=1e-4,
             random_state=random_state,
             alpha=0.0001
         )
-        sklearn_reg.fit(X_train_scaled, y_train_scaled)
-        sklearn_pred_test = sklearn_reg.predict(X_test_scaled)
-        sklearn_pred_val = sklearn_reg.predict(X_val_scaled)
+        # sklearn模型在缩放后的数据上训练
+        sklearn_reg.fit(np.vstack([X_train_scaled, X_val_scaled]), np.concatenate([y_train_scaled, y_val_scaled]))
         
+        # 预测并在原始尺度上评估
+        sklearn_pred_test_scaled = sklearn_reg.predict(X_test_scaled)
+        sklearn_pred_val_scaled = sklearn_reg.predict(X_val_scaled)
+        
+        sklearn_pred_test = scaler_y.inverse_transform(sklearn_pred_test_scaled.reshape(-1,1)).ravel()
+        sklearn_pred_val = scaler_y.inverse_transform(sklearn_pred_val_scaled.reshape(-1,1)).ravel()
+
         results['sklearn'] = {
             'test': {
-                'MAE': mean_absolute_error(y_test_scaled, sklearn_pred_test),
-                'MdAE': median_absolute_error(y_test_scaled, sklearn_pred_test), 
-                'RMSE': np.sqrt(mean_squared_error(y_test_scaled, sklearn_pred_test)),
-                'R²': r2_score(y_test_scaled, sklearn_pred_test)
+                'MAE': mean_absolute_error(y_test, sklearn_pred_test),
+                'MdAE': median_absolute_error(y_test, sklearn_pred_test), 
+                'RMSE': np.sqrt(mean_squared_error(y_test, sklearn_pred_test)),
+                'R²': r2_score(y_test, sklearn_pred_test)
             },
             'val': {
-                'MAE': mean_absolute_error(y_val_scaled, sklearn_pred_val),
-                'MdAE': median_absolute_error(y_val_scaled, sklearn_pred_val), 
-                'RMSE': np.sqrt(mean_squared_error(y_val_scaled, sklearn_pred_val)),
-                'R²': r2_score(y_val_scaled, sklearn_pred_val)
+                'MAE': mean_absolute_error(y_val, sklearn_pred_val),
+                'MdAE': median_absolute_error(y_val, sklearn_pred_val), 
+                'RMSE': np.sqrt(mean_squared_error(y_val, sklearn_pred_val)),
+                'R²': r2_score(y_val, sklearn_pred_val)
             }
         }
         
@@ -333,84 +335,104 @@ class QuickTester:
         
         pytorch_model.eval()
         with torch.no_grad():
-            pytorch_pred_test = pytorch_model(torch.FloatTensor(X_test_scaled)).squeeze().numpy()
-            pytorch_pred_val = pytorch_model(torch.FloatTensor(X_val_scaled)).squeeze().numpy()
+            pytorch_pred_test_scaled = pytorch_model(torch.FloatTensor(X_test_scaled)).squeeze().numpy()
+            pytorch_pred_val_scaled = pytorch_model(torch.FloatTensor(X_val_scaled)).squeeze().numpy()
         
+        pytorch_pred_test = scaler_y.inverse_transform(pytorch_pred_test_scaled.reshape(-1,1)).ravel()
+        pytorch_pred_val = scaler_y.inverse_transform(pytorch_pred_val_scaled.reshape(-1,1)).ravel()
+
         results['pytorch'] = {
             'test': {
-                'MAE': mean_absolute_error(y_test_scaled, pytorch_pred_test),
-                'MdAE': median_absolute_error(y_test_scaled, pytorch_pred_test),
-                'RMSE': np.sqrt(mean_squared_error(y_test_scaled, pytorch_pred_test)),
-                'R²': r2_score(y_test_scaled, pytorch_pred_test)
+                'MAE': mean_absolute_error(y_test, pytorch_pred_test),
+                'MdAE': median_absolute_error(y_test, pytorch_pred_test),
+                'RMSE': np.sqrt(mean_squared_error(y_test, pytorch_pred_test)),
+                'R²': r2_score(y_test, pytorch_pred_test)
             },
             'val': {
-                'MAE': mean_absolute_error(y_val_scaled, pytorch_pred_val),
-                'MdAE': median_absolute_error(y_val_scaled, pytorch_pred_val),
-                'RMSE': np.sqrt(mean_squared_error(y_val_scaled, pytorch_pred_val)),
-                'R²': r2_score(y_val_scaled, pytorch_pred_val)
+                'MAE': mean_absolute_error(y_val, pytorch_pred_val),
+                'MdAE': median_absolute_error(y_val, pytorch_pred_val),
+                'RMSE': np.sqrt(mean_squared_error(y_val, pytorch_pred_val)),
+                'R²': r2_score(y_val, pytorch_pred_val)
             }
         }
         
+        # Causal Regressor 公共训练数据（不缩放，模型内部处理）
+        X_train_full = np.vstack([X_train, X_val])
+        y_train_full = np.concatenate([y_train, y_val])
+
         # 3. CausalEngine deterministic模式
-        if verbose: print("训练 CausalEngine (deterministic)...")
-        causal_det = self.train_causal_engine(
-            X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled,
-            'regression', 'deterministic', hidden_layer_sizes, max_iter, learning_rate,
-            patience, tol, gamma_init, b_noise_init, b_noise_trainable, verbose=verbose
+        if verbose: print("训练 MLPCausalRegressor (deterministic)...")
+        causal_det = MLPCausalRegressor(
+            hidden_layer_sizes=hidden_layer_sizes,
+            mode='deterministic',
+            gamma_init=gamma_init,
+            b_noise_init=b_noise_init,
+            b_noise_trainable=b_noise_trainable,
+            max_iter=max_iter,
+            learning_rate=learning_rate,
+            early_stopping=True,
+            validation_fraction=0.2,
+            n_iter_no_change=patience,
+            tol=tol,
+            random_state=random_state,
+            verbose=verbose
         )
+        causal_det.fit(X_train_full, y_train_full)
         
-        # 预测
-        device = next(causal_det.parameters()).device
-        causal_det.eval()
-        with torch.no_grad():
-            X_test_torch = torch.FloatTensor(X_test_scaled).to(device)
-            X_val_torch = torch.FloatTensor(X_val_scaled).to(device)
-            causal_det_pred_test = causal_det.predict(X_test_torch, 'deterministic').cpu().numpy().flatten()
-            causal_det_pred_val = causal_det.predict(X_val_torch, 'deterministic').cpu().numpy().flatten()
+        # 预测并评估
+        causal_det_pred_test = causal_det.predict(X_test)
+        causal_det_pred_val = causal_det.predict(X_val)
         
         results['deterministic'] = {
             'test': {
-                'MAE': mean_absolute_error(y_test_scaled, causal_det_pred_test),
-                'MdAE': median_absolute_error(y_test_scaled, causal_det_pred_test),
-                'RMSE': np.sqrt(mean_squared_error(y_test_scaled, causal_det_pred_test)),
-                'R²': r2_score(y_test_scaled, causal_det_pred_test)
+                'MAE': mean_absolute_error(y_test, causal_det_pred_test),
+                'MdAE': median_absolute_error(y_test, causal_det_pred_test),
+                'RMSE': np.sqrt(mean_squared_error(y_test, causal_det_pred_test)),
+                'R²': r2_score(y_test, causal_det_pred_test)
             },
             'val': {
-                'MAE': mean_absolute_error(y_val_scaled, causal_det_pred_val),
-                'MdAE': median_absolute_error(y_val_scaled, causal_det_pred_val),
-                'RMSE': np.sqrt(mean_squared_error(y_val_scaled, causal_det_pred_val)),
-                'R²': r2_score(y_val_scaled, causal_det_pred_val)
+                'MAE': mean_absolute_error(y_val, causal_det_pred_val),
+                'MdAE': median_absolute_error(y_val, causal_det_pred_val),
+                'RMSE': np.sqrt(mean_squared_error(y_val, causal_det_pred_val)),
+                'R²': r2_score(y_val, causal_det_pred_val)
             }
         }
         
         # 4. CausalEngine standard模式
-        if verbose: print("训练 CausalEngine (standard)...")
-        causal_std = self.train_causal_engine(
-            X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled,
-            'regression', 'standard', hidden_layer_sizes, max_iter, learning_rate,
-            patience, tol, gamma_init, b_noise_init, b_noise_trainable, verbose=verbose
+        if verbose: print("训练 MLPCausalRegressor (standard)...")
+        causal_std = MLPCausalRegressor(
+            hidden_layer_sizes=hidden_layer_sizes,
+            mode='standard',
+            gamma_init=gamma_init,
+            b_noise_init=b_noise_init,
+            b_noise_trainable=b_noise_trainable,
+            max_iter=max_iter,
+            learning_rate=learning_rate,
+            early_stopping=True,
+            validation_fraction=0.2,
+            n_iter_no_change=patience,
+            tol=tol,
+            random_state=random_state,
+            verbose=verbose
         )
-        
-        # 预测
-        causal_std.eval()
-        with torch.no_grad():
-            X_test_torch = torch.FloatTensor(X_test_scaled).to(device)
-            X_val_torch = torch.FloatTensor(X_val_scaled).to(device)
-            causal_std_pred_test = causal_std.predict(X_test_torch, 'standard').cpu().numpy().flatten()
-            causal_std_pred_val = causal_std.predict(X_val_torch, 'standard').cpu().numpy().flatten()
-        
+        causal_std.fit(X_train_full, y_train_full)
+
+        # 预测并评估
+        causal_std_pred_test = causal_std.predict(X_test)
+        causal_std_pred_val = causal_std.predict(X_val)
+
         results['standard'] = {
             'test': {
-                'MAE': mean_absolute_error(y_test_scaled, causal_std_pred_test),
-                'MdAE': median_absolute_error(y_test_scaled, causal_std_pred_test),
-                'RMSE': np.sqrt(mean_squared_error(y_test_scaled, causal_std_pred_test)),
-                'R²': r2_score(y_test_scaled, causal_std_pred_test)
+                'MAE': mean_absolute_error(y_test, causal_std_pred_test),
+                'MdAE': median_absolute_error(y_test, causal_std_pred_test),
+                'RMSE': np.sqrt(mean_squared_error(y_test, causal_std_pred_test)),
+                'R²': r2_score(y_test, causal_std_pred_test)
             },
             'val': {
-                'MAE': mean_absolute_error(y_val_scaled, causal_std_pred_val),
-                'MdAE': median_absolute_error(y_val_scaled, causal_std_pred_val),
-                'RMSE': np.sqrt(mean_squared_error(y_val_scaled, causal_std_pred_val)),
-                'R²': r2_score(y_val_scaled, causal_std_pred_val)
+                'MAE': mean_absolute_error(y_val, causal_std_pred_val),
+                'MdAE': median_absolute_error(y_val, causal_std_pred_val),
+                'RMSE': np.sqrt(mean_squared_error(y_val, causal_std_pred_val)),
+                'R²': r2_score(y_val, causal_std_pred_val)
             }
         }
         
@@ -478,17 +500,11 @@ class QuickTester:
             class_sep=class_sep, random_state=random_state
         )
         
-        # 先分割数据：保持test set干净
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=random_state, stratify=y)
-        
-        # 只对训练数据添加标签异常（保持test set干净用于真实评估）
-        if label_noise_ratio > 0:
-            y_train = add_label_anomalies(y_train, label_noise_ratio, 'classification', classification_anomaly_strategy='shuffle')
-        
-        # 分割训练数据为训练集和验证集（验证集也有噪声）
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_train, y_train, test_size=0.25, random_state=random_state, stratify=y_train)
+        # 使用 causal_split 进行3分割，自动处理异常注入
+        X_train, X_val, X_test, y_train, y_val, y_test = causal_split(
+            X, y, test_size=0.2, val_size=0.25, random_state=random_state, stratify=y,
+            anomaly_ratio=label_noise_ratio, anomaly_type='classification', 
+            classification_anomaly_strategy='shuffle')
         
         # 标准化
         scaler_X = StandardScaler()
@@ -663,7 +679,7 @@ def main():
     print("   参数: γ_init=1.0, b_noise_init=1.0, ovr_threshold=0.0")
     print("   训练: max_iter=5000, lr=0.01, early_stop=True, patience=500, tol=1e-08")
     
-    tester.test_classification()
+    # tester.test_classification()
 
 
 if __name__ == "__main__":

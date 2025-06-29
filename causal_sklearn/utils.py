@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-CausalSklearn工具函数模块
-=========================
+CausalSklearn工具函数模块 - 最优版本
+=====================================
 
 提供通用的工具函数，包括标签异常处理、数据处理等功能。
-这些工具函数可以在项目的多个模块中复用。
+基于UltraThink重构思想，采用最优雅和简洁的设计。
 """
 
 import numpy as np
+from sklearn.model_selection import train_test_split
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
 
 def add_label_anomalies(y, anomaly_ratio=0.1, anomaly_type='regression', 
@@ -21,30 +24,19 @@ def add_label_anomalies(y, anomaly_ratio=0.1, anomaly_type='regression',
     Args:
         y: 原始标签数组
         anomaly_ratio: 异常比例 (0.0-1.0)
-        anomaly_type: 任务类型
-            - 'regression': 回归异常
-            - 'classification': 分类翻转
-        regression_anomaly_strategy: 回归异常策略
-            - 'shuffle': 打乱标签 (保持标签分布)
-            - 'outlier': 极端离群值
-        classification_anomaly_strategy: 分类异常策略
-            - 'flip': 翻转到其他类别 (避免自翻转)
-            - 'shuffle': 打乱异常标签 (保持类别分布)
+        anomaly_type: 任务类型 ('regression' 或 'classification')
+        regression_anomaly_strategy: 回归异常策略 ('shuffle' 或 'outlier')
+        classification_anomaly_strategy: 分类异常策略 ('flip' 或 'shuffle')
     
     Returns:
         numpy.ndarray: 添加异常后的标签数组
     
     Examples:
-        >>> # 回归任务 - shuffle策略
         >>> y_reg = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         >>> y_noisy = add_label_anomalies(y_reg, 0.4, 'regression', 'shuffle')
         
-        >>> # 分类任务 - flip策略
         >>> y_cls = np.array([0, 1, 2, 0, 1, 2])
         >>> y_noisy = add_label_anomalies(y_cls, 0.3, 'classification', 'flip')
-        
-        >>> # 分类任务 - shuffle策略
-        >>> y_noisy = add_label_anomalies(y_cls, 0.3, 'classification', 'shuffle')
     """
     y_noisy = y.copy()
     n_anomalies = int(len(y) * anomaly_ratio)
@@ -57,159 +49,277 @@ def add_label_anomalies(y, anomaly_ratio=0.1, anomaly_type='regression',
     
     if anomaly_type == 'regression':
         if regression_anomaly_strategy == 'shuffle':
-            # 策略1: 通过随机排序一部分标签来创建错误的X-y配对 (默认)
-            # 获取这些异常索引对应的原始标签
+            # 策略1: 通过随机排序一部分标签来创建错误的X-y配对
             labels_to_shuffle = y_noisy[anomaly_indices]
-            
-            # 将这些标签随机排序（in-place）
             np.random.shuffle(labels_to_shuffle)
-            
-            # 将打乱后的标签重新赋给y_noisy
             y_noisy[anomaly_indices] = labels_to_shuffle
         
         elif regression_anomaly_strategy == 'outlier':
-            # 策略2: 简单而强烈的离群值异常
+            # 策略2: 极端离群值异常
             y_std = np.std(y)
-            
             for idx in anomaly_indices:
-                # 随机选择异常类型
                 if np.random.random() < 0.5:
-                    # 策略1: 3倍标准差偏移
+                    # 3倍标准差偏移
                     sign = np.random.choice([-1, 1])
                     y_noisy[idx] = y[idx] + sign * 3.0 * y_std
                 else:
-                    # 策略2: 10倍缩放
-                    scale_factor = np.random.choice([0.1, 10.0])  # 极端缩放
+                    # 10倍缩放
+                    scale_factor = np.random.choice([0.1, 10.0])
                     y_noisy[idx] = y[idx] * scale_factor
             
     elif anomaly_type == 'classification':
         unique_labels = np.unique(y)
         
         if classification_anomaly_strategy == 'flip':
-            # 策略1: 传统标签翻转 - 翻转到其他类别 (避免自翻转)
+            # 策略1: 标签翻转到其他类别
             for idx in anomaly_indices:
                 other_labels = unique_labels[unique_labels != y[idx]]
                 if len(other_labels) > 0:
                     y_noisy[idx] = np.random.choice(other_labels)
         
         elif classification_anomaly_strategy == 'shuffle':
-            # 策略2: 分类shuffle - 类似回归的shuffle策略，完全保持类别分布
-            # 获取这些异常索引对应的原始标签
+            # 策略2: 标签打乱（保持类别分布）
             labels_to_shuffle = y_noisy[anomaly_indices].copy()
-            
-            # 将这些标签随机排序（in-place）
             np.random.shuffle(labels_to_shuffle)
-            
-            # 将打乱后的标签重新赋给y_noisy
             y_noisy[anomaly_indices] = labels_to_shuffle
     
     return y_noisy
 
 
-def get_anomaly_strategy_info():
-    """
-    获取所有可用异常策略的信息
+@dataclass
+class SplitConfig:
+    """数据分割配置类 - 统一管理所有分割参数"""
+    # 基础分割参数
+    test_size: Optional[float] = 0.2
+    val_size: Optional[float] = None
+    random_state: Optional[int] = None
+    shuffle: bool = True
+    stratify: Optional[np.ndarray] = None
     
-    Returns:
-        dict: 包含策略信息的字典
+    # 异常注入配置（默认比例为0，即正常分割）
+    anomaly_ratio: float = 0.0
+    anomaly_type: str = 'regression'
+    regression_strategy: str = 'shuffle'
+    classification_strategy: str = 'shuffle'
+    
+    # 输出配置
+    verbose: bool = False
+
+
+class CausalSplitter:
     """
-    return {
-        'regression': {
-            'shuffle': {
-                'name': '打乱标签',
-                'description': '通过随机排序一部分标签来创建错误的X-y配对',
-                'preserves_distribution': True,
-                'noise_intensity': 'medium'
-            },
-            'outlier': {
-                'name': '极端离群值',
-                'description': '添加3倍标准差偏移或10倍缩放的极端值',
-                'preserves_distribution': False,
-                'noise_intensity': 'high'
-            }
-        },
-        'classification': {
-            'flip': {
-                'name': '标签翻转',
-                'description': '翻转到其他类别，确保实际翻转发生',
-                'preserves_distribution': False,
-                'noise_intensity': 'high'
-            },
-            'shuffle': {
-                'name': '标签打乱',
-                'description': '类似回归shuffle，完全保持类别分布',
-                'preserves_distribution': True,
-                'noise_intensity': 'medium'
-            }
+    因果数据分割器 - 统一的分割逻辑实现
+    
+    核心设计原则：
+    1. 统一分割逻辑 - 所有分割都基于递归的2分割
+    2. 分离关注点 - 异常注入与分割逻辑解耦
+    3. 简化接口 - 配置类管理参数
+    """
+    
+    def __init__(self, *arrays, config: Optional[SplitConfig] = None):
+        self.arrays = list(arrays)
+        self.config = config or SplitConfig()
+        
+    def split(self) -> Tuple[np.ndarray, ...]:
+        """执行分割并返回结果"""
+        # 执行分割
+        if self.config.val_size is not None:
+            result = self._three_way_split()
+        else:
+            result = self._two_way_split()
+        
+        # 应用异常注入（仅当异常比例 > 0时）
+        if self.config.anomaly_ratio > 0:
+            result = self._apply_anomalies(result)
+        
+        # 打印信息
+        if self.config.verbose:
+            self._print_summary(result)
+        
+        return self._to_sklearn_format(result)
+    
+    def _two_way_split(self) -> dict:
+        """2分割实现"""
+        split_arrays = train_test_split(
+            *self.arrays,
+            test_size=self.config.test_size,
+            random_state=self.config.random_state,
+            shuffle=self.config.shuffle,
+            stratify=self.config.stratify
+        )
+        
+        # 重新组织数组
+        n_arrays = len(self.arrays)
+        train_arrays = [split_arrays[i * 2] for i in range(n_arrays)]
+        test_arrays = [split_arrays[i * 2 + 1] for i in range(n_arrays)]
+        
+        return {
+            'train': train_arrays,
+            'test': test_arrays
         }
-    }
+    
+    def _three_way_split(self) -> dict:
+        """3分割实现 - 基于递归2分割"""
+        # 第一次分割：分出测试集
+        temp_splitter = CausalSplitter(*self.arrays, config=SplitConfig(
+            test_size=self.config.test_size,
+            random_state=self.config.random_state,
+            shuffle=self.config.shuffle,
+            stratify=self.config.stratify
+        ))
+        temp_result = temp_splitter._two_way_split()
+        
+        # 第二次分割：从训练集中分出验证集
+        remaining_ratio = 1.0 - (self.config.test_size or 0.25)
+        adjusted_val_size = self.config.val_size / remaining_ratio
+        
+        val_splitter = CausalSplitter(*temp_result['train'], config=SplitConfig(
+            test_size=adjusted_val_size,
+            random_state=self.config.random_state,
+            shuffle=self.config.shuffle
+        ))
+        val_result = val_splitter._two_way_split()
+        
+        return {
+            'train': val_result['train'],
+            'val': val_result['test'],  # 第二次分割的"test"实际是验证集
+            'test': temp_result['test']
+        }
+    
+    def _apply_anomalies(self, result: dict) -> dict:
+        """应用异常注入 - 仅对训练集和验证集，测试集始终保持纯净"""
+        # 创建副本避免修改原数据
+        new_result = {}
+        for key, arrays in result.items():
+            new_result[key] = [arr.copy() for arr in arrays]
+        
+        # 对训练集注入异常（假设y是第二个数组）
+        if len(new_result['train']) >= 2:
+            new_result['train'][1] = add_label_anomalies(
+                new_result['train'][1],
+                anomaly_ratio=self.config.anomaly_ratio,
+                anomaly_type=self.config.anomaly_type,
+                regression_anomaly_strategy=self.config.regression_strategy,
+                classification_anomaly_strategy=self.config.classification_strategy
+            )
+        
+        # 对验证集也注入异常（如果存在）
+        if 'val' in new_result and len(new_result['val']) >= 2:
+            new_result['val'][1] = add_label_anomalies(
+                new_result['val'][1],
+                anomaly_ratio=self.config.anomaly_ratio,
+                anomaly_type=self.config.anomaly_type,
+                regression_anomaly_strategy=self.config.regression_strategy,
+                classification_anomaly_strategy=self.config.classification_strategy
+            )
+        
+        # 测试集始终保持纯净，不注入异常
+        
+        return new_result
+    
+    def _print_summary(self, result: dict):
+        """打印分割摘要"""
+        print(f"🔄 CausalSklearn数据分割")
+        print(f"   模式: {'3分割' if 'val' in result else '2分割'}")
+        print(f"   样本数: {len(self.arrays[0])}")
+        
+        if self.config.anomaly_ratio > 0:
+            print(f"   异常注入: {self.config.anomaly_type}, 比例={self.config.anomaly_ratio:.1%}")
+            strategy = self.config.regression_strategy if self.config.anomaly_type == 'regression' else self.config.classification_strategy
+            print(f"   异常策略: {strategy}")
+            print(f"   测试集: 保持纯净")
+        
+        if 'val' in result:
+            print(f"   分割结果: train={len(result['train'][0])}, val={len(result['val'][0])}, test={len(result['test'][0])}")
+        else:
+            print(f"   分割结果: train={len(result['train'][0])}, test={len(result['test'][0])}")
+    
+    def _to_sklearn_format(self, result: dict) -> Tuple[np.ndarray, ...]:
+        """转换为sklearn风格的tuple"""
+        if 'val' in result:
+            # 3分割: X_train, X_val, X_test, y_train, y_val, y_test, ...
+            output = []
+            for i in range(len(self.arrays)):
+                output.extend([result['train'][i], result['val'][i], result['test'][i]])
+            return tuple(output)
+        else:
+            # 2分割: X_train, X_test, y_train, y_test, ...
+            output = []
+            for i in range(len(self.arrays)):
+                output.extend([result['train'][i], result['test'][i]])
+            return tuple(output)
 
 
-def validate_anomaly_parameters(anomaly_ratio, anomaly_type, regression_anomaly_strategy, classification_anomaly_strategy):
+def causal_split(*arrays, **kwargs) -> Tuple[np.ndarray, ...]:
     """
-    验证异常策略参数的有效性
+    因果数据分割函数 - 简洁高效的实现
+    
+    核心特性：
+    1. 支持2分割和3分割模式
+    2. 训练集和验证集可选异常注入，测试集始终纯净
+    3. 异常比例默认0.0（正常分割）
     
     Args:
-        anomaly_ratio: 异常比例
-        anomaly_type: 任务类型
-        regression_anomaly_strategy: 回归异常策略
-        classification_anomaly_strategy: 分类异常策略
-    
-    Raises:
-        ValueError: 参数无效时抛出异常
-    """
-    # 验证异常比例
-    if not 0.0 <= anomaly_ratio <= 1.0:
-        raise ValueError(f"anomaly_ratio必须在[0.0, 1.0]范围内，得到: {anomaly_ratio}")
-    
-    # 验证任务类型
-    valid_types = ['regression', 'classification']
-    if anomaly_type not in valid_types:
-        raise ValueError(f"anomaly_type必须是{valid_types}之一，得到: {anomaly_type}")
-    
-    # 验证回归策略
-    valid_regression_strategies = ['shuffle', 'outlier']
-    if regression_anomaly_strategy not in valid_regression_strategies:
-        raise ValueError(f"regression_anomaly_strategy必须是{valid_regression_strategies}之一，得到: {regression_anomaly_strategy}")
-    
-    # 验证分类策略
-    valid_classification_strategies = ['flip', 'shuffle']
-    if classification_anomaly_strategy not in valid_classification_strategies:
-        raise ValueError(f"classification_anomaly_strategy必须是{valid_classification_strategies}之一，得到: {classification_anomaly_strategy}")
-
-
-# 为了向后兼容，提供一个简化版本
-def add_regression_anomalies(y, anomaly_ratio=0.1, strategy='shuffle'):
-    """
-    回归任务专用的异常标签处理 (简化接口)
-    
-    Args:
-        y: 原始标签
-        anomaly_ratio: 异常比例
-        strategy: 'shuffle' 或 'outlier'
-    
+        *arrays: 要分割的数组（X, y等）
+        test_size: 测试集大小 (默认0.2)
+        val_size: 验证集大小 (启用3分割模式)
+        random_state: 随机种子
+        shuffle: 是否打乱数据 (默认True)
+        stratify: 分层分割的目标数组
+        
+        anomaly_ratio: 异常比例 (默认0.0，即正常分割)
+        anomaly_type: 'regression' 或 'classification' (默认'regression')
+        regression_anomaly_strategy: 回归异常策略 ('shuffle' 或 'outlier')
+        classification_anomaly_strategy: 分类异常策略 ('flip' 或 'shuffle')
+        
+        verbose: 是否显示详细信息
+        
     Returns:
-        numpy.ndarray: 添加异常后的标签
+        - 2分割: X_train, X_test, y_train, y_test
+        - 3分割: X_train, X_val, X_test, y_train, y_val, y_test
+        
+    Examples:
+        >>> # 正常分割（无异常）
+        >>> X_train, X_test, y_train, y_test = causal_split(X, y)
+        
+        >>> # 3分割模式
+        >>> X_train, X_val, X_test, y_train, y_val, y_test = causal_split(
+        ...     X, y, val_size=0.2
+        ... )
+        
+        >>> # 带异常注入的分割
+        >>> X_train, X_test, y_train, y_test = causal_split(
+        ...     X, y, anomaly_ratio=0.1, anomaly_type='regression', verbose=True
+        ... )
     """
-    return add_label_anomalies(y, anomaly_ratio, 'regression', strategy)
-
-
-def add_classification_anomalies(y, anomaly_ratio=0.1, strategy='flip'):
-    """
-    分类任务专用的异常标签处理 (简化接口)
+    # 参数映射
+    config = SplitConfig()
     
-    Args:
-        y: 原始标签
-        anomaly_ratio: 异常比例
-        strategy: 'flip' 或 'shuffle'
+    # 基础参数
+    if 'test_size' in kwargs: config.test_size = kwargs['test_size']
+    if 'val_size' in kwargs: config.val_size = kwargs['val_size']
+    if 'random_state' in kwargs: config.random_state = kwargs['random_state']
+    if 'shuffle' in kwargs: config.shuffle = kwargs['shuffle']
+    if 'stratify' in kwargs: config.stratify = kwargs['stratify']
     
-    Returns:
-        numpy.ndarray: 添加异常后的标签
-    """
-    return add_label_anomalies(y, anomaly_ratio, 'classification', classification_anomaly_strategy=strategy)
+    # 异常注入参数
+    if 'anomaly_ratio' in kwargs: config.anomaly_ratio = kwargs['anomaly_ratio']
+    if 'anomaly_type' in kwargs: config.anomaly_type = kwargs['anomaly_type']
+    if 'regression_anomaly_strategy' in kwargs: config.regression_strategy = kwargs['regression_anomaly_strategy']
+    if 'classification_anomaly_strategy' in kwargs: config.classification_strategy = kwargs['classification_anomaly_strategy']
+    
+    # 输出参数
+    if 'verbose' in kwargs: config.verbose = kwargs['verbose']
+    
+    # 参数验证
+    if config.val_size is not None and (config.val_size <= 0 or config.val_size >= 1):
+        raise ValueError(f"val_size必须在(0, 1)范围内，得到: {config.val_size}")
+    
+    if len(arrays) < 2:
+        raise ValueError("至少需要提供2个数组（通常是X和y）")
+    
+    # 执行分割
+    splitter = CausalSplitter(*arrays, config=config)
+    return splitter.split()
 
 
-# 便于导入的别名
-label_noise = add_label_anomalies
-regression_noise = add_regression_anomalies
-classification_noise = add_classification_anomalies

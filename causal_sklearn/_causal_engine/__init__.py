@@ -4,7 +4,7 @@ CausalEngine Core Module
 因果推理引擎的核心实现，包含三阶段架构：
 1. AbductionNetwork: 归因网络（证据→个体表征）
 2. ActionNetwork: 行动网络（个体表征→决策得分）
-3. ActivationHead: 激活头（决策得分→任务输出）
+3. TaskHead: 任务头（决策得分→任务输出）
 
 以及完整的CausalEngine实现和数学工具。
 """
@@ -21,11 +21,11 @@ from .networks import (
 )
 
 from .heads import (
-    ActivationHead,
+    TaskHead,
     RegressionHead,
     ClassificationHead,
-    CausalLoss,
-    TaskType
+    TaskType,
+    create_task_head
 )
 
 from .math_utils import (
@@ -43,12 +43,12 @@ __all__ = [
     'AbductionNetwork',
     'ActionNetwork',
     
-    # Activation Heads
-    'ActivationHead',
+    # Task Heads
+    'TaskHead',
     'RegressionHead',
     'ClassificationHead',
-    'CausalLoss',
     'TaskType',
+    'create_task_head',
     
     # Math Utils
     'CauchyMath',

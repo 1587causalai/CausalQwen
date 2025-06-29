@@ -151,8 +151,8 @@ class BaselineBenchmark:
             model = create_causal_regressor(
                 input_size=input_size,
                 output_size=output_size,
-                hidden_size=hidden_sizes[0],
-                hidden_layers=hidden_sizes[1:],
+                causal_size=hidden_sizes[0],
+                abd_hidden_layers=hidden_sizes[1:],
                 gamma_init=gamma_init,
                 b_noise_init=b_noise_init,
                 b_noise_trainable=b_noise_trainable
@@ -162,8 +162,8 @@ class BaselineBenchmark:
             model = create_causal_classifier(
                 input_size=input_size,
                 n_classes=n_classes,
-                hidden_size=hidden_sizes[0],
-                hidden_layers=hidden_sizes[1:],
+                causal_size=hidden_sizes[0],
+                abd_hidden_layers=hidden_sizes[1:],
                 gamma_init=gamma_init,
                 b_noise_init=b_noise_init,
                 b_noise_trainable=b_noise_trainable,

@@ -11,7 +11,7 @@ CausalEngine Core Networks for sklearn-compatible ML tasks
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional
 
 
 class AbductionNetwork(nn.Module):
@@ -22,7 +22,7 @@ class AbductionNetwork(nn.Module):
     
     数学框架：
     - 输入: X ∈ R^{n_features}
-    - 输出: (μ_U, γ_U) ∈ R^{hidden_size} × R^{hidden_size}_+
+    - 输出: (μ_U, γ_U) ∈ R^{causal_size} × R^{causal_size}_+
     - 分布: U ~ Cauchy(μ_U, γ_U)
     
     网络架构：
@@ -31,8 +31,8 @@ class AbductionNetwork(nn.Module):
     
     Args:
         input_size: 输入特征维度
-        hidden_size: 隐藏层/因果表征维度
-        hidden_layers: MLP隐藏层配置 (n_neurons_1, n_neurons_2, ...)
+        causal_size: 因果表征维度
+        abd_hidden_layers: MLP隐藏层配置 (n_neurons_1, n_neurons_2, ...)
         activation: 激活函数名称
         dropout: dropout比率
         gamma_init: 尺度参数初始化值
@@ -41,8 +41,8 @@ class AbductionNetwork(nn.Module):
     def __init__(
         self,
         input_size: int,
-        hidden_size: int,
-        hidden_layers: Tuple[int, ...] = (),
+        causal_size: int,
+        abd_hidden_layers: Tuple[int, ...] = (),
         activation: str = 'relu',
         dropout: float = 0.0,
         gamma_init: float = 10.0
@@ -50,17 +50,17 @@ class AbductionNetwork(nn.Module):
         super().__init__()
         
         self.input_size = input_size
-        self.hidden_size = hidden_size
+        self.causal_size = causal_size
         self.gamma_init = gamma_init
         
         # 构建位置网络 loc_net: X → μ_U
         self.loc_net = self._build_mlp(
-            input_size, hidden_size, hidden_layers, activation, dropout
+            input_size, causal_size, abd_hidden_layers, activation, dropout
         )
         
         # 构建尺度网络 scale_net: X → log(γ_U) (softplus前)
         self.scale_net = self._build_mlp(
-            input_size, hidden_size, hidden_layers, activation, dropout
+            input_size, causal_size, abd_hidden_layers, activation, dropout
         )
         
         # 初始化权重
@@ -69,45 +69,61 @@ class AbductionNetwork(nn.Module):
     def _build_mlp(
         self,
         input_size: int,
-        output_size: int,
-        hidden_layers: Tuple[int, ...],
-        activation: str,
-        dropout: float
+        output_size: Optional[int] = None,
+        abd_hidden_layers: Optional[Tuple[int, ...]] = None,
+        activation: str = "relu",
+        dropout: float = 0.0,
     ) -> nn.Module:
-        """构建MLP网络"""
+        """
+        构建一个多层感知机 (MLP).
+
+        参数:
+            input_size (int): 输入层的大小.
+            output_size (Optional[int]): 输出层的大小. 如果为 None, 默认为 input_size.
+            abd_hidden_layers (Optional[Tuple[int, ...]]): 一个元组，指定每个隐藏层的神经元数量。
+                                                           如果为 None, 则构建一个从输入到输出的单层线性网络。
+            activation (str): 要使用的激活函数.
+            dropout (float): Dropout 比率.
+
+        返回:
+            nn.Module: 一个 PyTorch MLP 模块.
+        """
+        if output_size is None:
+            output_size = input_size
+
         activation_fn = {
-            'relu': nn.ReLU,
-            'gelu': nn.GELU,
-            'tanh': nn.Tanh,
-            'sigmoid': nn.Sigmoid
+            "relu": nn.ReLU,
+            "gelu": nn.GELU,
+            "leaky_relu": nn.LeakyReLU,
+            "sigmoid": nn.Sigmoid,
+            "tanh": nn.Tanh,
         }.get(activation.lower(), nn.ReLU)
         
-        if not hidden_layers:
-            # 没有隐藏层，直接线性映射
+        if not abd_hidden_layers:
             return nn.Linear(input_size, output_size)
         
-        # 有隐藏层的MLP
         layers = []
-        prev_size = input_size
+        current_size = input_size
         
-        for hidden_size in hidden_layers:
-            layers.extend([
-                nn.Linear(prev_size, hidden_size),
+        for layer_size in abd_hidden_layers:
+            layers.extend(
+                [
+                    nn.Linear(current_size, layer_size),
                 activation_fn(),
-            ])
+                ]
+            )
             if dropout > 0:
                 layers.append(nn.Dropout(dropout))
-            prev_size = hidden_size
+            current_size = layer_size
         
-        # 最后一层
-        layers.append(nn.Linear(prev_size, output_size))
+        layers.append(nn.Linear(current_size, output_size))
         
         return nn.Sequential(*layers)
     
     def _init_weights(self):
         """初始化网络权重"""
         # 位置网络：如果输入输出维度相同且无隐藏层，可以接近恒等初始化
-        if (self.input_size == self.hidden_size and 
+        if (self.input_size == self.causal_size and 
             isinstance(self.loc_net, nn.Linear)):
             # 接近恒等初始化
             nn.init.eye_(self.loc_net.weight)
@@ -145,8 +161,8 @@ class AbductionNetwork(nn.Module):
             x: 输入特征 [batch_size, input_size]
             
         Returns:
-            mu_U: 位置参数 [batch_size, hidden_size]
-            gamma_U: 尺度参数 [batch_size, hidden_size] (保证 > 0)
+            mu_U: 位置参数 [batch_size, causal_size]
+            gamma_U: 尺度参数 [batch_size, causal_size] (保证 > 0)
         """
         # 计算位置参数
         mu_U = self.loc_net(x)
@@ -173,7 +189,7 @@ class ActionNetwork(nn.Module):
     - sampling: U' ~ Cauchy(μ_U + b_noise*ε, γ_U)
     
     Args:
-        hidden_size: 输入的因果表征维度
+        causal_size: 输入的因果表征维度
         output_size: 输出决策得分维度（分类类别数或回归维度数）
         b_noise_init: 外生噪声初始化值
         b_noise_trainable: 外生噪声是否可训练
@@ -181,25 +197,25 @@ class ActionNetwork(nn.Module):
     
     def __init__(
         self,
-        hidden_size: int,
+        causal_size: int,
         output_size: int,
         b_noise_init: float = 0.1,
         b_noise_trainable: bool = True
     ):
         super().__init__()
         
-        self.hidden_size = hidden_size
+        self.causal_size = causal_size
         self.output_size = output_size
         
         # 线性变换权重
-        self.weight = nn.Parameter(torch.empty(output_size, hidden_size))
+        self.weight = nn.Parameter(torch.empty(output_size, causal_size))
         self.bias = nn.Parameter(torch.empty(output_size))
         
         # 外生噪声参数
         if b_noise_trainable:
-            self.b_noise = nn.Parameter(torch.full((hidden_size,), b_noise_init))
+            self.b_noise = nn.Parameter(torch.full((causal_size,), b_noise_init))
         else:
-            self.register_buffer('b_noise', torch.full((hidden_size,), b_noise_init))
+            self.register_buffer('b_noise', torch.full((causal_size,), b_noise_init))
         
         self._init_weights()
     
@@ -220,8 +236,8 @@ class ActionNetwork(nn.Module):
         基于 MATHEMATICAL_FOUNDATIONS_CN.md 的权威定义
         
         Args:
-            mu_U: 个体表征位置参数 [batch_size, hidden_size]
-            gamma_U: 个体表征尺度参数 [batch_size, hidden_size]
+            mu_U: 个体表征位置参数 [batch_size, causal_size]
+            gamma_U: 个体表征尺度参数 [batch_size, causal_size]
             mode: 推理模式
             
         Returns:

@@ -4,7 +4,14 @@ MLPCausalRegressor: Scikit-learn compatible causal neural network regressor.
 
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_X_y, check_array
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+from ._causal_engine import create_causal_regressor
 
 class MLPCausalRegressor(BaseEstimator, RegressorMixin):
     """
@@ -114,12 +121,100 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         # Store input info
         self.n_features_in_ = X.shape[1]
         
-        # TODO: Implement actual CausalEngine training
-        # For now, this is a placeholder
-        self.n_iter_ = self.max_iter
+        # Data preprocessing
+        self.scaler_X_ = StandardScaler()
+        self.scaler_y_ = StandardScaler()
+        
+        X_scaled = self.scaler_X_.fit_transform(X)
+        y_scaled = self.scaler_y_.fit_transform(y.reshape(-1, 1)).ravel()
+        
+        # Split for validation if early stopping is enabled
+        if self.early_stopping:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_scaled, y_scaled, 
+                test_size=self.validation_fraction,
+                random_state=self.random_state
+            )
+        else:
+            X_train, y_train = X_scaled, y_scaled
+            X_val, y_val = None, None
+        
+        # Convert to torch tensors
+        X_train_tensor = torch.FloatTensor(X_train)
+        y_train_tensor = torch.FloatTensor(y_train)
+        
+        # CausalEngine expects y to be 2D for regression
+        if len(y_train_tensor.shape) == 1:
+            y_train_tensor = y_train_tensor.unsqueeze(1)
+        
+        if X_val is not None:
+            X_val_tensor = torch.FloatTensor(X_val)
+            y_val_tensor = torch.FloatTensor(y_val)
+            # Also reshape validation y
+            if len(y_val_tensor.shape) == 1:
+                y_val_tensor = y_val_tensor.unsqueeze(1)
+        
+        # Create CausalEngine
+        causal_size = self.hidden_layer_sizes[0] if self.hidden_layer_sizes else 100
+        abd_hidden_layers = list(self.hidden_layer_sizes[1:]) if len(self.hidden_layer_sizes) > 1 else []
+        
+        self.engine_ = create_causal_regressor(
+            input_size=self.n_features_in_,
+            output_size=1,
+            causal_size=causal_size,
+            abd_hidden_layers=abd_hidden_layers,
+            gamma_init=self.gamma_init,
+            b_noise_init=self.b_noise_init,
+            b_noise_trainable=self.b_noise_trainable
+        )
+        
+        # Setup optimizer
+        optimizer = optim.Adam(self.engine_.parameters(), lr=self.learning_rate)
+        
+        # Training loop
+        best_val_loss = float('inf')
+        no_improve_count = 0
+        best_state_dict = None
+        
+        for epoch in range(self.max_iter):
+            # Training step
+            self.engine_.train()
+            optimizer.zero_grad()
+            
+            loss = self.engine_.compute_loss(X_train_tensor, y_train_tensor, mode=self.mode)
+            loss.backward()
+            optimizer.step()
+            
+            # Validation step
+            if self.early_stopping and X_val is not None:
+                self.engine_.eval()
+                with torch.no_grad():
+                    val_loss = self.engine_.compute_loss(X_val_tensor, y_val_tensor, mode=self.mode)
+                    
+                    if val_loss < best_val_loss - self.tol:
+                        best_val_loss = val_loss
+                        no_improve_count = 0
+                        # Save the best model state
+                        best_state_dict = self.engine_.state_dict().copy()
+                    else:
+                        no_improve_count += 1
+                        
+                    if no_improve_count >= self.n_iter_no_change:
+                        if self.verbose:
+                            print(f"Early stopping at epoch {epoch + 1}")
+                        # Restore the best model
+                        if best_state_dict is not None:
+                            self.engine_.load_state_dict(best_state_dict)
+                        break
+            
+            if self.verbose and (epoch + 1) % 100 == 0:
+                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {loss.item():.6f}")
+        
+        self.n_iter_ = epoch + 1
         
         if self.verbose:
             print(f"MLPCausalRegressor fitted with {X.shape[0]} samples, {X.shape[1]} features")
+            print(f"Training completed in {self.n_iter_} iterations")
             
         return self
         
@@ -147,10 +242,31 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
             raise ValueError(f"X has {X.shape[1]} features, but MLPCausalRegressor "
                            f"is expecting {self.n_features_in_} features.")
         
-        # TODO: Implement actual CausalEngine prediction
-        # For now, return random predictions as placeholder
-        np.random.seed(self.random_state)
-        return np.random.randn(X.shape[0])
+        # Check if model is fitted
+        if not hasattr(self, 'engine_'):
+            raise ValueError("This MLPCausalRegressor instance is not fitted yet.")
+        
+        # Preprocess input
+        X_scaled = self.scaler_X_.transform(X)
+        X_tensor = torch.FloatTensor(X_scaled)
+        
+        # Predict using CausalEngine
+        self.engine_.eval()
+        with torch.no_grad():
+            y_pred_scaled = self.engine_.predict(X_tensor, mode=self.mode)
+            if isinstance(y_pred_scaled, tuple):
+                # If returns (location, scale), take location for point prediction
+                y_pred_scaled = y_pred_scaled[0]
+            
+            # Convert back to numpy and inverse transform
+            y_pred_scaled_np = y_pred_scaled.cpu().numpy()
+            if y_pred_scaled_np.ndim > 1:
+                y_pred_scaled_np = y_pred_scaled_np.ravel()
+            
+            # Inverse transform to original scale
+            y_pred = self.scaler_y_.inverse_transform(y_pred_scaled_np.reshape(-1, 1)).ravel()
+            
+        return y_pred
         
     def predict_dist(self, X):
         """
@@ -172,11 +288,41 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         if self.mode == 'deterministic':
             raise ValueError("Distribution prediction not available in deterministic mode.")
             
-        # TODO: Implement actual distribution prediction
-        # For now, return placeholder
-        np.random.seed(self.random_state)
-        location = self.predict(X)
-        scale = np.ones_like(location) * 0.1
+        # Check if model is fitted
+        if not hasattr(self, 'engine_'):
+            raise ValueError("This MLPCausalRegressor instance is not fitted yet.")
+        
+        # Preprocess input
+        X_scaled = self.scaler_X_.transform(X)
+        X_tensor = torch.FloatTensor(X_scaled)
+        
+        # Predict distribution using CausalEngine
+        self.engine_.eval()
+        with torch.no_grad():
+            dist_params = self.engine_.predict_distribution(X_tensor, mode=self.mode)
+            
+            if not isinstance(dist_params, tuple) or len(dist_params) != 2:
+                raise RuntimeError("Expected distributional output (location, scale) but got different format")
+            
+            location_scaled, scale_scaled = dist_params
+            
+            # Convert to numpy
+            location_scaled_np = location_scaled.cpu().numpy()
+            scale_scaled_np = scale_scaled.cpu().numpy()
+            
+            if location_scaled_np.ndim > 1:
+                location_scaled_np = location_scaled_np.ravel()
+            if scale_scaled_np.ndim > 1:
+                scale_scaled_np = scale_scaled_np.ravel()
+            
+            # Inverse transform location (scale doesn't need inverse transform as it's already in proper units)
+            location = self.scaler_y_.inverse_transform(location_scaled_np.reshape(-1, 1)).ravel()
+            
+            # Scale parameter needs to be adjusted for the target scaling
+            # Since we scaled y, the scale parameter also needs to be scaled back
+            scale_factor = self.scaler_y_.scale_[0] if hasattr(self.scaler_y_, 'scale_') else 1.0
+            scale = scale_scaled_np * scale_factor
+            
         return np.column_stack([location, scale])
         
     def _more_tags(self):

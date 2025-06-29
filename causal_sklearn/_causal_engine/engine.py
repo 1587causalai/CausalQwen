@@ -15,7 +15,7 @@ import torch.nn.functional as F
 from typing import Tuple, Union, Optional
 
 from .networks import AbductionNetwork, ActionNetwork
-from .heads import ActivationHead, RegressionHead, ClassificationHead, CausalLoss, TaskType
+from .heads import TaskType, create_task_head, TaskHead
 
 
 class CausalEngine(nn.Module):
@@ -40,40 +40,42 @@ class CausalEngine(nn.Module):
     Args:
         input_size: 输入特征维度
         output_size: 输出维度（回归维度数或分类类别数）
-        hidden_size: 因果表征隐藏维度
+        causal_size: 因果表征维度
         task_type: 任务类型 ('regression' 或 'classification')
-        hidden_layers: AbductionNetwork隐藏层配置
+        abd_hidden_layers: AbductionNetwork隐藏层配置
         activation: 激活函数名称
         dropout: dropout比率
         gamma_init: 尺度参数初始化值
         b_noise_init: 外生噪声初始化值
         b_noise_trainable: 外生噪声是否可训练
         ovr_threshold: 分类任务的OvR阈值
+        learnable_threshold: 是否可学习阈值
     """
     
     def __init__(
         self,
         input_size: int,
         output_size: int,
-        hidden_size: int = None,
+        causal_size: int = None,
         task_type: str = 'regression',
-        hidden_layers: Tuple[int, ...] = (),
+        abd_hidden_layers: Tuple[int, ...] = (),
         activation: str = 'relu',
         dropout: float = 0.0,
         gamma_init: float = 10.0,
         b_noise_init: float = 0.1,
         b_noise_trainable: bool = True,
-        ovr_threshold: float = 0.0
+        ovr_threshold: float = 0.0,
+        learnable_threshold: bool = False
     ):
         super().__init__()
         
-        # 默认隐藏维度
-        if hidden_size is None:
-            hidden_size = max(input_size, output_size)
+        # 默认因果维度
+        if causal_size is None:
+            causal_size = max(input_size, output_size)
         
         self.input_size = input_size
         self.output_size = output_size
-        self.hidden_size = hidden_size
+        self.causal_size = causal_size
         self.task_type = TaskType(task_type)
         
         # 三阶段网络架构
@@ -81,8 +83,8 @@ class CausalEngine(nn.Module):
         # 1. 归因网络：X → U ~ Cauchy(μ_U, γ_U)
         self.abduction_net = AbductionNetwork(
             input_size=input_size,
-            hidden_size=hidden_size,
-            hidden_layers=hidden_layers,
+            causal_size=causal_size,
+            abd_hidden_layers=abd_hidden_layers,
             activation=activation,
             dropout=dropout,
             gamma_init=gamma_init
@@ -90,24 +92,45 @@ class CausalEngine(nn.Module):
         
         # 2. 行动网络：U → S ~ Cauchy(μ_S, γ_S)
         self.action_net = ActionNetwork(
-            hidden_size=hidden_size,
+            causal_size=causal_size,
             output_size=output_size,
             b_noise_init=b_noise_init,
             b_noise_trainable=b_noise_trainable
         )
         
-        # 3. 激活头：S → Y
-        self.activation_head = ActivationHead(
-            output_size=output_size,
-            task_type=task_type,
-            ovr_threshold=ovr_threshold
+        # 3. 任务头：S → Y
+        self.task_head = create_task_head(
+            output_size=self.output_size,
+            task_type=self.task_type.value,
+            ovr_threshold=ovr_threshold,
+            learnable_threshold=learnable_threshold
         )
     
+    def _get_decision_scores(
+        self, 
+        x: torch.Tensor, 
+        mode: str = 'standard'
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """内部方法：计算决策得分并确保其格式统一"""
+        # 阶段1：归因推断 X → U
+        mu_U, gamma_U = self.abduction_net(x)
+        
+        # 阶段2：行动决策 U → S
+        decision_scores_raw = self.action_net(mu_U, gamma_U, mode)
+        
+        # 确保输出始终是 (mu, gamma) 元组，以统一接口
+        if mode == 'deterministic':
+            mu_S = decision_scores_raw
+            gamma_S = torch.zeros_like(mu_S)
+            return mu_S, gamma_S
+        else:
+            return decision_scores_raw
+
     def forward(
         self, 
         x: torch.Tensor, 
         mode: str = 'standard'
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    ) -> torch.Tensor:
         """
         CausalEngine前向传播
         
@@ -116,21 +139,13 @@ class CausalEngine(nn.Module):
             mode: 推理模式 ('deterministic', 'exogenous', 'endogenous', 'standard', 'sampling')
             
         Returns:
-            - deterministic模式: 
-                回归: 预测值 [batch_size, output_size]
-                分类: 类别概率 [batch_size, output_size]
-            - 其他模式:
-                回归: (位置, 尺度) 分布参数
-                分类: 类别概率 [batch_size, output_size]
+            任务特定的预测结果（例如，回归值、类别概率）。
         """
-        # 阶段1：归因推断 X → U
-        mu_U, gamma_U = self.abduction_net(x)
-        
-        # 阶段2：行动决策 U → S
-        decision_scores = self.action_net(mu_U, gamma_U, mode)
+        # 获取决策得分
+        decision_scores = self._get_decision_scores(x, mode)
         
         # 阶段3：任务激活 S → Y
-        output = self.activation_head(decision_scores, mode)
+        output = self.task_head(decision_scores, mode)
         
         return output
     
@@ -149,24 +164,16 @@ class CausalEngine(nn.Module):
         """
         self.eval()
         with torch.no_grad():
+            # forward() now returns the final prediction/probabilities
+            output = self.forward(x, mode)
+
             if self.task_type == TaskType.REGRESSION:
-                # 回归：返回点预测
-                output = self.forward(x, mode)
-                if mode == 'deterministic':
-                    return output  # 直接返回预测值
-                else:
-                    mu_pred, gamma_pred = output
-                    return mu_pred  # 使用位置参数作为点预测
+                # 回归: forward() 直接返回点预测值
+                return output
             
             elif self.task_type == TaskType.CLASSIFICATION:
-                # 分类：返回类别标签
-                output = self.forward(x, mode)
-                if isinstance(output, tuple):
-                    probabilities = output  # 分布模式返回概率
-                else:
-                    probabilities = output  # 确定性模式返回概率
-                
-                return torch.argmax(probabilities, dim=-1)
+                # 分类: forward() 返回概率, 在此基础上 argmax
+                return torch.argmax(output, dim=-1)
             
             else:
                 raise ValueError(f"Unknown task type: {self.task_type}")
@@ -187,8 +194,8 @@ class CausalEngine(nn.Module):
         
         self.eval()
         with torch.no_grad():
-            output = self.forward(x, mode)
-            return output  # 激活头已经输出概率
+            # forward() in classification mode directly returns probabilities
+            return self.forward(x, mode)
     
     def predict_distribution(
         self, 
@@ -211,11 +218,8 @@ class CausalEngine(nn.Module):
         
         self.eval()
         with torch.no_grad():
-            output = self.forward(x, mode)
-            if isinstance(output, tuple):
-                return output
-            else:
-                raise RuntimeError("Expected distributional output but got point estimate")
+            # 直接返回决策得分的分布
+            return self._get_decision_scores(x, mode)
     
     def compute_loss(
         self, 
@@ -234,14 +238,13 @@ class CausalEngine(nn.Module):
         Returns:
             loss: 损失值
         """
-        # 前向传播
-        y_pred = self.forward(x, mode)
+        # 获取决策得分
+        decision_scores = self._get_decision_scores(x, mode)
         
-        # 计算损失
-        loss = CausalLoss.compute_loss(
+        # 将损失计算委托给任务头
+        loss = self.task_head.compute_loss(
             y_true=y,
-            y_pred=y_pred,
-            task_type=self.task_type.value,
+            decision_scores=decision_scores,
             mode=mode
         )
         
@@ -258,8 +261,8 @@ class CausalEngine(nn.Module):
             x: 输入特征 [batch_size, input_size]
             
         Returns:
-            mu_U: 个体表征位置参数 [batch_size, hidden_size]
-            gamma_U: 个体表征尺度参数 [batch_size, hidden_size]
+            mu_U: 个体表征位置参数 [batch_size, causal_size]
+            gamma_U: 个体表征尺度参数 [batch_size, causal_size]
         """
         self.eval()
         with torch.no_grad():
@@ -270,27 +273,20 @@ class CausalEngine(nn.Module):
         self, 
         x: torch.Tensor, 
         mode: str = 'standard'
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        获取决策得分（中间表示）
+        获取决策得分（中间表示），始终返回分布参数。
         
         Args:
             x: 输入特征 [batch_size, input_size]
             mode: 推理模式
             
         Returns:
-            - deterministic模式: 决策得分 [batch_size, output_size]
-            - 其他模式: (位置, 尺度) 决策得分分布参数
+            (位置, 尺度) 决策得分分布参数
         """
         self.eval()
         with torch.no_grad():
-            # 获取因果表征
-            mu_U, gamma_U = self.abduction_net(x)
-            
-            # 获取决策得分
-            decision_scores = self.action_net(mu_U, gamma_U, mode)
-            
-            return decision_scores
+            return self._get_decision_scores(x, mode)
     
     def set_inference_mode(self, mode: str):
         """
@@ -315,8 +311,9 @@ class CausalEngine(nn.Module):
         return {
             'input_size': self.input_size,
             'output_size': self.output_size,
-            'hidden_size': self.hidden_size,
+            'causal_size': self.causal_size,
             'task_type': self.task_type.value,
+            'task_head': self.task_head.__class__.__name__,
             'total_parameters': sum(p.numel() for p in self.parameters()),
             'trainable_parameters': sum(p.numel() for p in self.parameters() if p.requires_grad),
         }
@@ -332,11 +329,12 @@ class CausalEngine(nn.Module):
 CausalEngine Mathematical Framework:
 =====================================
 
-Architecture: {self.input_size} → {self.hidden_size} → {self.output_size}
+Architecture: {self.input_size} → {self.causal_size} → {self.output_size}
 Task Type: {self.task_type.value.title()}
+Task Head: {self.task_head.__class__.__name__}
 
 Three-Stage Pipeline:
-1. Abduction: X ∈ R^{self.input_size} → U ~ Cauchy(μ_U, γ_U) ∈ R^{self.hidden_size}
+1. Abduction: X ∈ R^{self.input_size} → U ~ Cauchy(μ_U, γ_U) ∈ R^{self.causal_size}
 2. Action: U → S ~ Cauchy(μ_S, γ_S) ∈ R^{self.output_size}  
 3. Activation: S → Y ∈ R^{self.output_size}
 
@@ -361,7 +359,7 @@ Total Parameters: {sum(p.numel() for p in self.parameters())}
 def create_causal_regressor(
     input_size: int,
     output_size: int = 1,
-    hidden_size: int = None,
+    causal_size: int = None,
     **kwargs
 ) -> CausalEngine:
     """
@@ -370,7 +368,7 @@ def create_causal_regressor(
     Args:
         input_size: 输入特征维度
         output_size: 输出维度（默认1）
-        hidden_size: 隐藏维度
+        causal_size: 因果维度
         **kwargs: 其他CausalEngine参数
         
     Returns:
@@ -379,7 +377,7 @@ def create_causal_regressor(
     return CausalEngine(
         input_size=input_size,
         output_size=output_size,
-        hidden_size=hidden_size,
+        causal_size=causal_size,
         task_type='regression',
         **kwargs
     )
@@ -388,7 +386,7 @@ def create_causal_regressor(
 def create_causal_classifier(
     input_size: int,
     n_classes: int,
-    hidden_size: int = None,
+    causal_size: int = None,
     **kwargs
 ) -> CausalEngine:
     """
@@ -397,8 +395,8 @@ def create_causal_classifier(
     Args:
         input_size: 输入特征维度
         n_classes: 类别数量
-        hidden_size: 隐藏维度
-        **kwargs: 其他CausalEngine参数
+        causal_size: 因果维度
+        **kwargs: 其他CausalEngine参数 (例如 ovr_threshold, learnable_threshold)
         
     Returns:
         engine: CausalEngine分类器
@@ -406,7 +404,7 @@ def create_causal_classifier(
     return CausalEngine(
         input_size=input_size,
         output_size=n_classes,
-        hidden_size=hidden_size,
+        causal_size=causal_size,
         task_type='classification',
         **kwargs
     )
