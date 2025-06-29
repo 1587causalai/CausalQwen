@@ -98,7 +98,8 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
         tol=1e-4,
         random_state=None,
         verbose=False,
-        alpha=0.0
+        alpha=0.0,
+        batch_size='auto'
     ):
         self.repre_size = repre_size
         self.causal_size = causal_size
@@ -118,6 +119,7 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
         self.random_state = random_state
         self.verbose = verbose
         self.alpha = alpha
+        self.batch_size = batch_size
         
         # Will be set during fit
         self.engine_ = None
@@ -200,19 +202,47 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
         # Setup optimizer
         optimizer = optim.Adam(self.engine_.parameters(), lr=self.learning_rate, weight_decay=self.alpha)
         
+        # Determine batch size
+        n_samples = X_train.shape[0]
+        if self.batch_size == 'auto':
+            batch_size = min(200, n_samples)
+        elif self.batch_size is None:
+            batch_size = n_samples  # Full-batch training
+        else:
+            batch_size = min(self.batch_size, n_samples)
+        
         # Training loop
         best_val_loss = float('inf')
         no_improve_count = 0
         best_state_dict = None
         
         for epoch in range(self.max_iter):
-            # Training step
+            # Training step with mini-batches
             self.engine_.train()
-            optimizer.zero_grad()
+            epoch_loss = 0.0
+            n_batches = 0
             
-            loss = self.engine_.compute_loss(X_train_tensor, y_train_tensor, mode=self.mode)
-            loss.backward()
-            optimizer.step()
+            # Shuffle data for each epoch
+            indices = torch.randperm(n_samples)
+            X_train_shuffled = X_train_tensor[indices]
+            y_train_shuffled = y_train_tensor[indices]
+            
+            # Mini-batch training
+            for i in range(0, n_samples, batch_size):
+                end_idx = min(i + batch_size, n_samples)
+                X_batch = X_train_shuffled[i:end_idx]
+                y_batch = y_train_shuffled[i:end_idx]
+                
+                optimizer.zero_grad()
+                loss = self.engine_.compute_loss(X_batch, y_batch, mode=self.mode)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                n_batches += 1
+            
+            # Average loss for the epoch
+            avg_epoch_loss = epoch_loss / n_batches
             
             # Validation step
             if self.early_stopping and X_val is not None:
@@ -237,7 +267,7 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
                         break
             
             if self.verbose and (epoch + 1) % 100 == 0:
-                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {loss.item():.6f}")
+                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {avg_epoch_loss:.6f}")
         
         self.n_iter_ = epoch + 1
         
@@ -246,7 +276,7 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
                          len(self.abduction_hidden_layers) + 2)  # +2 for input and output layers
         self.n_outputs_ = len(self.classes_)  # Number of classes
         self.out_activation_ = 'softmax'  # Multi-class classification output
-        self.loss_ = loss.item()  # Final training loss
+        self.loss_ = avg_epoch_loss  # Final training loss
         
         if self.verbose:
             print(f"MLPCausalClassifier fitted with {X.shape[0]} samples, "
@@ -499,7 +529,8 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
         random_state=None,
         verbose=False,
         activation='relu',
-        alpha=0.0001
+        alpha=0.0001,
+        batch_size='auto'
     ):
         self.hidden_layer_sizes = hidden_layer_sizes
         self.max_iter = max_iter
@@ -512,6 +543,7 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
         self.verbose = verbose
         self.activation = activation
         self.alpha = alpha
+        self.batch_size = batch_size
         
         # Will be set during fit
         self.model_ = None
@@ -605,20 +637,48 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
         optimizer = optim.Adam(self.model_.parameters(), lr=self.learning_rate, weight_decay=self.alpha)
         criterion = nn.CrossEntropyLoss()
         
+        # Determine batch size
+        n_samples = X_train.shape[0]
+        if self.batch_size == 'auto':
+            batch_size = min(200, n_samples)
+        elif self.batch_size is None:
+            batch_size = n_samples  # Full-batch training
+        else:
+            batch_size = min(self.batch_size, n_samples)
+        
         # Training loop
         best_val_loss = float('inf')
         no_improve_count = 0
         best_state_dict = None
         
         for epoch in range(self.max_iter):
-            # Training step
+            # Training step with mini-batches
             self.model_.train()
-            optimizer.zero_grad()
+            epoch_loss = 0.0
+            n_batches = 0
             
-            outputs = self.model_(X_train_tensor)
-            loss = criterion(outputs, y_train_tensor)
-            loss.backward()
-            optimizer.step()
+            # Shuffle data for each epoch
+            indices = torch.randperm(n_samples)
+            X_train_shuffled = X_train_tensor[indices]
+            y_train_shuffled = y_train_tensor[indices]
+            
+            # Mini-batch training
+            for i in range(0, n_samples, batch_size):
+                end_idx = min(i + batch_size, n_samples)
+                X_batch = X_train_shuffled[i:end_idx]
+                y_batch = y_train_shuffled[i:end_idx]
+                
+                optimizer.zero_grad()
+                outputs = self.model_(X_batch)
+                loss = criterion(outputs, y_batch)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                n_batches += 1
+            
+            # Average loss for the epoch
+            avg_epoch_loss = epoch_loss / n_batches
             
             # Validation step
             if self.early_stopping and X_val is not None:
@@ -643,7 +703,7 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
                         break
             
             if self.verbose and (epoch + 1) % 100 == 0:
-                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {loss.item():.6f}")
+                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {avg_epoch_loss:.6f}")
         
         self.n_iter_ = epoch + 1
         
@@ -651,7 +711,7 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
         self.n_layers_ = len(self.hidden_layer_sizes) + 1  # +1 for output layer
         self.n_outputs_ = len(self.classes_)  # Number of classes
         self.out_activation_ = 'softmax'  # Multi-class classification output
-        self.loss_ = loss.item()  # Final training loss
+        self.loss_ = avg_epoch_loss  # Final training loss
         
         if self.verbose:
             print(f"MLPPytorchClassifier fitted with {X.shape[0]} samples, "

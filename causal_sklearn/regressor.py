@@ -96,7 +96,8 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         tol=1e-4,
         random_state=None,
         verbose=False,
-        alpha=0.0
+        alpha=0.0,
+        batch_size='auto'
     ):
         self.repre_size = repre_size
         self.causal_size = causal_size
@@ -115,6 +116,7 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         self.random_state = random_state
         self.verbose = verbose
         self.alpha = alpha
+        self.batch_size = batch_size
         
         # Will be set during fit
         self.engine_ = None
@@ -192,19 +194,47 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         # Setup optimizer
         optimizer = optim.Adam(self.engine_.parameters(), lr=self.learning_rate)
         
+        # Determine batch size
+        n_samples = X_train.shape[0]
+        if self.batch_size == 'auto':
+            batch_size = min(200, n_samples)
+        elif self.batch_size is None:
+            batch_size = n_samples  # Full-batch training
+        else:
+            batch_size = min(self.batch_size, n_samples)
+        
         # Training loop
         best_val_loss = float('inf')
         no_improve_count = 0
         best_state_dict = None
         
         for epoch in range(self.max_iter):
-            # Training step
+            # Training step with mini-batches
             self.engine_.train()
-            optimizer.zero_grad()
+            epoch_loss = 0.0
+            n_batches = 0
             
-            loss = self.engine_.compute_loss(X_train_tensor, y_train_tensor, mode=self.mode)
-            loss.backward()
-            optimizer.step()
+            # Shuffle data for each epoch
+            indices = torch.randperm(n_samples)
+            X_train_shuffled = X_train_tensor[indices]
+            y_train_shuffled = y_train_tensor[indices]
+            
+            # Mini-batch training
+            for i in range(0, n_samples, batch_size):
+                end_idx = min(i + batch_size, n_samples)
+                X_batch = X_train_shuffled[i:end_idx]
+                y_batch = y_train_shuffled[i:end_idx]
+                
+                optimizer.zero_grad()
+                loss = self.engine_.compute_loss(X_batch, y_batch, mode=self.mode)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                n_batches += 1
+            
+            # Average loss for the epoch
+            avg_epoch_loss = epoch_loss / n_batches
             
             # Validation step
             if self.early_stopping and X_val is not None:
@@ -229,7 +259,7 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
                         break
             
             if self.verbose and (epoch + 1) % 100 == 0:
-                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {loss.item():.6f}")
+                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {avg_epoch_loss:.6f}")
         
         self.n_iter_ = epoch + 1
         
@@ -238,7 +268,7 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
                          len(self.abduction_hidden_layers) + 2)  # +2 for input and output layers
         self.n_outputs_ = 1  # Regression has single output
         self.out_activation_ = 'identity'  # Linear output for regression
-        self.loss_ = loss.item()  # Final training loss
+        self.loss_ = avg_epoch_loss  # Final training loss
         
         if self.verbose:
             print(f"MLPCausalRegressor fitted with {X.shape[0]} samples, {X.shape[1]} features")
@@ -427,7 +457,8 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         random_state=None,
         verbose=False,
         activation='relu',
-        alpha=0.0001
+        alpha=0.0001,
+        batch_size='auto'
     ):
         self.hidden_layer_sizes = hidden_layer_sizes
         self.max_iter = max_iter
@@ -440,6 +471,7 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         self.verbose = verbose
         self.activation = activation
         self.alpha = alpha
+        self.batch_size = batch_size
         
         # Will be set during fit
         self.model_ = None
@@ -526,20 +558,48 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         optimizer = optim.Adam(self.model_.parameters(), lr=self.learning_rate, weight_decay=self.alpha)
         criterion = nn.MSELoss()
         
+        # Determine batch size
+        n_samples = X_train.shape[0]
+        if self.batch_size == 'auto':
+            batch_size = min(200, n_samples)
+        elif self.batch_size is None:
+            batch_size = n_samples  # Full-batch training
+        else:
+            batch_size = min(self.batch_size, n_samples)
+        
         # Training loop
         best_val_loss = float('inf')
         no_improve_count = 0
         best_state_dict = None
         
         for epoch in range(self.max_iter):
-            # Training step
+            # Training step with mini-batches
             self.model_.train()
-            optimizer.zero_grad()
+            epoch_loss = 0.0
+            n_batches = 0
             
-            outputs = self.model_(X_train_tensor)
-            loss = criterion(outputs.squeeze(), y_train_tensor)
-            loss.backward()
-            optimizer.step()
+            # Shuffle data for each epoch
+            indices = torch.randperm(n_samples)
+            X_train_shuffled = X_train_tensor[indices]
+            y_train_shuffled = y_train_tensor[indices]
+            
+            # Mini-batch training
+            for i in range(0, n_samples, batch_size):
+                end_idx = min(i + batch_size, n_samples)
+                X_batch = X_train_shuffled[i:end_idx]
+                y_batch = y_train_shuffled[i:end_idx]
+                
+                optimizer.zero_grad()
+                outputs = self.model_(X_batch)
+                loss = criterion(outputs.squeeze(), y_batch)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                n_batches += 1
+            
+            # Average loss for the epoch
+            avg_epoch_loss = epoch_loss / n_batches
             
             # Validation step
             if self.early_stopping and X_val is not None:
@@ -564,7 +624,7 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
                         break
             
             if self.verbose and (epoch + 1) % 100 == 0:
-                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {loss.item():.6f}")
+                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {avg_epoch_loss:.6f}")
         
         self.n_iter_ = epoch + 1
         
@@ -572,7 +632,7 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         self.n_layers_ = len(self.hidden_layer_sizes) + 1  # +1 for output layer
         self.n_outputs_ = 1  # Regression has single output
         self.out_activation_ = 'identity'  # Linear output for regression
-        self.loss_ = loss.item()  # Final training loss
+        self.loss_ = avg_epoch_loss  # Final training loss
         
         if self.verbose:
             print(f"MLPPytorchRegressor fitted with {X.shape[0]} samples, {X.shape[1]} features")

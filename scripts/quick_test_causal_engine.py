@@ -40,14 +40,14 @@ warnings.filterwarnings('ignore')
 
 REGRESSION_CONFIG = {
     # 数据生成
-    'n_samples': 4000,
-    'n_features': 12,
-    'noise': 0.3,
+    'n_samples': 2000,
+    'n_features': 10,
+    'noise': 0.2,
     'random_state': 42,
-    'anomaly_ratio': 0.2,  # 异常数据比例
+    'anomaly_ratio': 0.1,  # 10% 异常数据
     
     # 网络结构
-    'perception_hidden_layers': (128, 64),
+    'perception_hidden_layers': (100, 50),
     'abduction_hidden_layers': (),
     'repre_size': None,
     'causal_size': None,
@@ -56,14 +56,15 @@ REGRESSION_CONFIG = {
     'gamma_init': 1.0,
     'b_noise_init': 1.0,
     'b_noise_trainable': True,
-    'alpha': 0.0, # L2正则化系数, Optim 中的 weight_decay
+    'alpha': 0.0001,
     
     # 训练参数
-    'max_iter': 3000,
-    'learning_rate': 0.01,
-    'patience': 300,
-    'tol': 1e-6,
+    'max_iter': 1000,
+    'learning_rate': 0.001,
+    'patience': 100,
+    'tol': 1e-4,
     'validation_fraction': 0.2,
+    'batch_size': None,  # 统一使用全量训练(full-batch)
     
     # 测试控制
     'test_sklearn': True,
@@ -99,8 +100,9 @@ CLASSIFICATION_CONFIG = {
     'max_iter': 3000,
     'learning_rate': 0.01,
     'patience': 300,
-    'tol': 1e-6,
+    'tol': 1e-4,  # 更接近sklearn默认tolerance
     'validation_fraction': 0.2,
+    'batch_size': None,  # 统一使用全量训练(full-batch)
     
     # 测试控制
     'test_sklearn': True,
@@ -171,7 +173,7 @@ def generate_classification_data(config):
         stratify=y,
         anomaly_ratio=config['label_noise_ratio'], 
         anomaly_type='classification',
-        classification_anomaly_strategy='shuffle'
+        anomaly_strategy='shuffle'
     )
     
     # 数据不再进行标准化
@@ -201,7 +203,8 @@ def train_sklearn_regressor(data, config):
         n_iter_no_change=config['patience'],
         tol=config['tol'],
         random_state=config['random_state'],
-        alpha=config['alpha']
+        alpha=config['alpha'],
+        batch_size=len(data['X_train']) if config['batch_size'] is None else config['batch_size']
     )
     
     model.fit(data['X_train'], data['y_train'])
@@ -224,7 +227,8 @@ def train_sklearn_classifier(data, config):
         n_iter_no_change=config['patience'],
         tol=config['tol'],
         random_state=config['random_state'],
-        alpha=config['alpha']
+        alpha=config['alpha'],
+        batch_size=len(data['X_train']) if config['batch_size'] is None else config['batch_size']
     )
     
     model.fit(data['X_train'], data['y_train'])
@@ -248,7 +252,8 @@ def train_pytorch_regressor(data, config):
         tol=config['tol'],
         random_state=config['random_state'],
         verbose=config['verbose'],
-        alpha=config['alpha']
+        alpha=config['alpha'],
+        batch_size=len(data['X_train']) if config['batch_size'] is None else config['batch_size']
     )
     
     model.fit(data['X_train'], data['y_train'])
@@ -273,7 +278,8 @@ def train_pytorch_classifier(data, config):
         tol=config['tol'],
         random_state=config['random_state'],
         verbose=config['verbose'],
-        alpha=config['alpha']
+        alpha=config['alpha'],
+        batch_size=len(data['X_train']) if config['batch_size'] is None else config['batch_size']
     )
     
     model.fit(data['X_train'], data['y_train'])
@@ -305,7 +311,8 @@ def train_causal_regressor(data, config, mode='standard'):
         tol=config['tol'],
         random_state=config['random_state'],
         verbose=config['verbose'],
-        alpha=config['alpha']
+        alpha=config['alpha'],
+        batch_size=len(data['X_train']) if config['batch_size'] is None else config['batch_size']
     )
     
     model.fit(data['X_train'], data['y_train'])
@@ -338,7 +345,8 @@ def train_causal_classifier(data, config, mode='standard'):
         tol=config['tol'],
         random_state=config['random_state'],
         verbose=config['verbose'],
-        alpha=config['alpha']
+        alpha=config['alpha'],
+        batch_size=len(data['X_train']) if config['batch_size'] is None else config['batch_size']
     )
     
     model.fit(data['X_train'], data['y_train'])
@@ -587,6 +595,6 @@ def quick_classification_test():
 
 if __name__ == "__main__":
     # 你可以选择运行以下任一函数:
-    main()                        # 完整测试
-    # quick_regression_test()     # 快速回归测试
+    # main()                        # 完整测试
+    quick_regression_test()     # 快速回归测试
     # quick_classification_test() # 快速分类测试
