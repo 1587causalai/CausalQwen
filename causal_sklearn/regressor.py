@@ -800,8 +800,6 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
         
         # Will be set during fit
         self.model_ = None
-        self.scaler_X_ = None
-        self.scaler_y_ = None
         self.n_features_in_ = None
         self.n_iter_ = None
         self.n_layers_ = None
@@ -855,22 +853,17 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
         # Store input info
         self.n_features_in_ = X.shape[1]
         
-        # Data preprocessing
-        self.scaler_X_ = StandardScaler()
-        self.scaler_y_ = StandardScaler()
-        
-        X_scaled = self.scaler_X_.fit_transform(X)
-        y_scaled = self.scaler_y_.fit_transform(y.reshape(-1, 1)).ravel()
+        # Data is assumed to be pre-scaled. No internal scaling.
         
         # Split for validation if early stopping is enabled
         if self.early_stopping:
             X_train, X_val, y_train, y_val = train_test_split(
-                X_scaled, y_scaled,
+                X, y,
                 test_size=self.validation_fraction,
                 random_state=self.random_state
             )
         else:
-            X_train, y_train = X_scaled, y_scaled
+            X_train, y_train = X, y
             X_val, y_val = None, None
         
         # Convert to torch tensors
@@ -999,20 +992,17 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
         if not hasattr(self, 'model_') or self.model_ is None:
             raise ValueError("This MLPHuberRegressor instance is not fitted yet.")
         
-        # Preprocess input
-        X_scaled = self.scaler_X_.transform(X)
+        # Input data is assumed to be pre-scaled
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        X_tensor = torch.FloatTensor(X_scaled).to(device)
+        X_tensor = torch.FloatTensor(X).to(device)
         
         # Predict
         self.model_.eval()
         with torch.no_grad():
             y_pred_scaled = self.model_(X_tensor).squeeze().cpu().numpy()
         
-        # Inverse transform
-        y_pred = self.scaler_y_.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
-        
-        return y_pred
+        # Output is on the scaled scale, benchmark runner should inverse transform if needed
+        return y_pred_scaled
     
     def score(self, X, y, sample_weight=None):
         """
@@ -1122,8 +1112,6 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
         
         # Will be set during fit
         self.model_ = None
-        self.scaler_X_ = None
-        self.scaler_y_ = None
         self.n_features_in_ = None
         self.n_iter_ = None
         self.n_layers_ = None
@@ -1185,22 +1173,17 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
         # Store input info
         self.n_features_in_ = X.shape[1]
         
-        # Data preprocessing
-        self.scaler_X_ = StandardScaler()
-        self.scaler_y_ = StandardScaler()
-        
-        X_scaled = self.scaler_X_.fit_transform(X)
-        y_scaled = self.scaler_y_.fit_transform(y.reshape(-1, 1)).ravel()
+        # Data is assumed to be pre-scaled. No internal scaling.
         
         # Split for validation if early stopping is enabled
         if self.early_stopping:
             X_train, X_val, y_train, y_val = train_test_split(
-                X_scaled, y_scaled,
+                X, y,
                 test_size=self.validation_fraction,
                 random_state=self.random_state
             )
         else:
-            X_train, y_train = X_scaled, y_scaled
+            X_train, y_train = X, y
             X_val, y_val = None, None
         
         # Convert to torch tensors
@@ -1328,20 +1311,17 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
         if not hasattr(self, 'model_') or self.model_ is None:
             raise ValueError("This MLPPinballRegressor instance is not fitted yet.")
         
-        # Preprocess input
-        X_scaled = self.scaler_X_.transform(X)
+        # Input data is assumed to be pre-scaled
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        X_tensor = torch.FloatTensor(X_scaled).to(device)
+        X_tensor = torch.FloatTensor(X).to(device)
         
         # Predict
         self.model_.eval()
         with torch.no_grad():
             y_pred_scaled = self.model_(X_tensor).squeeze().cpu().numpy()
         
-        # Inverse transform
-        y_pred = self.scaler_y_.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
-        
-        return y_pred
+        # Output is on the scaled scale, benchmark runner should inverse transform if needed
+        return y_pred_scaled
     
     def score(self, X, y, sample_weight=None):
         """
@@ -1446,8 +1426,6 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
         
         # Will be set during fit
         self.model_ = None
-        self.scaler_X_ = None
-        self.scaler_y_ = None
         self.n_features_in_ = None
         self.n_iter_ = None
         self.n_layers_ = None
@@ -1507,22 +1485,17 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
         # Store input info
         self.n_features_in_ = X.shape[1]
         
-        # Data preprocessing
-        self.scaler_X_ = StandardScaler()
-        self.scaler_y_ = StandardScaler()
-        
-        X_scaled = self.scaler_X_.fit_transform(X)
-        y_scaled = self.scaler_y_.fit_transform(y.reshape(-1, 1)).ravel()
+        # Data is assumed to be pre-scaled. No internal scaling.
         
         # Split for validation if early stopping is enabled
         if self.early_stopping:
             X_train, X_val, y_train, y_val = train_test_split(
-                X_scaled, y_scaled,
+                X, y,
                 test_size=self.validation_fraction,
                 random_state=self.random_state
             )
         else:
-            X_train, y_train = X_scaled, y_scaled
+            X_train, y_train = X, y
             X_val, y_val = None, None
         
         # Convert to torch tensors
@@ -1650,20 +1623,17 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
         if not hasattr(self, 'model_') or self.model_ is None:
             raise ValueError("This MLPCauchyRegressor instance is not fitted yet.")
         
-        # Preprocess input
-        X_scaled = self.scaler_X_.transform(X)
+        # Input data is assumed to be pre-scaled
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        X_tensor = torch.FloatTensor(X_scaled).to(device)
+        X_tensor = torch.FloatTensor(X).to(device)
         
         # Predict
         self.model_.eval()
         with torch.no_grad():
             y_pred_scaled = self.model_(X_tensor).squeeze().cpu().numpy()
         
-        # Inverse transform
-        y_pred = self.scaler_y_.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
-        
-        return y_pred
+        # Output is on the scaled scale, benchmark runner should inverse transform if needed
+        return y_pred_scaled
     
     def score(self, X, y, sample_weight=None):
         """
