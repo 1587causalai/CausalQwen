@@ -19,7 +19,7 @@ import warnings
 
 from .._causal_engine import create_causal_regressor, create_causal_classifier
 from .methods import BaselineMethodFactory, MethodDependencyChecker, filter_available_methods
-from ..utils import add_label_anomalies
+from ..utils import causal_split
 from .method_configs import (
     get_method_config, get_method_group, get_task_recommendations, 
     validate_methods, expand_method_groups, list_available_methods
@@ -254,21 +254,32 @@ class BaselineBenchmark:
             verbose: 是否显示详细信息
             **kwargs: 其他参数
         """
-        # 1. 初始数据分割
-        if task_type == 'classification':
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size, random_state=random_state, stratify=y)
-        else:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size, random_state=random_state)
-
-        # 2. 从训练集中分割出验证集
-        if task_type == 'classification':
-            X_train, X_val, y_train, y_val = train_test_split(
-                X_train, y_train, test_size=val_size, random_state=random_state, stratify=y_train)
-        else:
-            X_train, X_val, y_train, y_val = train_test_split(
-                X_train, y_train, test_size=val_size, random_state=random_state)
+        # 1. 统一数据分割和异常注入
+        if verbose and anomaly_ratio > 0:
+            print(f"🔥 数据准备: 分割数据集并注入 {anomaly_ratio:.1%} 的标签异常...")
+        
+        # 统一使用causal_split进行数据分割和异常注入
+        stratify_option = y if task_type == 'classification' else None
+        
+        X_train_full, X_test, y_train_full, y_test = causal_split(
+            X, y,
+            test_size=test_size,
+            random_state=random_state,
+            anomaly_ratio=anomaly_ratio,
+            anomaly_type=task_type,
+            stratify=stratify_option,
+            anomaly_strategy=kwargs.get('anomaly_strategy', 'shuffle')
+        )
+        
+        # 2. 从(可能带噪的)训练集中分割出验证集
+        # 注意：这里的y_train_full可能已经带有噪声
+        stratify_val_option = y_train_full if task_type == 'classification' else None
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_train_full, y_train_full, 
+            test_size=val_size, 
+            random_state=random_state, 
+            stratify=stratify_val_option
+        )
         
         # 3. 标准化
         # 特征标准化
@@ -290,28 +301,7 @@ class BaselineBenchmark:
             y_val_scaled = y_val
             y_test_scaled = y_test
 
-        # 4. 在标准化的训练和验证标签上添加异常（如果需要）
-        if anomaly_ratio > 0:
-            if verbose:
-                print(f"🔥 为训练集和验证集添加 {anomaly_ratio:.1%} 的标签异常...")
-            
-            regression_anomaly_strategy = kwargs.get('regression_anomaly_strategy', 'shuffle')
-            classification_anomaly_strategy = kwargs.get('classification_anomaly_strategy', 'flip')
-            
-            y_train_scaled = add_label_anomalies(
-                y_train_scaled, 
-                anomaly_ratio, 
-                task_type,
-                regression_anomaly_strategy=regression_anomaly_strategy,
-                classification_anomaly_strategy=classification_anomaly_strategy
-            )
-            y_val_scaled = add_label_anomalies(
-                y_val_scaled, 
-                anomaly_ratio, 
-                task_type,
-                regression_anomaly_strategy=regression_anomaly_strategy,
-                classification_anomaly_strategy=classification_anomaly_strategy
-            )
+        # 4. 异常注入步骤已被causal_split取代，此处无需操作
         
         results = {}
         

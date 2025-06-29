@@ -40,14 +40,15 @@ warnings.filterwarnings('ignore')
 
 REGRESSION_CONFIG = {
     # 数据生成
-    'n_samples': 2000,
-    'n_features': 10,
-    'noise': 0.2,
+    'n_samples': 4000,  # 更大规模
+    'n_features': 12,
+    'noise': 1.0,
     'random_state': 42,
-    'anomaly_ratio': 0.1,  # 10% 异常数据
+    'test_size': 0.1,  # 测试集比例
+    'anomaly_ratio': 0.2,  # 无异常数据，纯净环境
     
     # 网络结构
-    'perception_hidden_layers': (100, 50),
+    'perception_hidden_layers': (128, 64),  # 更深的网络
     'abduction_hidden_layers': (),
     'repre_size': None,
     'causal_size': None,
@@ -56,13 +57,13 @@ REGRESSION_CONFIG = {
     'gamma_init': 1.0,
     'b_noise_init': 1.0,
     'b_noise_trainable': True,
-    'alpha': 0.0001,
+    'alpha': 0.0001, # 添加L2正则化，与sklearn默认一致
     
     # 训练参数
-    'max_iter': 1000,
-    'learning_rate': 0.001,
-    'patience': 100,
-    'tol': 1e-4,
+    'max_iter': 2000,  # 减少最大迭代次数
+    'learning_rate': 0.01,  # 降低学习率，更接近sklearn默认
+    'patience': 50,  # 减少patience，更接近sklearn默认
+    'tol': 1e-4,  # 更接近sklearn默认tolerance
     'validation_fraction': 0.2,
     'batch_size': None,  # 统一使用全量训练(full-batch)
     
@@ -75,16 +76,17 @@ REGRESSION_CONFIG = {
 }
 
 CLASSIFICATION_CONFIG = {
-    # 数据生成
-    'n_samples': 3000,
-    'n_features': 15,
+    # 数据生成 - 与sklearn更相似的设置
+    'n_samples': 4000,  # 减少样本量，更像sklearn经典测试
+    'n_features': 10,   # 减少特征数
     'n_classes': 3,
-    'class_sep': 0.8,
+    'class_sep': 1.0,   # 提高类别分离度
     'random_state': 42,
-    'label_noise_ratio': 0.2,
+    'test_size': 0.2,   # 测试集比例
+    'label_noise_ratio': 0.3,  # 降低标签噪声
     
-    # 网络结构
-    'perception_hidden_layers': (128, 64),
+    # 网络结构 - 更简单的网络
+    'perception_hidden_layers': (100,),  # sklearn默认结构
     'abduction_hidden_layers': (),
     'repre_size': None,
     'causal_size': None,
@@ -93,15 +95,15 @@ CLASSIFICATION_CONFIG = {
     'gamma_init': 1.0,
     'b_noise_init': 1.0,
     'b_noise_trainable': True,
-    'ovr_threshold': 0.0,
-    'alpha': 0.0001,
+    'ovr_threshold': 2.0,
+    'alpha': 0.0,  # 匹配sklearn默认L2正则化
     
-    # 训练参数
-    'max_iter': 3000,
-    'learning_rate': 0.01,
-    'patience': 300,
-    'tol': 1e-4,  # 更接近sklearn默认tolerance
-    'validation_fraction': 0.2,
+    # 训练参数 - 更接近sklearn默认值
+    'max_iter': 3000,   # 减少最大迭代次数
+    'learning_rate': 0.01,  # 使用sklearn默认学习率
+    'patience': 10,     # 使用sklearn默认patience
+    'tol': 1e-4,        # 匹配sklearn默认tolerance
+    'validation_fraction': 0.2,  # 使用sklearn默认验证集比例
     'batch_size': None,  # 统一使用全量训练(full-batch)
     
     # 测试控制
@@ -131,7 +133,7 @@ def generate_regression_data(config):
     # 进行数据分割，包含异常注入
     X_train, X_test, y_train, y_test = causal_split(
         X, y, 
-        test_size=0.2, 
+        test_size=config['test_size'], 
         random_state=config['random_state'],
         anomaly_ratio=config['anomaly_ratio'], 
         anomaly_type='regression'
@@ -168,7 +170,7 @@ def generate_classification_data(config):
     # 进行数据分割，包含异常注入
     X_train, X_test, y_train, y_test = causal_split(
         X, y, 
-        test_size=0.2, 
+        test_size=config['test_size'], 
         random_state=config['random_state'],
         stratify=y,
         anomaly_ratio=config['label_noise_ratio'], 
@@ -595,6 +597,6 @@ def quick_classification_test():
 
 if __name__ == "__main__":
     # 你可以选择运行以下任一函数:
-    # main()                        # 完整测试
-    quick_regression_test()     # 快速回归测试
+    main()                        # 完整测试
+    # quick_regression_test()     # 快速回归测试
     # quick_classification_test() # 快速分类测试
