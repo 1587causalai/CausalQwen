@@ -277,24 +277,28 @@ class ExtendedCaliforniaHousingTutorial:
             
             # CausalEngine配置
             causal_modes=self.config.CAUSAL_MODES,
-            hidden_sizes=self.config.CAUSAL_HIDDEN_SIZES,
-            max_epochs=self.config.CAUSAL_MAX_EPOCHS,
-            lr=self.config.CAUSAL_LR,
-            patience=self.config.CAUSAL_PATIENCE,
-            tol=self.config.CAUSAL_TOL,
+            
+            # --- 统一参数，适配所有模型 ---
+            # 神经网络结构 (适配 'hidden_sizes' 和 'hidden_layer_sizes')
+            hidden_sizes=self.config.NN_HIDDEN_SIZES,
+            hidden_layer_sizes=self.config.NN_HIDDEN_SIZES,
+
+            # 训练轮数 (适配 'max_epochs' 和 'max_iter')
+            max_epochs=self.config.NN_MAX_EPOCHS,
+            max_iter=self.config.NN_MAX_EPOCHS,
+
+            # 学习率 (适配 'lr' 和 'learning_rate')
+            lr=self.config.NN_LEARNING_RATE,
+            learning_rate=self.config.NN_LEARNING_RATE,
+
+            # 早停参数
+            patience=self.config.NN_PATIENCE,
+            tol=self.config.NN_TOLERANCE,
+            
+            # CausalEngine专属参数
             gamma_init=self.config.CAUSAL_GAMMA_INIT,
             b_noise_init=self.config.CAUSAL_B_NOISE_INIT,
             b_noise_trainable=self.config.CAUSAL_B_NOISE_TRAINABLE,
-            
-            # sklearn参数
-            sklearn_hidden_layer_sizes=self.config.SKLEARN_HIDDEN_LAYERS,
-            sklearn_max_iter=self.config.SKLEARN_MAX_ITER,
-            sklearn_learning_rate=self.config.SKLEARN_LR,
-            
-            # PyTorch参数  
-            pytorch_epochs=self.config.PYTORCH_EPOCHS,
-            pytorch_lr=self.config.PYTORCH_LR,
-            pytorch_patience=self.config.PYTORCH_PATIENCE,
             
             verbose=self.config.VERBOSE
         )
@@ -336,26 +340,30 @@ class ExtendedCaliforniaHousingTutorial:
                 # 基准方法配置
                 baseline_methods=self.config.BASELINE_METHODS,
                 
-                # CausalEngine配置（使用所有模式进行鲁棒性分析）
+                # --- 统一参数，适配所有模型 ---
+                # CausalEngine配置
                 causal_modes=self.config.CAUSAL_MODES,
-                hidden_sizes=self.config.CAUSAL_HIDDEN_SIZES,
-                max_epochs=self.config.CAUSAL_MAX_EPOCHS,
-                lr=self.config.CAUSAL_LR,
-                patience=self.config.CAUSAL_PATIENCE,
-                tol=self.config.CAUSAL_TOL,
+
+                # 神经网络结构 (适配 'hidden_sizes' 和 'hidden_layer_sizes')
+                hidden_sizes=self.config.NN_HIDDEN_SIZES,
+                hidden_layer_sizes=self.config.NN_HIDDEN_SIZES,
+
+                # 训练轮数 (适配 'max_epochs' 和 'max_iter')
+                max_epochs=self.config.NN_MAX_EPOCHS,
+                max_iter=self.config.NN_MAX_EPOCHS,
+
+                # 学习率 (适配 'lr' 和 'learning_rate')
+                lr=self.config.NN_LEARNING_RATE,
+                learning_rate=self.config.NN_LEARNING_RATE,
+
+                # 早停参数
+                patience=self.config.NN_PATIENCE,
+                tol=self.config.NN_TOLERANCE,
+
+                # CausalEngine专属参数
                 gamma_init=self.config.CAUSAL_GAMMA_INIT,
                 b_noise_init=self.config.CAUSAL_B_NOISE_INIT,
                 b_noise_trainable=self.config.CAUSAL_B_NOISE_TRAINABLE,
-                
-                # sklearn参数
-                sklearn_hidden_layer_sizes=self.config.SKLEARN_HIDDEN_LAYERS,
-                sklearn_max_iter=self.config.SKLEARN_MAX_ITER,
-                sklearn_learning_rate=self.config.SKLEARN_LR,
-                
-                # PyTorch参数
-                pytorch_epochs=self.config.PYTORCH_EPOCHS,
-                pytorch_lr=self.config.PYTORCH_LR,
-                pytorch_patience=self.config.PYTORCH_PATIENCE,
                 
                 verbose=False  # 降低输出量
             )

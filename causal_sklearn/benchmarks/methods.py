@@ -314,7 +314,20 @@ class BaselineMethodFactory:
         if not self.torch_available:
             raise RuntimeError("PyTorch未安装，无法创建稳健MLP模型")
         
-        return RobustMLP(task_type=task_type, loss_type=loss_type, **params)
+        # 导入新的sklearn兼容稳健MLP类
+        from ..regressor import MLPHuberRegressor, MLPPinballRegressor, MLPCauchyRegressor
+        
+        if task_type != 'regression':
+            raise NotImplementedError("稳健MLP目前只支持回归任务")
+        
+        if loss_type == 'huber':
+            return MLPHuberRegressor(**params)
+        elif loss_type == 'pinball':
+            return MLPPinballRegressor(**params)
+        elif loss_type == 'cauchy':
+            return MLPCauchyRegressor(**params)
+        else:
+            raise ValueError(f"不支持的损失类型: {loss_type}")
     
     def train_and_evaluate(self, method_name: str, model: Any, 
                           X_train: np.ndarray, y_train: np.ndarray,
@@ -328,10 +341,7 @@ class BaselineMethodFactory:
             包含验证集和测试集性能指标的字典
         """
         # 训练模型 - 支持早停的方法使用验证集
-        if method_name in ['mlp_huber', 'mlp_pinball_median', 'mlp_cauchy']:
-            # 稳健MLP使用自己的验证集早停机制
-            model.fit(X_train, y_train, eval_set=(X_val, y_val))
-        elif supports_early_stopping(method_name):
+        if supports_early_stopping(method_name):
             model = fit_with_early_stopping(
                 method_name, model, X_train, y_train, X_val, y_val, task_type
             )
@@ -472,169 +482,7 @@ def filter_available_methods(method_list: list) -> Tuple[list, list]:
     return available, unavailable
 
 
-# === 稳健MLP实现 ===
-
-class RobustMLP:
-    """
-    使用稳健损失函数的MLP回归器
-    
-    支持Huber损失和Pinball损失（分位数回归）
-    """
-    
-    def __init__(self, task_type='regression', loss_type='huber', 
-                 hidden_sizes=(128, 64), epochs=3000, lr=0.03, 
-                 patience=50, tol=1e-4, huber_delta=1.0, quantile=0.5,
-                 **kwargs):
-        import torch
-        import torch.nn as nn
-        import torch.optim as optim
-        
-        self.task_type = task_type
-        self.loss_type = loss_type
-        self.hidden_sizes = hidden_sizes
-        self.epochs = epochs
-        self.lr = lr
-        self.patience = patience
-        self.tol = tol
-        self.huber_delta = huber_delta
-        self.quantile = quantile
-        
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = None
-        self.scaler_X = StandardScaler()
-        self.scaler_y = StandardScaler()
-        
-        # 损失函数定义
-        if loss_type == 'huber':
-            self.criterion = nn.HuberLoss(delta=huber_delta)
-        elif loss_type == 'pinball':
-            self.criterion = self._pinball_loss
-        elif loss_type == 'cauchy':
-            self.criterion = self._cauchy_loss
-        else:
-            raise ValueError(f"不支持的损失类型: {loss_type}")
-    
-    def _pinball_loss(self, y_pred, y_true):
-        """Pinball损失（分位数损失）"""
-        import torch
-        error = y_true - y_pred
-        loss = torch.where(error >= 0, 
-                          self.quantile * error, 
-                          (self.quantile - 1) * error)
-        return loss.mean()
-    
-    def _cauchy_loss(self, y_pred, y_true):
-        """Cauchy损失函数: log(1 + (y - yhat)^2)"""
-        import torch
-        error = y_true - y_pred
-        loss = torch.log(1 + error**2)
-        return loss.mean()
-    
-    def _build_model(self, input_size):
-        """构建神经网络模型"""
-        import torch.nn as nn
-        
-        layers = []
-        prev_size = input_size
-        
-        # 隐藏层
-        for hidden_size in self.hidden_sizes:
-            layers.append(nn.Linear(prev_size, hidden_size))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(0.1))
-            prev_size = hidden_size
-        
-        # 输出层
-        if self.task_type == 'regression':
-            layers.append(nn.Linear(prev_size, 1))
-        else:
-            # 分类任务暂不支持
-            raise NotImplementedError("稳健MLP暂不支持分类任务")
-        
-        return nn.Sequential(*layers)
-    
-    def fit(self, X, y, eval_set=None):
-        """训练模型"""
-        import torch
-        import torch.optim as optim
-        
-        # 数据预处理
-        X_scaled = self.scaler_X.fit_transform(X)
-        y_scaled = self.scaler_y.fit_transform(y.reshape(-1, 1)).ravel()
-        
-        # 转换为tensor
-        X_tensor = torch.FloatTensor(X_scaled).to(self.device)
-        y_tensor = torch.FloatTensor(y_scaled).to(self.device)
-        
-        # 构建模型
-        self.model = self._build_model(X.shape[1]).to(self.device)
-        optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
-        
-        # 验证集处理
-        if eval_set is not None:
-            X_val, y_val = eval_set
-            X_val_scaled = self.scaler_X.transform(X_val)
-            y_val_scaled = self.scaler_y.transform(y_val.reshape(-1, 1)).ravel()
-            X_val_tensor = torch.FloatTensor(X_val_scaled).to(self.device)
-            y_val_tensor = torch.FloatTensor(y_val_scaled).to(self.device)
-        
-        # 训练循环
-        best_val_loss = float('inf')
-        patience_counter = 0
-        
-        for epoch in range(self.epochs):
-            # 训练
-            self.model.train()
-            optimizer.zero_grad()
-            
-            y_pred = self.model(X_tensor).squeeze()
-            loss = self.criterion(y_pred, y_tensor)
-            
-            loss.backward()
-            optimizer.step()
-            
-            # 验证
-            if eval_set is not None:
-                self.model.eval()
-                with torch.no_grad():
-                    y_val_pred = self.model(X_val_tensor).squeeze()
-                    val_loss = self.criterion(y_val_pred, y_val_tensor)
-                
-                # 早停检查
-                if val_loss < best_val_loss - self.tol:
-                    best_val_loss = val_loss
-                    patience_counter = 0
-                    # 保存最佳模型
-                    best_model_state = self.model.state_dict().copy()
-                else:
-                    patience_counter += 1
-                
-                if patience_counter >= self.patience:
-                    # 恢复最佳模型
-                    if 'best_model_state' in locals():
-                        self.model.load_state_dict(best_model_state)
-                    break
-        
-        return self
-    
-    def predict(self, X):
-        """预测"""
-        import torch
-        
-        if self.model is None:
-            raise ValueError("模型尚未训练")
-        
-        X_scaled = self.scaler_X.transform(X)
-        X_tensor = torch.FloatTensor(X_scaled).to(self.device)
-        
-        self.model.eval()
-        with torch.no_grad():
-            y_pred_scaled = self.model(X_tensor).squeeze().cpu().numpy()
-        
-        # 反标准化
-        y_pred = self.scaler_y.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
-        
-        return y_pred
+# === 稳健MLP实现已迁移到 robust_regressors.py ===
 
 
 # === 早停支持方法 ===

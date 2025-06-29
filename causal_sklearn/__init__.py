@@ -15,13 +15,18 @@ CausalEngine 核心创新：
 """
 
 from ._version import __version__
-from .regressor import MLPCausalRegressor
-from .classifier import MLPCausalClassifier
+from .regressor import MLPCausalRegressor, MLPPytorchRegressor, MLPHuberRegressor, MLPPinballRegressor, MLPCauchyRegressor
+from .classifier import MLPCausalClassifier, MLPPytorchClassifier
 
 __all__ = [
     "__version__",
     "MLPCausalRegressor", 
-    "MLPCausalClassifier"
+    "MLPPytorchRegressor",
+    "MLPCausalClassifier",
+    "MLPPytorchClassifier",
+    "MLPHuberRegressor",
+    "MLPPinballRegressor", 
+    "MLPCauchyRegressor"
 ]
 
 # Package metadata

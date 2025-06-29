@@ -1,10 +1,18 @@
 """
-MLPCausalRegressor: Scikit-learn compatible causal neural network regressor.
+MLPCausalRegressor and Robust Regressors: Scikit-learn compatible neural network regressors.
+
+This module provides:
+- MLPCausalRegressor: Causal reasoning-based regressor
+- MLPPytorchRegressor: Standard PyTorch MLP regressor for baseline comparison
+- MLPHuberRegressor: Robust regressor with Huber loss
+- MLPPinballRegressor: Quantile regressor with Pinball loss
+- MLPCauchyRegressor: Robust regressor with Cauchy loss
 """
 
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_X_y, check_array
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 import numpy as np
 import torch
 import torch.nn as nn
@@ -700,6 +708,984 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         from sklearn.metrics import r2_score
         return r2_score(y, self.predict(X), sample_weight=sample_weight)
         
+    def _more_tags(self):
+        """Additional tags for sklearn compatibility."""
+        return {
+            'requires_y': True,
+            'requires_fit': True,
+            '_xfail_checks': {
+                'check_parameters_default_constructible': 'PyTorch parameters have complex defaults'
+            }
+        }
+
+
+# =============================================================================
+# Robust Neural Network Regressors
+# =============================================================================
+
+class MLPHuberRegressor(BaseEstimator, RegressorMixin):
+    """
+    Multi-layer Perceptron regressor with Huber loss.
+    
+    Uses Huber loss function which is less sensitive to outliers than squared error.
+    Provides sklearn-compatible interface with fit/predict methods.
+    
+    Parameters
+    ----------
+    hidden_layer_sizes : tuple, default=(100,)
+        The ith element represents the number of neurons in the ith hidden layer.
+        
+    max_iter : int, default=1000
+        Maximum number of training iterations.
+        
+    learning_rate : float, default=0.001
+        Learning rate for optimization.
+        
+    early_stopping : bool, default=True
+        Whether to use early stopping during training.
+        
+    validation_fraction : float, default=0.1
+        Fraction of training data to use for validation when early_stopping=True.
+        
+    n_iter_no_change : int, default=10
+        Number of iterations with no improvement to wait before early stopping.
+        
+    tol : float, default=1e-4
+        Tolerance for optimization convergence.
+        
+    delta : float, default=1.0
+        The delta parameter for Huber loss. Controls the transition from 
+        quadratic to linear loss.
+        
+    random_state : int, default=None
+        Random state for reproducibility.
+        
+    verbose : bool, default=False
+        Whether to print progress messages.
+        
+    alpha : float, default=0.0
+        L2 regularization parameter.
+        
+    batch_size : int or 'auto', default='auto'
+        Size of minibatches for stochastic optimizers.
+    """
+    
+    def __init__(
+        self,
+        hidden_layer_sizes=(100,),
+        max_iter=1000,
+        learning_rate=0.001,
+        early_stopping=True,
+        validation_fraction=0.1,
+        n_iter_no_change=10,
+        tol=1e-4,
+        delta=1.0,
+        random_state=None,
+        verbose=False,
+        alpha=0.0,
+        batch_size='auto'
+    ):
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.max_iter = max_iter
+        self.learning_rate = learning_rate
+        self.early_stopping = early_stopping
+        self.validation_fraction = validation_fraction
+        self.n_iter_no_change = n_iter_no_change
+        self.tol = tol
+        self.delta = delta
+        self.random_state = random_state
+        self.verbose = verbose
+        self.alpha = alpha
+        self.batch_size = batch_size
+        
+        # Will be set during fit
+        self.model_ = None
+        self.scaler_X_ = None
+        self.scaler_y_ = None
+        self.n_features_in_ = None
+        self.n_iter_ = None
+        self.n_layers_ = None
+        self.n_outputs_ = None
+        self.out_activation_ = None
+        self.loss_ = None
+        
+    def _build_model(self, input_size):
+        """Build the neural network model"""
+        layers = []
+        prev_size = input_size
+        
+        # Hidden layers
+        for hidden_size in self.hidden_layer_sizes:
+            layers.append(nn.Linear(prev_size, hidden_size))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(0.1))
+            prev_size = hidden_size
+        
+        # Output layer
+        layers.append(nn.Linear(prev_size, 1))
+        
+        return nn.Sequential(*layers)
+    
+    def fit(self, X, y, sample_weight=None):
+        """
+        Fit the Huber regressor to training data.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training data.
+        y : array-like of shape (n_samples,)
+            Target values.
+        sample_weight : array-like of shape (n_samples,), default=None
+            Sample weights (not implemented yet).
+            
+        Returns
+        -------
+        self : object
+            Returns self for method chaining.
+        """
+        # Set random seed
+        if self.random_state is not None:
+            torch.manual_seed(self.random_state)
+            np.random.seed(self.random_state)
+            
+        # Validate input
+        X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
+        
+        # Store input info
+        self.n_features_in_ = X.shape[1]
+        
+        # Data preprocessing
+        self.scaler_X_ = StandardScaler()
+        self.scaler_y_ = StandardScaler()
+        
+        X_scaled = self.scaler_X_.fit_transform(X)
+        y_scaled = self.scaler_y_.fit_transform(y.reshape(-1, 1)).ravel()
+        
+        # Split for validation if early stopping is enabled
+        if self.early_stopping:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_scaled, y_scaled,
+                test_size=self.validation_fraction,
+                random_state=self.random_state
+            )
+        else:
+            X_train, y_train = X_scaled, y_scaled
+            X_val, y_val = None, None
+        
+        # Convert to torch tensors
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X_train_tensor = torch.FloatTensor(X_train).to(device)
+        y_train_tensor = torch.FloatTensor(y_train).to(device)
+        
+        if X_val is not None:
+            X_val_tensor = torch.FloatTensor(X_val).to(device)
+            y_val_tensor = torch.FloatTensor(y_val).to(device)
+        
+        # Build model
+        self.model_ = self._build_model(self.n_features_in_).to(device)
+        
+        # Setup optimizer and loss
+        optimizer = optim.Adam(self.model_.parameters(), lr=self.learning_rate, weight_decay=self.alpha)
+        criterion = nn.HuberLoss(delta=self.delta)
+        
+        # Determine batch size
+        n_samples = X_train.shape[0]
+        if self.batch_size == 'auto':
+            batch_size = min(200, n_samples)
+        elif self.batch_size is None:
+            batch_size = n_samples  # Full-batch training
+        else:
+            batch_size = min(self.batch_size, n_samples)
+        
+        # Training loop
+        best_val_loss = float('inf')
+        no_improve_count = 0
+        best_state_dict = None
+        
+        for epoch in range(self.max_iter):
+            # Training step with mini-batches
+            self.model_.train()
+            epoch_loss = 0.0
+            n_batches = 0
+            
+            # Shuffle data for each epoch
+            indices = torch.randperm(n_samples)
+            X_train_shuffled = X_train_tensor[indices]
+            y_train_shuffled = y_train_tensor[indices]
+            
+            # Mini-batch training
+            for i in range(0, n_samples, batch_size):
+                end_idx = min(i + batch_size, n_samples)
+                X_batch = X_train_shuffled[i:end_idx]
+                y_batch = y_train_shuffled[i:end_idx]
+                
+                optimizer.zero_grad()
+                outputs = self.model_(X_batch).squeeze()
+                loss = criterion(outputs, y_batch)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                n_batches += 1
+            
+            # Average loss for the epoch
+            avg_epoch_loss = epoch_loss / n_batches
+            
+            # Validation step
+            if self.early_stopping and X_val is not None:
+                self.model_.eval()
+                with torch.no_grad():
+                    val_outputs = self.model_(X_val_tensor).squeeze()
+                    val_loss = criterion(val_outputs, y_val_tensor).item()
+                    
+                    if val_loss < best_val_loss - self.tol:
+                        best_val_loss = val_loss
+                        no_improve_count = 0
+                        best_state_dict = self.model_.state_dict().copy()
+                    else:
+                        no_improve_count += 1
+                        
+                    if no_improve_count >= self.n_iter_no_change:
+                        if self.verbose:
+                            print(f"Early stopping at epoch {epoch + 1}")
+                        # Restore the best model
+                        if best_state_dict is not None:
+                            self.model_.load_state_dict(best_state_dict)
+                        break
+            
+            if self.verbose and (epoch + 1) % 100 == 0:
+                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {avg_epoch_loss:.6f}")
+        
+        self.n_iter_ = epoch + 1
+        
+        # Set sklearn compatibility attributes
+        self.n_layers_ = len(self.hidden_layer_sizes) + 1  # +1 for output layer
+        self.n_outputs_ = 1  # Regression has single output
+        self.out_activation_ = 'identity'  # Linear output for regression
+        self.loss_ = avg_epoch_loss  # Final training loss
+        
+        if self.verbose:
+            print(f"MLPHuberRegressor fitted with {X.shape[0]} samples, {X.shape[1]} features")
+            print(f"Training completed in {self.n_iter_} iterations")
+            
+        return self
+    
+    def predict(self, X):
+        """
+        Predict using the Huber regressor.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data.
+            
+        Returns
+        -------
+        y_pred : ndarray of shape (n_samples,)
+            Predicted values.
+        """
+        # Validate input
+        X = check_array(X, accept_sparse=False)
+        
+        if self.n_features_in_ is None:
+            raise ValueError("This MLPHuberRegressor instance is not fitted yet.")
+            
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(f"X has {X.shape[1]} features, but MLPHuberRegressor "
+                           f"is expecting {self.n_features_in_} features.")
+        
+        # Check if model is fitted
+        if not hasattr(self, 'model_') or self.model_ is None:
+            raise ValueError("This MLPHuberRegressor instance is not fitted yet.")
+        
+        # Preprocess input
+        X_scaled = self.scaler_X_.transform(X)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X_tensor = torch.FloatTensor(X_scaled).to(device)
+        
+        # Predict
+        self.model_.eval()
+        with torch.no_grad():
+            y_pred_scaled = self.model_(X_tensor).squeeze().cpu().numpy()
+        
+        # Inverse transform
+        y_pred = self.scaler_y_.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
+        
+        return y_pred
+    
+    def score(self, X, y, sample_weight=None):
+        """
+        Return the coefficient of determination R² of the prediction.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Test samples.
+        y : array-like of shape (n_samples,)
+            True values for X.
+        sample_weight : array-like of shape (n_samples,), default=None
+            Sample weights.
+            
+        Returns
+        -------
+        score : float
+            R² of self.predict(X) wrt. y.
+        """
+        from sklearn.metrics import r2_score
+        return r2_score(y, self.predict(X), sample_weight=sample_weight)
+    
+    def _more_tags(self):
+        """Additional tags for sklearn compatibility."""
+        return {
+            'requires_y': True,
+            'requires_fit': True,
+            '_xfail_checks': {
+                'check_parameters_default_constructible': 'PyTorch parameters have complex defaults'
+            }
+        }
+
+
+class MLPPinballRegressor(BaseEstimator, RegressorMixin):
+    """
+    Multi-layer Perceptron regressor with Pinball (Quantile) loss.
+    
+    Uses Pinball loss function for quantile regression, robust to outliers.
+    Provides sklearn-compatible interface with fit/predict methods.
+    
+    Parameters
+    ----------
+    hidden_layer_sizes : tuple, default=(100,)
+        The ith element represents the number of neurons in the ith hidden layer.
+        
+    max_iter : int, default=1000
+        Maximum number of training iterations.
+        
+    learning_rate : float, default=0.001
+        Learning rate for optimization.
+        
+    early_stopping : bool, default=True
+        Whether to use early stopping during training.
+        
+    validation_fraction : float, default=0.1
+        Fraction of training data to use for validation when early_stopping=True.
+        
+    n_iter_no_change : int, default=10
+        Number of iterations with no improvement to wait before early stopping.
+        
+    tol : float, default=1e-4
+        Tolerance for optimization convergence.
+        
+    quantile : float, default=0.5
+        The quantile to estimate. 0.5 corresponds to median regression.
+        
+    random_state : int, default=None
+        Random state for reproducibility.
+        
+    verbose : bool, default=False
+        Whether to print progress messages.
+        
+    alpha : float, default=0.0
+        L2 regularization parameter.
+        
+    batch_size : int or 'auto', default='auto'
+        Size of minibatches for stochastic optimizers.
+    """
+    
+    def __init__(
+        self,
+        hidden_layer_sizes=(100,),
+        max_iter=1000,
+        learning_rate=0.001,
+        early_stopping=True,
+        validation_fraction=0.1,
+        n_iter_no_change=10,
+        tol=1e-4,
+        quantile=0.5,
+        random_state=None,
+        verbose=False,
+        alpha=0.0,
+        batch_size='auto'
+    ):
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.max_iter = max_iter
+        self.learning_rate = learning_rate
+        self.early_stopping = early_stopping
+        self.validation_fraction = validation_fraction
+        self.n_iter_no_change = n_iter_no_change
+        self.tol = tol
+        self.quantile = quantile
+        self.random_state = random_state
+        self.verbose = verbose
+        self.alpha = alpha
+        self.batch_size = batch_size
+        
+        # Will be set during fit
+        self.model_ = None
+        self.scaler_X_ = None
+        self.scaler_y_ = None
+        self.n_features_in_ = None
+        self.n_iter_ = None
+        self.n_layers_ = None
+        self.n_outputs_ = None
+        self.out_activation_ = None
+        self.loss_ = None
+    
+    def _pinball_loss(self, y_pred, y_true):
+        """Pinball loss (quantile loss)"""
+        error = y_true - y_pred
+        loss = torch.where(error >= 0, 
+                          self.quantile * error, 
+                          (self.quantile - 1) * error)
+        return loss.mean()
+        
+    def _build_model(self, input_size):
+        """Build the neural network model"""
+        layers = []
+        prev_size = input_size
+        
+        # Hidden layers
+        for hidden_size in self.hidden_layer_sizes:
+            layers.append(nn.Linear(prev_size, hidden_size))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(0.1))
+            prev_size = hidden_size
+        
+        # Output layer
+        layers.append(nn.Linear(prev_size, 1))
+        
+        return nn.Sequential(*layers)
+    
+    def fit(self, X, y, sample_weight=None):
+        """
+        Fit the Pinball regressor to training data.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training data.
+        y : array-like of shape (n_samples,)
+            Target values.
+        sample_weight : array-like of shape (n_samples,), default=None
+            Sample weights (not implemented yet).
+            
+        Returns
+        -------
+        self : object
+            Returns self for method chaining.
+        """
+        # Set random seed
+        if self.random_state is not None:
+            torch.manual_seed(self.random_state)
+            np.random.seed(self.random_state)
+            
+        # Validate input
+        X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
+        
+        # Store input info
+        self.n_features_in_ = X.shape[1]
+        
+        # Data preprocessing
+        self.scaler_X_ = StandardScaler()
+        self.scaler_y_ = StandardScaler()
+        
+        X_scaled = self.scaler_X_.fit_transform(X)
+        y_scaled = self.scaler_y_.fit_transform(y.reshape(-1, 1)).ravel()
+        
+        # Split for validation if early stopping is enabled
+        if self.early_stopping:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_scaled, y_scaled,
+                test_size=self.validation_fraction,
+                random_state=self.random_state
+            )
+        else:
+            X_train, y_train = X_scaled, y_scaled
+            X_val, y_val = None, None
+        
+        # Convert to torch tensors
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X_train_tensor = torch.FloatTensor(X_train).to(device)
+        y_train_tensor = torch.FloatTensor(y_train).to(device)
+        
+        if X_val is not None:
+            X_val_tensor = torch.FloatTensor(X_val).to(device)
+            y_val_tensor = torch.FloatTensor(y_val).to(device)
+        
+        # Build model
+        self.model_ = self._build_model(self.n_features_in_).to(device)
+        
+        # Setup optimizer
+        optimizer = optim.Adam(self.model_.parameters(), lr=self.learning_rate, weight_decay=self.alpha)
+        
+        # Determine batch size
+        n_samples = X_train.shape[0]
+        if self.batch_size == 'auto':
+            batch_size = min(200, n_samples)
+        elif self.batch_size is None:
+            batch_size = n_samples  # Full-batch training
+        else:
+            batch_size = min(self.batch_size, n_samples)
+        
+        # Training loop
+        best_val_loss = float('inf')
+        no_improve_count = 0
+        best_state_dict = None
+        
+        for epoch in range(self.max_iter):
+            # Training step with mini-batches
+            self.model_.train()
+            epoch_loss = 0.0
+            n_batches = 0
+            
+            # Shuffle data for each epoch
+            indices = torch.randperm(n_samples)
+            X_train_shuffled = X_train_tensor[indices]
+            y_train_shuffled = y_train_tensor[indices]
+            
+            # Mini-batch training
+            for i in range(0, n_samples, batch_size):
+                end_idx = min(i + batch_size, n_samples)
+                X_batch = X_train_shuffled[i:end_idx]
+                y_batch = y_train_shuffled[i:end_idx]
+                
+                optimizer.zero_grad()
+                outputs = self.model_(X_batch).squeeze()
+                loss = self._pinball_loss(outputs, y_batch)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                n_batches += 1
+            
+            # Average loss for the epoch
+            avg_epoch_loss = epoch_loss / n_batches
+            
+            # Validation step
+            if self.early_stopping and X_val is not None:
+                self.model_.eval()
+                with torch.no_grad():
+                    val_outputs = self.model_(X_val_tensor).squeeze()
+                    val_loss = self._pinball_loss(val_outputs, y_val_tensor).item()
+                    
+                    if val_loss < best_val_loss - self.tol:
+                        best_val_loss = val_loss
+                        no_improve_count = 0
+                        best_state_dict = self.model_.state_dict().copy()
+                    else:
+                        no_improve_count += 1
+                        
+                    if no_improve_count >= self.n_iter_no_change:
+                        if self.verbose:
+                            print(f"Early stopping at epoch {epoch + 1}")
+                        # Restore the best model
+                        if best_state_dict is not None:
+                            self.model_.load_state_dict(best_state_dict)
+                        break
+            
+            if self.verbose and (epoch + 1) % 100 == 0:
+                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {avg_epoch_loss:.6f}")
+        
+        self.n_iter_ = epoch + 1
+        
+        # Set sklearn compatibility attributes
+        self.n_layers_ = len(self.hidden_layer_sizes) + 1  # +1 for output layer
+        self.n_outputs_ = 1  # Regression has single output
+        self.out_activation_ = 'identity'  # Linear output for regression
+        self.loss_ = avg_epoch_loss  # Final training loss
+        
+        if self.verbose:
+            print(f"MLPPinballRegressor fitted with {X.shape[0]} samples, {X.shape[1]} features")
+            print(f"Training completed in {self.n_iter_} iterations")
+            
+        return self
+    
+    def predict(self, X):
+        """
+        Predict using the Pinball regressor.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data.
+            
+        Returns
+        -------
+        y_pred : ndarray of shape (n_samples,)
+            Predicted values.
+        """
+        # Validate input
+        X = check_array(X, accept_sparse=False)
+        
+        if self.n_features_in_ is None:
+            raise ValueError("This MLPPinballRegressor instance is not fitted yet.")
+            
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(f"X has {X.shape[1]} features, but MLPPinballRegressor "
+                           f"is expecting {self.n_features_in_} features.")
+        
+        # Check if model is fitted
+        if not hasattr(self, 'model_') or self.model_ is None:
+            raise ValueError("This MLPPinballRegressor instance is not fitted yet.")
+        
+        # Preprocess input
+        X_scaled = self.scaler_X_.transform(X)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X_tensor = torch.FloatTensor(X_scaled).to(device)
+        
+        # Predict
+        self.model_.eval()
+        with torch.no_grad():
+            y_pred_scaled = self.model_(X_tensor).squeeze().cpu().numpy()
+        
+        # Inverse transform
+        y_pred = self.scaler_y_.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
+        
+        return y_pred
+    
+    def score(self, X, y, sample_weight=None):
+        """
+        Return the coefficient of determination R² of the prediction.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Test samples.
+        y : array-like of shape (n_samples,)
+            True values for X.
+        sample_weight : array-like of shape (n_samples,), default=None
+            Sample weights.
+            
+        Returns
+        -------
+        score : float
+            R² of self.predict(X) wrt. y.
+        """
+        from sklearn.metrics import r2_score
+        return r2_score(y, self.predict(X), sample_weight=sample_weight)
+    
+    def _more_tags(self):
+        """Additional tags for sklearn compatibility."""
+        return {
+            'requires_y': True,
+            'requires_fit': True,
+            '_xfail_checks': {
+                'check_parameters_default_constructible': 'PyTorch parameters have complex defaults'
+            }
+        }
+
+
+class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
+    """
+    Multi-layer Perceptron regressor with Cauchy loss.
+    
+    Uses Cauchy loss function for robust regression against heavy-tailed distributions.
+    Provides sklearn-compatible interface with fit/predict methods.
+    
+    Parameters
+    ----------
+    hidden_layer_sizes : tuple, default=(100,)
+        The ith element represents the number of neurons in the ith hidden layer.
+        
+    max_iter : int, default=1000
+        Maximum number of training iterations.
+        
+    learning_rate : float, default=0.001
+        Learning rate for optimization.
+        
+    early_stopping : bool, default=True
+        Whether to use early stopping during training.
+        
+    validation_fraction : float, default=0.1
+        Fraction of training data to use for validation when early_stopping=True.
+        
+    n_iter_no_change : int, default=10
+        Number of iterations with no improvement to wait before early stopping.
+        
+    tol : float, default=1e-4
+        Tolerance for optimization convergence.
+        
+    random_state : int, default=None
+        Random state for reproducibility.
+        
+    verbose : bool, default=False
+        Whether to print progress messages.
+        
+    alpha : float, default=0.0
+        L2 regularization parameter.
+        
+    batch_size : int or 'auto', default='auto'
+        Size of minibatches for stochastic optimizers.
+    """
+    
+    def __init__(
+        self,
+        hidden_layer_sizes=(100,),
+        max_iter=1000,
+        learning_rate=0.001,
+        early_stopping=True,
+        validation_fraction=0.1,
+        n_iter_no_change=10,
+        tol=1e-4,
+        random_state=None,
+        verbose=False,
+        alpha=0.0,
+        batch_size='auto'
+    ):
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.max_iter = max_iter
+        self.learning_rate = learning_rate
+        self.early_stopping = early_stopping
+        self.validation_fraction = validation_fraction
+        self.n_iter_no_change = n_iter_no_change
+        self.tol = tol
+        self.random_state = random_state
+        self.verbose = verbose
+        self.alpha = alpha
+        self.batch_size = batch_size
+        
+        # Will be set during fit
+        self.model_ = None
+        self.scaler_X_ = None
+        self.scaler_y_ = None
+        self.n_features_in_ = None
+        self.n_iter_ = None
+        self.n_layers_ = None
+        self.n_outputs_ = None
+        self.out_activation_ = None
+        self.loss_ = None
+    
+    def _cauchy_loss(self, y_pred, y_true):
+        """Cauchy loss function: log(1 + (y - yhat)^2)"""
+        error = y_true - y_pred
+        loss = torch.log(1 + error**2)
+        return loss.mean()
+        
+    def _build_model(self, input_size):
+        """Build the neural network model"""
+        layers = []
+        prev_size = input_size
+        
+        # Hidden layers
+        for hidden_size in self.hidden_layer_sizes:
+            layers.append(nn.Linear(prev_size, hidden_size))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(0.1))
+            prev_size = hidden_size
+        
+        # Output layer
+        layers.append(nn.Linear(prev_size, 1))
+        
+        return nn.Sequential(*layers)
+    
+    def fit(self, X, y, sample_weight=None):
+        """
+        Fit the Cauchy regressor to training data.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training data.
+        y : array-like of shape (n_samples,)
+            Target values.
+        sample_weight : array-like of shape (n_samples,), default=None
+            Sample weights (not implemented yet).
+            
+        Returns
+        -------
+        self : object
+            Returns self for method chaining.
+        """
+        # Set random seed
+        if self.random_state is not None:
+            torch.manual_seed(self.random_state)
+            np.random.seed(self.random_state)
+            
+        # Validate input
+        X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
+        
+        # Store input info
+        self.n_features_in_ = X.shape[1]
+        
+        # Data preprocessing
+        self.scaler_X_ = StandardScaler()
+        self.scaler_y_ = StandardScaler()
+        
+        X_scaled = self.scaler_X_.fit_transform(X)
+        y_scaled = self.scaler_y_.fit_transform(y.reshape(-1, 1)).ravel()
+        
+        # Split for validation if early stopping is enabled
+        if self.early_stopping:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_scaled, y_scaled,
+                test_size=self.validation_fraction,
+                random_state=self.random_state
+            )
+        else:
+            X_train, y_train = X_scaled, y_scaled
+            X_val, y_val = None, None
+        
+        # Convert to torch tensors
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X_train_tensor = torch.FloatTensor(X_train).to(device)
+        y_train_tensor = torch.FloatTensor(y_train).to(device)
+        
+        if X_val is not None:
+            X_val_tensor = torch.FloatTensor(X_val).to(device)
+            y_val_tensor = torch.FloatTensor(y_val).to(device)
+        
+        # Build model
+        self.model_ = self._build_model(self.n_features_in_).to(device)
+        
+        # Setup optimizer
+        optimizer = optim.Adam(self.model_.parameters(), lr=self.learning_rate, weight_decay=self.alpha)
+        
+        # Determine batch size
+        n_samples = X_train.shape[0]
+        if self.batch_size == 'auto':
+            batch_size = min(200, n_samples)
+        elif self.batch_size is None:
+            batch_size = n_samples  # Full-batch training
+        else:
+            batch_size = min(self.batch_size, n_samples)
+        
+        # Training loop
+        best_val_loss = float('inf')
+        no_improve_count = 0
+        best_state_dict = None
+        
+        for epoch in range(self.max_iter):
+            # Training step with mini-batches
+            self.model_.train()
+            epoch_loss = 0.0
+            n_batches = 0
+            
+            # Shuffle data for each epoch
+            indices = torch.randperm(n_samples)
+            X_train_shuffled = X_train_tensor[indices]
+            y_train_shuffled = y_train_tensor[indices]
+            
+            # Mini-batch training
+            for i in range(0, n_samples, batch_size):
+                end_idx = min(i + batch_size, n_samples)
+                X_batch = X_train_shuffled[i:end_idx]
+                y_batch = y_train_shuffled[i:end_idx]
+                
+                optimizer.zero_grad()
+                outputs = self.model_(X_batch).squeeze()
+                loss = self._cauchy_loss(outputs, y_batch)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                n_batches += 1
+            
+            # Average loss for the epoch
+            avg_epoch_loss = epoch_loss / n_batches
+            
+            # Validation step
+            if self.early_stopping and X_val is not None:
+                self.model_.eval()
+                with torch.no_grad():
+                    val_outputs = self.model_(X_val_tensor).squeeze()
+                    val_loss = self._cauchy_loss(val_outputs, y_val_tensor).item()
+                    
+                    if val_loss < best_val_loss - self.tol:
+                        best_val_loss = val_loss
+                        no_improve_count = 0
+                        best_state_dict = self.model_.state_dict().copy()
+                    else:
+                        no_improve_count += 1
+                        
+                    if no_improve_count >= self.n_iter_no_change:
+                        if self.verbose:
+                            print(f"Early stopping at epoch {epoch + 1}")
+                        # Restore the best model
+                        if best_state_dict is not None:
+                            self.model_.load_state_dict(best_state_dict)
+                        break
+            
+            if self.verbose and (epoch + 1) % 100 == 0:
+                print(f"Epoch {epoch + 1}/{self.max_iter}, Loss: {avg_epoch_loss:.6f}")
+        
+        self.n_iter_ = epoch + 1
+        
+        # Set sklearn compatibility attributes
+        self.n_layers_ = len(self.hidden_layer_sizes) + 1  # +1 for output layer
+        self.n_outputs_ = 1  # Regression has single output
+        self.out_activation_ = 'identity'  # Linear output for regression
+        self.loss_ = avg_epoch_loss  # Final training loss
+        
+        if self.verbose:
+            print(f"MLPCauchyRegressor fitted with {X.shape[0]} samples, {X.shape[1]} features")
+            print(f"Training completed in {self.n_iter_} iterations")
+            
+        return self
+    
+    def predict(self, X):
+        """
+        Predict using the Cauchy regressor.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data.
+            
+        Returns
+        -------
+        y_pred : ndarray of shape (n_samples,)
+            Predicted values.
+        """
+        # Validate input
+        X = check_array(X, accept_sparse=False)
+        
+        if self.n_features_in_ is None:
+            raise ValueError("This MLPCauchyRegressor instance is not fitted yet.")
+            
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(f"X has {X.shape[1]} features, but MLPCauchyRegressor "
+                           f"is expecting {self.n_features_in_} features.")
+        
+        # Check if model is fitted
+        if not hasattr(self, 'model_') or self.model_ is None:
+            raise ValueError("This MLPCauchyRegressor instance is not fitted yet.")
+        
+        # Preprocess input
+        X_scaled = self.scaler_X_.transform(X)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X_tensor = torch.FloatTensor(X_scaled).to(device)
+        
+        # Predict
+        self.model_.eval()
+        with torch.no_grad():
+            y_pred_scaled = self.model_(X_tensor).squeeze().cpu().numpy()
+        
+        # Inverse transform
+        y_pred = self.scaler_y_.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
+        
+        return y_pred
+    
+    def score(self, X, y, sample_weight=None):
+        """
+        Return the coefficient of determination R² of the prediction.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Test samples.
+        y : array-like of shape (n_samples,)
+            True values for X.
+        sample_weight : array-like of shape (n_samples,), default=None
+            Sample weights.
+            
+        Returns
+        -------
+        score : float
+            R² of self.predict(X) wrt. y.
+        """
+        from sklearn.metrics import r2_score
+        return r2_score(y, self.predict(X), sample_weight=sample_weight)
+    
     def _more_tags(self):
         """Additional tags for sklearn compatibility."""
         return {
