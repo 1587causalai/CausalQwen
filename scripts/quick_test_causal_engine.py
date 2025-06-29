@@ -143,8 +143,10 @@ class QuickTester:
             model = create_causal_regressor(
                 input_size=input_size,
                 output_size=output_size,
-                causal_size=hidden_sizes[0],
-                abd_hidden_layers=hidden_sizes[1:],
+                repre_size=hidden_sizes[0] if hidden_sizes else None,
+                causal_size=hidden_sizes[0] if hidden_sizes else None,
+                perception_hidden_layers=hidden_sizes,
+                abduction_hidden_layers=(),
                 gamma_init=gamma_init,
                 b_noise_init=b_noise_init,
                 b_noise_trainable=b_noise_trainable
@@ -154,8 +156,10 @@ class QuickTester:
             model = create_causal_classifier(
                 input_size=input_size,
                 n_classes=n_classes,
-                causal_size=hidden_sizes[0],
-                abd_hidden_layers=hidden_sizes[1:],
+                repre_size=hidden_sizes[0] if hidden_sizes else None,
+                causal_size=hidden_sizes[0] if hidden_sizes else None,
+                perception_hidden_layers=hidden_sizes,
+                abduction_hidden_layers=(),
                 gamma_init=gamma_init,
                 b_noise_init=b_noise_init,
                 b_noise_trainable=b_noise_trainable,
@@ -363,7 +367,8 @@ class QuickTester:
         # 3. CausalEngine deterministic模式
         if verbose: print("训练 MLPCausalRegressor (deterministic)...")
         causal_det = MLPCausalRegressor(
-            hidden_layer_sizes=hidden_layer_sizes,
+            perception_hidden_layers=hidden_layer_sizes,
+            abduction_hidden_layers=(),
             mode='deterministic',
             gamma_init=gamma_init,
             b_noise_init=b_noise_init,
@@ -401,7 +406,8 @@ class QuickTester:
         # 4. CausalEngine standard模式
         if verbose: print("训练 MLPCausalRegressor (standard)...")
         causal_std = MLPCausalRegressor(
-            hidden_layer_sizes=hidden_layer_sizes,
+            perception_hidden_layers=hidden_layer_sizes,
+            abduction_hidden_layers=(),
             mode='standard',
             gamma_init=gamma_init,
             b_noise_init=b_noise_init,
@@ -679,7 +685,7 @@ def main():
     print("   参数: γ_init=1.0, b_noise_init=1.0, ovr_threshold=0.0")
     print("   训练: max_iter=5000, lr=0.01, early_stop=True, patience=500, tol=1e-08")
     
-    # tester.test_classification()
+    tester.test_classification()
 
 
 if __name__ == "__main__":

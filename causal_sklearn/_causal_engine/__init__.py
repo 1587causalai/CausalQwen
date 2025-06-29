@@ -16,8 +16,9 @@ from .engine import (
 )
 
 from .networks import (
-    AbductionNetwork,
-    ActionNetwork
+    Perception,
+    Abduction,
+    Action
 )
 
 from .heads import (

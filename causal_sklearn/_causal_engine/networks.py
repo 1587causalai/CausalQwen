@@ -14,166 +14,64 @@ import torch.nn.functional as F
 from typing import Tuple, Union, Optional
 
 
-class AbductionNetwork(nn.Module):
+def build_mlp(
+    input_size: int,
+    output_size: Optional[int] = None,
+    hidden_layers: Optional[Tuple[int, ...]] = None,
+    activation: str = "relu",
+    dropout: float = 0.0,
+) -> nn.Module:
     """
-    归因网络：从特征推断个体因果表征
-    
-    将输入特征 X 映射到个体因果表征分布 U ~ Cauchy(μ_U, γ_U)
-    
-    数学框架：
-    - 输入: X ∈ R^{n_features}
-    - 输出: (μ_U, γ_U) ∈ R^{causal_size} × R^{causal_size}_+
-    - 分布: U ~ Cauchy(μ_U, γ_U)
-    
-    网络架构：
-    - loc_net: X → μ_U (位置网络)
-    - scale_net: X → γ_U (尺度网络，通过softplus确保正值)
-    
-    Args:
-        input_size: 输入特征维度
-        causal_size: 因果表征维度
-        abd_hidden_layers: MLP隐藏层配置 (n_neurons_1, n_neurons_2, ...)
-        activation: 激活函数名称
-        dropout: dropout比率
-        gamma_init: 尺度参数初始化值
+    构建一个多层感知机 (MLP).
+
+    参数:
+        input_size (int): 输入层的大小.
+        output_size (Optional[int]): 输出层的大小. 如果为 None, 默认为 input_size.
+        hidden_layers (Optional[Tuple[int, ...]]): 一个元组，指定每个隐藏层的神经元数量。
+                                                       如果为 None, 则构建一个从输入到输出的单层线性网络。
+        activation (str): 要使用的激活函数.
+        dropout (float): Dropout 比率.
+
+    返回:
+        nn.Module: 一个 PyTorch MLP 模块.
     """
+    if output_size is None:
+        output_size = input_size
+
+    if hidden_layers is None:
+        hidden_layers = ()
+
+    activation_fn = {
+        "relu": nn.ReLU,
+        "gelu": nn.GELU,
+        "leaky_relu": nn.LeakyReLU,
+        "sigmoid": nn.Sigmoid,
+        "tanh": nn.Tanh,
+    }.get(activation.lower(), nn.ReLU)
     
-    def __init__(
-        self,
-        input_size: int,
-        causal_size: int,
-        abd_hidden_layers: Tuple[int, ...] = (),
-        activation: str = 'relu',
-        dropout: float = 0.0,
-        gamma_init: float = 10.0
-    ):
-        super().__init__()
-        
-        self.input_size = input_size
-        self.causal_size = causal_size
-        self.gamma_init = gamma_init
-        
-        # 构建位置网络 loc_net: X → μ_U
-        self.loc_net = self._build_mlp(
-            input_size, causal_size, abd_hidden_layers, activation, dropout
-        )
-        
-        # 构建尺度网络 scale_net: X → log(γ_U) (softplus前)
-        self.scale_net = self._build_mlp(
-            input_size, causal_size, abd_hidden_layers, activation, dropout
-        )
-        
-        # 初始化权重
-        self._init_weights()
+    if not hidden_layers:
+        return nn.Linear(input_size, output_size)
     
-    def _build_mlp(
-        self,
-        input_size: int,
-        output_size: Optional[int] = None,
-        abd_hidden_layers: Optional[Tuple[int, ...]] = None,
-        activation: str = "relu",
-        dropout: float = 0.0,
-    ) -> nn.Module:
-        """
-        构建一个多层感知机 (MLP).
-
-        参数:
-            input_size (int): 输入层的大小.
-            output_size (Optional[int]): 输出层的大小. 如果为 None, 默认为 input_size.
-            abd_hidden_layers (Optional[Tuple[int, ...]]): 一个元组，指定每个隐藏层的神经元数量。
-                                                           如果为 None, 则构建一个从输入到输出的单层线性网络。
-            activation (str): 要使用的激活函数.
-            dropout (float): Dropout 比率.
-
-        返回:
-            nn.Module: 一个 PyTorch MLP 模块.
-        """
-        if output_size is None:
-            output_size = input_size
-
-        activation_fn = {
-            "relu": nn.ReLU,
-            "gelu": nn.GELU,
-            "leaky_relu": nn.LeakyReLU,
-            "sigmoid": nn.Sigmoid,
-            "tanh": nn.Tanh,
-        }.get(activation.lower(), nn.ReLU)
-        
-        if not abd_hidden_layers:
-            return nn.Linear(input_size, output_size)
-        
-        layers = []
-        current_size = input_size
-        
-        for layer_size in abd_hidden_layers:
-            layers.extend(
-                [
-                    nn.Linear(current_size, layer_size),
+    layers = []
+    current_size = input_size
+    
+    for layer_size in hidden_layers:
+        layers.extend(
+            [
+                nn.Linear(current_size, layer_size),
                 activation_fn(),
-                ]
-            )
-            if dropout > 0:
-                layers.append(nn.Dropout(dropout))
-            current_size = layer_size
-        
-        layers.append(nn.Linear(current_size, output_size))
-        
-        return nn.Sequential(*layers)
+            ]
+        )
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
+        current_size = layer_size
     
-    def _init_weights(self):
-        """初始化网络权重"""
-        # 位置网络：如果输入输出维度相同且无隐藏层，可以接近恒等初始化
-        if (self.input_size == self.causal_size and 
-            isinstance(self.loc_net, nn.Linear)):
-            # 接近恒等初始化
-            nn.init.eye_(self.loc_net.weight)
-            nn.init.zeros_(self.loc_net.bias)
-        else:
-            # 标准Xavier初始化
-            for module in self.loc_net.modules():
-                if isinstance(module, nn.Linear):
-                    nn.init.xavier_uniform_(module.weight)
-                    nn.init.zeros_(module.bias)
-        
-        # 尺度网络：最后一层初始化为常数，确保初始γ_U ≈ gamma_init
-        for module in self.scale_net.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.constant_(module.bias, 0.0)
-        
-        # 特别处理尺度网络的最后一层
-        if isinstance(self.scale_net, nn.Sequential):
-            final_layer = self.scale_net[-1]
-        else:
-            final_layer = self.scale_net
-        
-        if isinstance(final_layer, nn.Linear):
-            # 初始化为使 softplus(bias) ≈ gamma_init
-            init_bias = torch.log(torch.exp(torch.tensor(self.gamma_init)) - 1)
-            nn.init.constant_(final_layer.bias, init_bias.item())
-            nn.init.zeros_(final_layer.weight)
+    layers.append(nn.Linear(current_size, output_size))
     
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        前向传播
-        
-        Args:
-            x: 输入特征 [batch_size, input_size]
-            
-        Returns:
-            mu_U: 位置参数 [batch_size, causal_size]
-            gamma_U: 尺度参数 [batch_size, causal_size] (保证 > 0)
-        """
-        # 计算位置参数
-        mu_U = self.loc_net(x)
-        
-        # 计算尺度参数，使用softplus确保正值
-        gamma_U = F.softplus(self.scale_net(x))
-        
-        return mu_U, gamma_U
+    return nn.Sequential(*layers)
 
 
-class ActionNetwork(nn.Module):
+class Action(nn.Module):
     """
     行动网络：从个体表征到决策得分
     
@@ -293,3 +191,112 @@ class ActionNetwork(nn.Module):
         gamma_S = torch.matmul(gamma_U_final, torch.abs(self.weight).T)
         
         return mu_S, gamma_S
+
+
+class Perception(nn.Module):
+    """
+    感知网络：从原始输入 X 中提取高级特征 Z。
+    这是因果引擎的第一阶段，负责"看懂世界"。
+    """
+    def __init__(
+        self,
+        input_size: int,
+        repre_size: int,
+        hidden_layers: Optional[Tuple[int, ...]] = None,
+        activation: str = "relu",
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.input_size = input_size
+        self.repre_size = repre_size
+
+        self.network = build_mlp(
+            input_size=input_size,
+            output_size=repre_size,
+            hidden_layers=hidden_layers,
+            activation=activation,
+            dropout=dropout,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        前向传播：X -> Z
+        """
+        return self.network(x)
+
+
+class Abduction(nn.Module):
+    """
+    归因网络：从特征 Z 推断个体的内在因果表征 U。
+    这是因果引擎的第二阶段，负责"思考归因"。
+    
+    数学框架：
+    - 输入: Z ∈ R^{repre_size}
+    - 输出: (μ_U, γ_U) ∈ R^{causal_size} × R^{causal_size}_+
+    - 分布: U ~ Cauchy(μ_U, γ_U)
+    """
+    def __init__(
+        self,
+        repre_size: int,
+        causal_size: int,
+        hidden_layers: Optional[Tuple[int, ...]] = None,
+        activation: str = "relu",
+        dropout: float = 0.0,
+        gamma_init: float = 10.0,
+    ):
+        super().__init__()
+        self.repre_size = repre_size
+        self.causal_size = causal_size
+        self.gamma_init = gamma_init
+
+        # 构建位置网络 loc_net: Z → μ_U
+        self.loc_net = build_mlp(
+            repre_size, causal_size, hidden_layers, activation, dropout
+        )
+
+        # 构建尺度网络 scale_net: Z → log(γ_U) (softplus前)
+        self.scale_net = build_mlp(
+            repre_size, causal_size, hidden_layers, activation, dropout
+        )
+
+        self._init_weights()
+
+    def _init_weights(self):
+        """初始化网络权重"""
+        # 标准Xavier初始化
+        for module in self.loc_net.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
+        # 尺度网络：最后一层初始化为常数，确保初始γ_U ≈ gamma_init
+        for module in self.scale_net.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.0)
+
+        # 特别处理尺度网络的最后一层
+        final_layer = self.scale_net[-1] if isinstance(self.scale_net, nn.Sequential) else self.scale_net
+        
+        if isinstance(final_layer, nn.Linear):
+            # 初始化为使 softplus(bias) ≈ gamma_init
+            init_bias = torch.log(torch.exp(torch.tensor(self.gamma_init)) - 1)
+            nn.init.constant_(final_layer.bias, init_bias.item())
+            nn.init.zeros_(final_layer.weight)
+
+    def forward(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        前向传播: Z -> (μ_U, γ_U)
+        
+        Args:
+            z: 输入特征 [batch_size, repre_size]
+            
+        Returns:
+            mu_U: 位置参数 [batch_size, causal_size]
+            gamma_U: 尺度参数 [batch_size, causal_size] (保证 > 0)
+        """
+        mu_U = self.loc_net(z)
+        gamma_U = F.softplus(self.scale_net(z))
+        return mu_U, gamma_U

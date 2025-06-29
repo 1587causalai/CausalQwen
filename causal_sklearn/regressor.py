@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from typing import Optional
 
 from ._causal_engine import create_causal_regressor
 
@@ -22,8 +23,19 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
     
     Parameters
     ----------
-    hidden_layer_sizes : tuple, default=(100,)
-        The ith element represents the number of neurons in the ith hidden layer.
+    repre_size : int, optional
+        The dimension of the internal representation space (Z). If None, defaults
+        are handled by the CausalEngine.
+        
+    causal_size : int, optional
+        The dimension of the causal representation space (U). If None, defaults
+        are handled by the CausalEngine.
+
+    perception_hidden_layers : tuple, default=(100,)
+        The hidden layer structure for the Perception network (X -> Z).
+
+    abduction_hidden_layers : tuple, default=()
+        The hidden layer structure for the Abduction network (Z -> U).
         
     mode : str, default='standard'
         Prediction mode. Options: 'deterministic', 'standard', 'sampling'.
@@ -64,7 +76,10 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
     
     def __init__(
         self,
-        hidden_layer_sizes=(100,),
+        repre_size: Optional[int] = None,
+        causal_size: Optional[int] = None,
+        perception_hidden_layers: tuple = (100,),
+        abduction_hidden_layers: tuple = (),
         mode='standard',
         gamma_init=10.0,
         b_noise_init=0.1,
@@ -78,7 +93,10 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         random_state=None,
         verbose=False
     ):
-        self.hidden_layer_sizes = hidden_layer_sizes
+        self.repre_size = repre_size
+        self.causal_size = causal_size
+        self.perception_hidden_layers = perception_hidden_layers
+        self.abduction_hidden_layers = abduction_hidden_layers
         self.mode = mode
         self.gamma_init = gamma_init
         self.b_noise_init = b_noise_init
@@ -155,14 +173,13 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
                 y_val_tensor = y_val_tensor.unsqueeze(1)
         
         # Create CausalEngine
-        causal_size = self.hidden_layer_sizes[0] if self.hidden_layer_sizes else 100
-        abd_hidden_layers = list(self.hidden_layer_sizes[1:]) if len(self.hidden_layer_sizes) > 1 else []
-        
         self.engine_ = create_causal_regressor(
             input_size=self.n_features_in_,
             output_size=1,
-            causal_size=causal_size,
-            abd_hidden_layers=abd_hidden_layers,
+            repre_size=self.repre_size,
+            causal_size=self.causal_size,
+            perception_hidden_layers=self.perception_hidden_layers,
+            abduction_hidden_layers=self.abduction_hidden_layers,
             gamma_init=self.gamma_init,
             b_noise_init=self.b_noise_init,
             b_noise_trainable=self.b_noise_trainable
