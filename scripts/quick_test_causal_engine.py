@@ -19,9 +19,7 @@ from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, median_absolute_error
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.datasets import make_regression, make_classification
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
 import os
 import sys
 import warnings
@@ -42,7 +40,7 @@ warnings.filterwarnings('ignore')
 
 REGRESSION_CONFIG = {
     # 数据生成
-    'n_samples': 2000,
+    'n_samples': 4000,
     'n_features': 12,
     'noise': 0.3,
     'random_state': 42,
@@ -137,25 +135,10 @@ def generate_regression_data(config):
         anomaly_type='regression'
     )
     
-    # 数据标准化（用于sklearn和pytorch基线）
-    scaler_X = StandardScaler()
-    scaler_y = StandardScaler()
-    
-    X_train_scaled = scaler_X.fit_transform(X_train)
-    X_test_scaled = scaler_X.transform(X_test)
-    
-    y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).ravel()
-    
+    # 数据不再进行标准化
     data = {
-        'raw': {
-            'X_train': X_train, 'X_test': X_test,
-            'y_train': y_train, 'y_test': y_test
-        },
-        'scaled': {
-            'X_train': X_train_scaled, 'X_test': X_test_scaled,
-            'y_train': y_train_scaled, 'y_test': y_test
-        },
-        'scalers': {'X': scaler_X, 'y': scaler_y}
+        'X_train': X_train, 'X_test': X_test,
+        'y_train': y_train, 'y_test': y_test
     }
     
     print(f"   训练集: {len(X_train)} | 测试集: {len(X_test)}")
@@ -191,21 +174,10 @@ def generate_classification_data(config):
         classification_anomaly_strategy='shuffle'
     )
     
-    # 数据标准化
-    scaler_X = StandardScaler()
-    X_train_scaled = scaler_X.fit_transform(X_train)
-    X_test_scaled = scaler_X.transform(X_test)
-    
+    # 数据不再进行标准化
     data = {
-        'raw': {
-            'X_train': X_train, 'X_test': X_test,
-            'y_train': y_train, 'y_test': y_test
-        },
-        'scaled': {
-            'X_train': X_train_scaled, 'X_test': X_test_scaled,
-            'y_train': y_train, 'y_test': y_test  # 分类标签不需要缩放
-        },
-        'scalers': {'X': scaler_X}
+        'X_train': X_train, 'X_test': X_test,
+        'y_train': y_train, 'y_test': y_test
     }
     
     print(f"   训练集: {len(X_train)} | 测试集: {len(X_test)}")
@@ -232,7 +204,7 @@ def train_sklearn_regressor(data, config):
         alpha=config['alpha']
     )
     
-    model.fit(data['scaled']['X_train'], data['scaled']['y_train'])
+    model.fit(data['X_train'], data['y_train'])
     
     if config['verbose']:
         print(f"   训练完成: {model.n_iter_} epochs")
@@ -249,13 +221,13 @@ def train_sklearn_classifier(data, config):
         learning_rate_init=config['learning_rate'],
         early_stopping=True,
         validation_fraction=config['validation_fraction'],
-        n_iter_no_change=50,
-        tol=1e-4,
+        n_iter_no_change=config['patience'],
+        tol=config['tol'],
         random_state=config['random_state'],
-        alpha=0.0001
+        alpha=config['alpha']
     )
     
-    model.fit(data['scaled']['X_train'], data['scaled']['y_train'])
+    model.fit(data['X_train'], data['y_train'])
     
     if config['verbose']:
         print(f"   训练完成: {model.n_iter_} epochs")
@@ -266,132 +238,116 @@ def train_pytorch_regressor(data, config):
     """训练PyTorch回归器"""
     print("🔧 训练 PyTorch MLPRegressor...")
     
-    # 为PyTorch模型创建Pipeline（包含标准化）
-    pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('regressor', MLPPytorchRegressor(
-            hidden_layer_sizes=config['perception_hidden_layers'],
-            max_iter=config['max_iter'],
-            learning_rate=config['learning_rate'],
-            early_stopping=True,
-            validation_fraction=config['validation_fraction'],
-            n_iter_no_change=config['patience'],
-            tol=config['tol'],
-            random_state=config['random_state'],
-            verbose=config['verbose'],
-            alpha=config['alpha']
-        ))
-    ])
+    model = MLPPytorchRegressor(
+        hidden_layer_sizes=config['perception_hidden_layers'],
+        max_iter=config['max_iter'],
+        learning_rate=config['learning_rate'],
+        early_stopping=True,
+        validation_fraction=config['validation_fraction'],
+        n_iter_no_change=config['patience'],
+        tol=config['tol'],
+        random_state=config['random_state'],
+        verbose=config['verbose'],
+        alpha=config['alpha']
+    )
     
-    pipeline.fit(data['raw']['X_train'], data['raw']['y_train'])
+    model.fit(data['X_train'], data['y_train'])
     
     if config['verbose']:
-        n_iter = pipeline.named_steps['regressor'].n_iter_
+        n_iter = model.n_iter_
         print(f"   训练完成: {n_iter} epochs")
     
-    return pipeline
+    return model
 
 def train_pytorch_classifier(data, config):
     """训练PyTorch分类器"""
     print("🔧 训练 PyTorch MLPClassifier...")
     
-    # 为PyTorch模型创建Pipeline（包含标准化）
-    pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('classifier', MLPPytorchClassifier(
-            hidden_layer_sizes=config['perception_hidden_layers'],
-            max_iter=config['max_iter'],
-            learning_rate=config['learning_rate'],
-            early_stopping=True,
-            validation_fraction=config['validation_fraction'],
-            n_iter_no_change=config['patience'],
-            tol=config['tol'],
-            random_state=config['random_state'],
-            verbose=config['verbose'],
-            alpha=config['alpha']
-        ))
-    ])
+    model = MLPPytorchClassifier(
+        hidden_layer_sizes=config['perception_hidden_layers'],
+        max_iter=config['max_iter'],
+        learning_rate=config['learning_rate'],
+        early_stopping=True,
+        validation_fraction=config['validation_fraction'],
+        n_iter_no_change=config['patience'],
+        tol=config['tol'],
+        random_state=config['random_state'],
+        verbose=config['verbose'],
+        alpha=config['alpha']
+    )
     
-    pipeline.fit(data['raw']['X_train'], data['raw']['y_train'])
+    model.fit(data['X_train'], data['y_train'])
     
     if config['verbose']:
-        n_iter = pipeline.named_steps['classifier'].n_iter_
+        n_iter = model.n_iter_
         print(f"   训练完成: {n_iter} epochs")
     
-    return pipeline
+    return model
 
 def train_causal_regressor(data, config, mode='standard'):
     """训练因果回归器"""
     print(f"🔧 训练 CausalRegressor ({mode})...")
     
-    # 为因果模型创建Pipeline（包含标准化）
-    pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('regressor', MLPCausalRegressor(
-            repre_size=config['repre_size'],
-            causal_size=config['causal_size'],
-            perception_hidden_layers=config['perception_hidden_layers'],
-            abduction_hidden_layers=config['abduction_hidden_layers'],
-            mode=mode,
-            gamma_init=config['gamma_init'],
-            b_noise_init=config['b_noise_init'],
-            b_noise_trainable=config['b_noise_trainable'],
-            max_iter=config['max_iter'],
-            learning_rate=config['learning_rate'],
-            early_stopping=True,
-            validation_fraction=config['validation_fraction'],
-            n_iter_no_change=config['patience'],
-            tol=config['tol'],
-            random_state=config['random_state'],
-            verbose=config['verbose'],
-            alpha=config['alpha']
-        ))
-    ])
+    model = MLPCausalRegressor(
+        repre_size=config['repre_size'],
+        causal_size=config['causal_size'],
+        perception_hidden_layers=config['perception_hidden_layers'],
+        abduction_hidden_layers=config['abduction_hidden_layers'],
+        mode=mode,
+        gamma_init=config['gamma_init'],
+        b_noise_init=config['b_noise_init'],
+        b_noise_trainable=config['b_noise_trainable'],
+        max_iter=config['max_iter'],
+        learning_rate=config['learning_rate'],
+        early_stopping=True,
+        validation_fraction=config['validation_fraction'],
+        n_iter_no_change=config['patience'],
+        tol=config['tol'],
+        random_state=config['random_state'],
+        verbose=config['verbose'],
+        alpha=config['alpha']
+    )
     
-    pipeline.fit(data['raw']['X_train'], data['raw']['y_train'])
+    model.fit(data['X_train'], data['y_train'])
     
     if config['verbose']:
-        n_iter = pipeline.named_steps['regressor'].n_iter_
+        n_iter = model.n_iter_
         print(f"   训练完成: {n_iter} epochs")
     
-    return pipeline
+    return model
 
 def train_causal_classifier(data, config, mode='standard'):
     """训练因果分类器"""
     print(f"🔧 训练 CausalClassifier ({mode})...")
     
-    # 使用原始数据（无缩放）
-    pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('classifier', MLPCausalClassifier(
-            repre_size=config['repre_size'],
-            causal_size=config['causal_size'],
-            perception_hidden_layers=config['perception_hidden_layers'],
-            abduction_hidden_layers=config['abduction_hidden_layers'],
-            mode=mode,
-            gamma_init=config['gamma_init'],
-            b_noise_init=config['b_noise_init'],
-            b_noise_trainable=config['b_noise_trainable'],
-            ovr_threshold=config['ovr_threshold'],
-            max_iter=config['max_iter'],
-            learning_rate=config['learning_rate'],
-            early_stopping=True,
-            validation_fraction=config['validation_fraction'],
-            n_iter_no_change=config['patience'],
-            tol=config['tol'],
-            random_state=config['random_state'],
-            verbose=config['verbose'],
-            alpha=config['alpha']
-        ))
-    ])
+    model = MLPCausalClassifier(
+        repre_size=config['repre_size'],
+        causal_size=config['causal_size'],
+        perception_hidden_layers=config['perception_hidden_layers'],
+        abduction_hidden_layers=config['abduction_hidden_layers'],
+        mode=mode,
+        gamma_init=config['gamma_init'],
+        b_noise_init=config['b_noise_init'],
+        b_noise_trainable=config['b_noise_trainable'],
+        ovr_threshold=config['ovr_threshold'],
+        max_iter=config['max_iter'],
+        learning_rate=config['learning_rate'],
+        early_stopping=True,
+        validation_fraction=config['validation_fraction'],
+        n_iter_no_change=config['patience'],
+        tol=config['tol'],
+        random_state=config['random_state'],
+        verbose=config['verbose'],
+        alpha=config['alpha']
+    )
     
-    pipeline.fit(data['raw']['X_train'], data['raw']['y_train'])
+    model.fit(data['X_train'], data['y_train'])
     
     if config['verbose']:
-        n_iter = pipeline.named_steps['classifier'].n_iter_
+        n_iter = model.n_iter_
         print(f"   训练完成: {n_iter} epochs")
     
-    return pipeline
+    return model
 
 # =============================================================================
 # 评估函数
@@ -418,38 +374,20 @@ def evaluate_classification(y_true, y_pred, n_classes):
 
 def predict_and_evaluate_regression(model, data, model_name, config):
     """回归模型预测和评估"""
-    if model_name == 'sklearn':
-        # sklearn模型使用缩放数据
-        test_pred_scaled = model.predict(data['scaled']['X_test'])
-        
-        # 逆变换回原始尺度
-        test_pred = data['scalers']['y'].inverse_transform(test_pred_scaled.reshape(-1, 1)).ravel()
-        
-        # 验证集：重新用训练集分割来评估
-        X_train_pt, X_val_pt, y_train_pt, y_val_pt = train_test_split(
-            data['scaled']['X_train'], data['scaled']['y_train'],
-            test_size=config['validation_fraction'],
-            random_state=config['random_state']
-        )
-        
-        val_pred_scaled = model.predict(X_val_pt)
-        val_pred = data['scalers']['y'].inverse_transform(val_pred_scaled.reshape(-1, 1)).ravel()
-        y_val_orig = data['scalers']['y'].inverse_transform(y_val_pt.reshape(-1, 1)).ravel()
-    else:
-        # causal和pytorch模型都使用原始数据（Pipeline内部处理缩放）
-        test_pred = model.predict(data['raw']['X_test'])
-        
-        # 验证集：重新分割来评估
-        X_train_pt, X_val_pt, y_train_pt, y_val_pt = train_test_split(
-            data['raw']['X_train'], data['raw']['y_train'],
-            test_size=config['validation_fraction'],
-            random_state=config['random_state']
-        )
-        val_pred = model.predict(X_val_pt)
-        y_val_orig = y_val_pt
+    # 统一评估逻辑，所有模型都使用原始数据
+    test_pred = model.predict(data['X_test'])
+    
+    # 验证集：重新分割来评估
+    X_train_pt, X_val_pt, y_train_pt, y_val_pt = train_test_split(
+        data['X_train'], data['y_train'],
+        test_size=config['validation_fraction'],
+        random_state=config['random_state']
+    )
+    val_pred = model.predict(X_val_pt)
+    y_val_orig = y_val_pt
     
     results = {
-        'test': evaluate_regression(data['raw']['y_test'], test_pred),
+        'test': evaluate_regression(data['y_test'], test_pred),
         'val': evaluate_regression(y_val_orig, val_pred)
     }
     
@@ -457,37 +395,23 @@ def predict_and_evaluate_regression(model, data, model_name, config):
 
 def predict_and_evaluate_classification(model, data, model_name, config):
     """分类模型预测和评估"""
-    n_classes = len(np.unique(data['raw']['y_train']))
+    n_classes = len(np.unique(data['y_train']))
     
-    if model_name == 'sklearn':
-        # sklearn模型使用缩放数据
-        test_pred = model.predict(data['scaled']['X_test'])
-        
-        # 验证集：重新分割来评估
-        X_train_pt, X_val_pt, y_train_pt, y_val_pt = train_test_split(
-            data['scaled']['X_train'], data['scaled']['y_train'],
-            test_size=config['validation_fraction'],
-            random_state=config['random_state'],
-            stratify=data['scaled']['y_train']
-        )
-        val_pred = model.predict(X_val_pt)
-        y_val_orig = y_val_pt
-    else:
-        # causal和pytorch模型都使用原始数据（Pipeline内部处理缩放）
-        test_pred = model.predict(data['raw']['X_test'])
-        
-        # 验证集：重新分割来评估
-        X_train_pt, X_val_pt, y_train_pt, y_val_pt = train_test_split(
-            data['raw']['X_train'], data['raw']['y_train'],
-            test_size=config['validation_fraction'],
-            random_state=config['random_state'],
-            stratify=data['raw']['y_train']
-        )
-        val_pred = model.predict(X_val_pt)
-        y_val_orig = y_val_pt
+    # 统一评估逻辑，所有模型都使用原始数据
+    test_pred = model.predict(data['X_test'])
+    
+    # 验证集：重新分割来评估
+    X_train_pt, X_val_pt, y_train_pt, y_val_pt = train_test_split(
+        data['X_train'], data['y_train'],
+        test_size=config['validation_fraction'],
+        random_state=config['random_state'],
+        stratify=data['y_train']
+    )
+    val_pred = model.predict(X_val_pt)
+    y_val_orig = y_val_pt
     
     results = {
-        'test': evaluate_classification(data['raw']['y_test'], test_pred, n_classes),
+        'test': evaluate_classification(data['y_test'], test_pred, n_classes),
         'val': evaluate_classification(y_val_orig, val_pred, n_classes)
     }
     
@@ -601,7 +525,7 @@ def test_classification(config=None):
     
     # 3. 显示结果
     if config['verbose']:
-        n_classes = len(np.unique(data['raw']['y_train']))
+        n_classes = len(np.unique(data['y_train']))
         print_classification_results(results, n_classes)
     
     return results

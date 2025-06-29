@@ -371,7 +371,6 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
             }
         }
 
-
 class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
     """
     PyTorch Multi-layer Perceptron Regressor.
