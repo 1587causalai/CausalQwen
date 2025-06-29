@@ -91,7 +91,6 @@ class SplitConfig:
     """数据分割配置类 - 统一管理所有分割参数"""
     # 基础分割参数
     test_size: Optional[float] = 0.2
-    val_size: Optional[float] = None
     random_state: Optional[int] = None
     shuffle: bool = True
     stratify: Optional[np.ndarray] = None
@@ -108,10 +107,10 @@ class SplitConfig:
 
 class CausalSplitter:
     """
-    因果数据分割器 - 统一的分割逻辑实现
+    因果数据分割器 - 简化的分割逻辑实现
     
     核心设计原则：
-    1. 统一分割逻辑 - 所有分割都基于递归的2分割
+    1. 只支持2分割（train/test）
     2. 分离关注点 - 异常注入与分割逻辑解耦
     3. 简化接口 - 配置类管理参数
     """
@@ -122,11 +121,8 @@ class CausalSplitter:
         
     def split(self) -> Tuple[np.ndarray, ...]:
         """执行分割并返回结果"""
-        # 执行分割
-        if self.config.val_size is not None:
-            result = self._three_way_split()
-        else:
-            result = self._two_way_split()
+        # 执行2分割
+        result = self._two_way_split()
         
         # 应用异常注入（仅当异常比例 > 0时）
         if self.config.anomaly_ratio > 0:
@@ -158,36 +154,9 @@ class CausalSplitter:
             'test': test_arrays
         }
     
-    def _three_way_split(self) -> dict:
-        """3分割实现 - 基于递归2分割"""
-        # 第一次分割：分出测试集
-        temp_splitter = CausalSplitter(*self.arrays, config=SplitConfig(
-            test_size=self.config.test_size,
-            random_state=self.config.random_state,
-            shuffle=self.config.shuffle,
-            stratify=self.config.stratify
-        ))
-        temp_result = temp_splitter._two_way_split()
-        
-        # 第二次分割：从训练集中分出验证集
-        remaining_ratio = 1.0 - (self.config.test_size or 0.25)
-        adjusted_val_size = self.config.val_size / remaining_ratio
-        
-        val_splitter = CausalSplitter(*temp_result['train'], config=SplitConfig(
-            test_size=adjusted_val_size,
-            random_state=self.config.random_state,
-            shuffle=self.config.shuffle
-        ))
-        val_result = val_splitter._two_way_split()
-        
-        return {
-            'train': val_result['train'],
-            'val': val_result['test'],  # 第二次分割的"test"实际是验证集
-            'test': temp_result['test']
-        }
     
     def _apply_anomalies(self, result: dict) -> dict:
-        """应用异常注入 - 仅对训练集和验证集，测试集始终保持纯净"""
+        """应用异常注入 - 仅对训练集，测试集始终保持纯净"""
         # 创建副本避免修改原数据
         new_result = {}
         for key, arrays in result.items():
@@ -203,16 +172,6 @@ class CausalSplitter:
                 classification_anomaly_strategy=self.config.classification_strategy
             )
         
-        # 对验证集也注入异常（如果存在）
-        if 'val' in new_result and len(new_result['val']) >= 2:
-            new_result['val'][1] = add_label_anomalies(
-                new_result['val'][1],
-                anomaly_ratio=self.config.anomaly_ratio,
-                anomaly_type=self.config.anomaly_type,
-                regression_anomaly_strategy=self.config.regression_strategy,
-                classification_anomaly_strategy=self.config.classification_strategy
-            )
-        
         # 测试集始终保持纯净，不注入异常
         
         return new_result
@@ -220,7 +179,7 @@ class CausalSplitter:
     def _print_summary(self, result: dict):
         """打印分割摘要"""
         print(f"🔄 CausalSklearn数据分割")
-        print(f"   模式: {'3分割' if 'val' in result else '2分割'}")
+        print(f"   模式: 2分割 (train/test)")
         print(f"   样本数: {len(self.arrays[0])}")
         
         if self.config.anomaly_ratio > 0:
@@ -229,25 +188,15 @@ class CausalSplitter:
             print(f"   异常策略: {strategy}")
             print(f"   测试集: 保持纯净")
         
-        if 'val' in result:
-            print(f"   分割结果: train={len(result['train'][0])}, val={len(result['val'][0])}, test={len(result['test'][0])}")
-        else:
-            print(f"   分割结果: train={len(result['train'][0])}, test={len(result['test'][0])}")
+        print(f"   分割结果: train={len(result['train'][0])}, test={len(result['test'][0])}")
     
     def _to_sklearn_format(self, result: dict) -> Tuple[np.ndarray, ...]:
         """转换为sklearn风格的tuple"""
-        if 'val' in result:
-            # 3分割: X_train, X_val, X_test, y_train, y_val, y_test, ...
-            output = []
-            for i in range(len(self.arrays)):
-                output.extend([result['train'][i], result['val'][i], result['test'][i]])
-            return tuple(output)
-        else:
-            # 2分割: X_train, X_test, y_train, y_test, ...
-            output = []
-            for i in range(len(self.arrays)):
-                output.extend([result['train'][i], result['test'][i]])
-            return tuple(output)
+        # 2分割: X_train, X_test, y_train, y_test, ...
+        output = []
+        for i in range(len(self.arrays)):
+            output.extend([result['train'][i], result['test'][i]])
+        return tuple(output)
 
 
 def causal_split(*arrays, **kwargs) -> Tuple[np.ndarray, ...]:
@@ -255,14 +204,14 @@ def causal_split(*arrays, **kwargs) -> Tuple[np.ndarray, ...]:
     因果数据分割函数 - 简洁高效的实现
     
     核心特性：
-    1. 支持2分割和3分割模式
-    2. 训练集和验证集可选异常注入，测试集始终纯净
+    1. 只支持2分割模式（train/test）
+    2. 训练集可选异常注入，测试集始终纯净
     3. 异常比例默认0.0（正常分割）
+    4. 验证集分割由各估计器内部处理（early stopping）
     
     Args:
         *arrays: 要分割的数组（X, y等）
         test_size: 测试集大小 (默认0.2)
-        val_size: 验证集大小 (启用3分割模式)
         random_state: 随机种子
         shuffle: 是否打乱数据 (默认True)
         stratify: 分层分割的目标数组
@@ -275,21 +224,20 @@ def causal_split(*arrays, **kwargs) -> Tuple[np.ndarray, ...]:
         verbose: 是否显示详细信息
         
     Returns:
-        - 2分割: X_train, X_test, y_train, y_test
-        - 3分割: X_train, X_val, X_test, y_train, y_val, y_test
+        X_train, X_test, y_train, y_test (以及更多数组如果提供)
         
     Examples:
         >>> # 正常分割（无异常）
         >>> X_train, X_test, y_train, y_test = causal_split(X, y)
         
-        >>> # 3分割模式
-        >>> X_train, X_val, X_test, y_train, y_val, y_test = causal_split(
-        ...     X, y, val_size=0.2
-        ... )
-        
         >>> # 带异常注入的分割
         >>> X_train, X_test, y_train, y_test = causal_split(
         ...     X, y, anomaly_ratio=0.1, anomaly_type='regression', verbose=True
+        ... )
+        
+        >>> # 分类任务的分层分割
+        >>> X_train, X_test, y_train, y_test = causal_split(
+        ...     X, y, stratify=y, anomaly_ratio=0.2, anomaly_type='classification'
         ... )
     """
     # 参数映射
@@ -297,7 +245,6 @@ def causal_split(*arrays, **kwargs) -> Tuple[np.ndarray, ...]:
     
     # 基础参数
     if 'test_size' in kwargs: config.test_size = kwargs['test_size']
-    if 'val_size' in kwargs: config.val_size = kwargs['val_size']
     if 'random_state' in kwargs: config.random_state = kwargs['random_state']
     if 'shuffle' in kwargs: config.shuffle = kwargs['shuffle']
     if 'stratify' in kwargs: config.stratify = kwargs['stratify']
@@ -312,9 +259,6 @@ def causal_split(*arrays, **kwargs) -> Tuple[np.ndarray, ...]:
     if 'verbose' in kwargs: config.verbose = kwargs['verbose']
     
     # 参数验证
-    if config.val_size is not None and (config.val_size <= 0 or config.val_size >= 1):
-        raise ValueError(f"val_size必须在(0, 1)范围内，得到: {config.val_size}")
-    
     if len(arrays) < 2:
         raise ValueError("至少需要提供2个数组（通常是X和y）")
     
