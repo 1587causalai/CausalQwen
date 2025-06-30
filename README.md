@@ -140,8 +140,8 @@ benchmark.print_results(results, 'regression')
   title={Causal-Sklearn: Scikit-learn Compatible Causal Regression and Classification},
   author={Heyang Gong},
   year={2025},
-  url={https://github.com/causalengine/causal-sklearn},
-  note={基于CausalEngine™核心的回归和分类算法的scikit-learn兼容实现}
+  url={https://github.com/1587causalai/CausalQwen/tree/causal-sklearn-mvp},
+  note={基于CausalEngine™核心的因果回归和因果分类算法的scikit-learn兼容实现}
 }
 ```
 
