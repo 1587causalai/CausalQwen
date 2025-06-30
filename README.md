@@ -130,11 +130,6 @@ benchmark.print_results(results, 'regression')
 
 本项目采用Apache License 2.0 - 详见[LICENSE](LICENSE)文件。
 
-**选择Apache 2.0的原因**：
-- 🛡️ **专利保护**: 包含明确的专利授权和保护条款
-- 🏷️ **商标保护**: 保护CausalEngine™品牌和商标权益  
-- ⚖️ **法律完备**: 提供更全面的法律保护框架
-- 🤝 **贡献保护**: 确保所有代码贡献的知识产权清晰
 
 ## 📖 学术引用
 
