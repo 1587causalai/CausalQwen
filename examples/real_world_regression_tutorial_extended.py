@@ -10,7 +10,7 @@
 - 8个特征（房屋年龄、收入、人口等）
 - 目标：预测房价中位数
 
-我们将比较8种方法：
+我们将比较10种方法：
 1. sklearn MLPRegressor（传统神经网络）
 2. PyTorch MLP（传统深度学习）
 3. MLP Huber（Huber损失稳健回归）
@@ -18,12 +18,16 @@
 5. MLP Cauchy（Cauchy损失稳健回归）
 6. Random Forest（随机森林）
 7. CatBoost（强力梯度提升）
-8. CausalEngine（因果推理方法）
+8. XGBoost（强力梯度提升）
+9. CausalEngine - deterministic（确定性因果推理）
+10. CausalEngine - standard（标准因果推理）
 
 关键亮点：
 - 真实世界数据的鲁棒性测试
-- 4种强力传统机器学习方法对比
+- 8种强力传统机器学习方法对比（2种神经网络 + 3种稳健回归 + 3种集成方法）
 - 3种稳健神经网络回归方法（Huber、Pinball、Cauchy）
+- 3种集成学习方法（Random Forest、CatBoost、XGBoost）
+- 2种因果推理方法（deterministic、standard）
 - 统一神经网络参数配置确保公平比较
 - 因果推理vs传统方法的性能差异分析
 
@@ -32,19 +36,19 @@
 本脚本包含两组核心实验，旨在全面评估CausalEngine在真实回归任务上的性能和鲁棒性。
 所有实验参数均可在下方的 `TutorialConfig` 类中进行修改。
 
-实验一：核心性能对比 (在25%标签噪声下)
+实验一：核心性能对比 (在25%标签异常下)
 --------------------------------------------------
-- **目标**: 比较CausalEngine和7种传统方法在含有固定噪声数据上的预测性能。
-- **设置**: 默认设置25%的标签噪声（`ANOMALY_RATIO = 0.25`），模拟真实世界中常见的数据质量问题。
+- **目标**: 比较CausalEngine和8种传统方法在含有固定标签异常数据上的预测性能。
+- **设置**: 默认设置25%的标签异常（`ANOMALY_RATIO = 0.25`），模拟真实世界中常见的数据质量问题。
 - **对比模型**: 
-  - 传统方法: sklearn MLP, PyTorch MLP, MLP Huber, MLP Pinball, MLP Cauchy, Random Forest, CatBoost
-  - CausalEngine: deterministic, standard等模式
+  - 传统方法: sklearn MLP, PyTorch MLP, MLP Huber, MLP Pinball, MLP Cauchy, Random Forest, CatBoost, XGBoost
+  - CausalEngine: deterministic, standard
 
-实验二：鲁棒性分析 (跨越不同噪声水平)
+实验二：鲁棒性分析 (跨越不同标签异常水平)
 --------------------------------------------------
-- **目标**: 探究模型性能随标签噪声水平增加时的变化情况，评估其稳定性。
-- **设置**: 在一系列噪声比例（如0%, 10%, 20%, 30%, 40%）下分别运行测试。
-- **对比模型**: 所有8种方法在不同噪声水平下的表现
+- **目标**: 探究模型性能随标签异常水平增加时的变化情况，评估其稳定性。
+- **设置**: 在一系列标签异常比例（如0%, 10%, 20%, 30%, 40%）下分别运行测试。
+- **对比模型**: 所有10种方法在不同标签异常水平下的表现
 """
 
 import numpy as np
@@ -83,7 +87,7 @@ class TutorialConfig:
     # 🧠 统一神经网络配置 - 所有神经网络方法使用相同参数确保公平比较
     # =========================================================================
     # 🔧 在这里修改所有神经网络方法的共同参数！
-    NN_HIDDEN_SIZES = (128, 64, 64)                 # 神经网络隐藏层结构
+    NN_HIDDEN_SIZES = (128, 64, 32)                 # 🔧 统一神经网络隐藏层结构
     NN_MAX_EPOCHS = 3000                            # 最大训练轮数
     NN_LEARNING_RATE = 0.01                         # 学习率
     NN_PATIENCE = 50                                # 早停patience
@@ -91,14 +95,14 @@ class TutorialConfig:
     # =========================================================================
     
     # 🤖 CausalEngine参数 - 使用统一神经网络配置
-    CAUSAL_MODES = ['deterministic', 'standard', 'endogenous']    # 可选: ['deterministic', 'exogenous', 'endogenous', 'standard']
+    CAUSAL_MODES = ['deterministic', 'standard']    # 🎯 最终版本：只使用2种最佳CausalEngine模式
     CAUSAL_HIDDEN_SIZES = NN_HIDDEN_SIZES          # 使用统一神经网络配置
     CAUSAL_MAX_EPOCHS = NN_MAX_EPOCHS               # 使用统一神经网络配置
     CAUSAL_LR = NN_LEARNING_RATE                    # 使用统一神经网络配置
     CAUSAL_PATIENCE = NN_PATIENCE                   # 使用统一神经网络配置
     CAUSAL_TOL = NN_TOLERANCE                       # 使用统一神经网络配置
     CAUSAL_GAMMA_INIT = 1.0                         # gamma初始化
-    CAUSAL_B_NOISE_INIT = 0.1                       # b_noise初始化
+    CAUSAL_B_NOISE_INIT = 1.0                       # 🔧 统一b_noise初始化
     CAUSAL_B_NOISE_TRAINABLE = True                 # b_noise是否可训练
     
     # 🧠 传统神经网络方法参数 - 使用统一配置
@@ -118,16 +122,17 @@ class TutorialConfig:
         'mlp_pinball_median', # Pinball损失MLP（稳健回归）
         'mlp_cauchy',       # Cauchy损失MLP（稳健回归）
         'random_forest',    # 随机森林
-        'catboost'          # CatBoost - 强力梯度提升
+        'catboost',         # CatBoost - 强力梯度提升
+        'xgboost'           # XGBoost - 强力梯度提升
     ]
     
     # 📊 实验参数
-    ANOMALY_RATIO = 0.25                            # 标签异常比例 (核心实验默认值: 25%噪声挑战)
+    ANOMALY_RATIO = 0.25                            # 标签异常比例 (核心实验默认值: 25%标签异常挑战)
     SAVE_PLOTS = True                               # 是否保存图表
     VERBOSE = True                                  # 是否显示详细输出
     
     # 🛡️ 鲁棒性测试参数 - 验证"CausalEngine鲁棒性优势"的假设
-    ROBUSTNESS_ANOMALY_RATIOS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]  # 噪声水平
+    ROBUSTNESS_ANOMALY_RATIOS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]  # 标签异常水平
     RUN_ROBUSTNESS_TEST = True                      # 是否运行鲁棒性测试
     
     # 📈 可视化参数
@@ -137,7 +142,7 @@ class TutorialConfig:
     FIGURE_SIZE_ROBUSTNESS = (18, 14)               # 鲁棒性测试图表大小 (更大容纳更多方法)
     
     # 📁 输出目录参数
-    OUTPUT_DIR = "results/california_housing_regression_extended"  # 输出目录名称
+    OUTPUT_DIR = "results/real_world_regression_tutorial_extended"  # 输出目录名称
 
 
 class ExtendedCaliforniaHousingTutorial:
@@ -319,14 +324,14 @@ class ExtendedCaliforniaHousingTutorial:
         
         if self.config.VERBOSE:
             print(f"🛡️  运行鲁棒性测试")
-            print(f"   噪声水平: {[f'{r:.1%}' for r in self.config.ROBUSTNESS_ANOMALY_RATIOS]}")
+            print(f"   标签异常水平: {[f'{r:.1%}' for r in self.config.ROBUSTNESS_ANOMALY_RATIOS]}")
             print("=" * 60)
         
         robustness_results = {}
         
         for i, anomaly_ratio in enumerate(self.config.ROBUSTNESS_ANOMALY_RATIOS):
             if self.config.VERBOSE:
-                print(f"\\n🔄 测试噪声水平 {i+1}/{len(self.config.ROBUSTNESS_ANOMALY_RATIOS)}: {anomaly_ratio:.1%}")
+                print(f"\\n🔄 测试标签异常水平 {i+1}/{len(self.config.ROBUSTNESS_ANOMALY_RATIOS)}: {anomaly_ratio:.1%}")
             
             results = self.benchmark.compare_models(
                 X=self.X,

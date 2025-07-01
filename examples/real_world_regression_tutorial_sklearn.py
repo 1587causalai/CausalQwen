@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
-🏠 真实世界回归教程：加州房价预测
-=====================================
+🏠 真实世界回归教程：加州房价预测 - Sklearn版本
+================================================
 
-这个教程演示如何使用CausalEngine在真实世界回归任务中取得优于传统ML方法的性能。
+这个教程演示如何使用重构后的sklearn-style CausalEngine在真实世界回归任务中取得优于传统ML方法的性能。
+
+与原版教程的区别：
+- 直接使用sklearn-style的MLPCausalRegressor等封装好的learners
+- 不依赖BaselineBenchmark类，直接进行模型训练和比较
+- 保持所有原有功能：数据探索、可视化、性能比较、鲁棒性测试
 
 数据集：加州房价数据集（California Housing Dataset）
 - 20,640个样本
@@ -49,6 +54,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.datasets import fetch_california_housing
+from sklearn.neural_network import MLPRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, median_absolute_error
 import warnings
 import os
 import sys
@@ -59,8 +68,9 @@ plt.switch_backend('Agg')
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 导入我们的基准测试模块
-from causal_sklearn.benchmarks import BaselineBenchmark
+# 导入我们的sklearn-style learners
+from causal_sklearn.regressor import MLPCausalRegressor, MLPPytorchRegressor
+from causal_sklearn.utils import causal_split, add_label_anomalies
 
 warnings.filterwarnings('ignore')
 
@@ -85,18 +95,24 @@ class TutorialConfig:
     NN_LEARNING_RATE = 0.01                         # 学习率
     NN_PATIENCE = 50                                # 早停patience
     NN_TOLERANCE = 1e-4                             # 早停tolerance
+    # 
+    # 🎯 统一性保证：
+    # - 所有方法使用相同的批次大小策略（全量批次）
+    # - 所有方法使用相同的数据预处理（StandardScaler）
+    # - 所有方法使用相同的早停配置
+    # - 所有方法使用相同的随机种子确保可重复性
     # =========================================================================
     
     # 🤖 CausalEngine参数 - 使用统一神经网络配置
-    CAUSAL_MODES = ['deterministic', 'standard']  # 可选: ['deterministic', 'exogenous', 'endogenous', 'standard', 'sampling']
+    CAUSAL_MODES = ['deterministic', 'standard']    # 可选: ['deterministic', 'exogenous', 'endogenous', 'standard', 'sampling']
     CAUSAL_HIDDEN_SIZES = NN_HIDDEN_SIZES          # 使用统一神经网络配置
     CAUSAL_MAX_EPOCHS = NN_MAX_EPOCHS              # 使用统一神经网络配置
     CAUSAL_LR = NN_LEARNING_RATE                   # 使用统一神经网络配置
     CAUSAL_PATIENCE = NN_PATIENCE                  # 使用统一神经网络配置
     CAUSAL_TOL = NN_TOLERANCE                      # 使用统一神经网络配置
-    CAUSAL_GAMMA_INIT = 1.0                      # gamma初始化
-    CAUSAL_B_NOISE_INIT = 1.0                    # b_noise初始化
-    CAUSAL_B_NOISE_TRAINABLE = True              # b_noise是否可训练
+    CAUSAL_GAMMA_INIT = 1.0                        # gamma初始化
+    CAUSAL_B_NOISE_INIT = 1.0                      # b_noise初始化
+    CAUSAL_B_NOISE_TRAINABLE = True                # b_noise是否可训练
     
     # 🧠 传统方法参数 - 使用统一配置
     SKLEARN_HIDDEN_LAYERS = NN_HIDDEN_SIZES         # 使用统一神经网络配置
@@ -113,7 +129,7 @@ class TutorialConfig:
     VERBOSE = True                               # 是否显示详细输出
     
     # 🛡️ 鲁棒性测试参数 - 设计为验证"CausalEngine鲁棒性优势"的假设
-    ROBUSTNESS_ANOMALY_RATIOS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]  # 5个关键标签异常水平就足够
+    ROBUSTNESS_ANOMALY_RATIOS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]  # 6个关键标签异常水平
     RUN_ROBUSTNESS_TEST = True                   # 是否运行鲁棒性测试
     
     # 📈 可视化参数
@@ -123,14 +139,14 @@ class TutorialConfig:
     FIGURE_SIZE_ROBUSTNESS = (16, 12)            # 鲁棒性测试图表大小 (4个子图)
     
     # 📁 输出目录参数
-    OUTPUT_DIR = "results/real_world_regression_tutorial"                       # 输出目录名称
+    OUTPUT_DIR = "results/real_world_regression_tutorial_sklearn"  # 输出目录名称
 
 
-class CaliforniaHousingTutorial:
+class CaliforniaHousingSklearnTutorial:
     """
-    加州房价回归教程类
+    加州房价回归教程类 - Sklearn版本
     
-    演示CausalEngine在真实世界回归任务中的优越性能
+    使用sklearn-style learners演示CausalEngine在真实世界回归任务中的优越性能
     """
     
     def __init__(self, config=None):
@@ -154,7 +170,7 @@ class CaliforniaHousingTutorial:
     def load_and_explore_data(self, verbose=True):
         """加载并探索加州房价数据集"""
         if verbose:
-            print("🏠 加州房价预测 - 真实世界回归教程")
+            print("🏠 加州房价预测 - 真实世界回归教程 (Sklearn版本)")
             print("=" * 60)
             print("📊 正在加载加州房价数据集...")
         
@@ -179,12 +195,12 @@ class CaliforniaHousingTutorial:
         if save_plots is None:
             save_plots = self.config.SAVE_PLOTS
             
-        print("\\n📈 数据分布分析")
+        print("\n📈 数据分布分析")
         print("-" * 30)
         
         # 创建图形
         fig, axes = plt.subplots(2, 2, figsize=self.config.FIGURE_SIZE_ANALYSIS)
-        fig.suptitle('California Housing Dataset Analysis', fontsize=16, fontweight='bold')
+        fig.suptitle('California Housing Dataset Analysis (Sklearn Version)', fontsize=16, fontweight='bold')
         
         # 1. 目标变量分布
         axes[0, 0].hist(self.y, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
@@ -229,10 +245,131 @@ class CaliforniaHousingTutorial:
         plt.close()  # 关闭图形，避免内存泄漏
         
         # 数据统计摘要
-        print("\\n📋 数据统计摘要:")
+        print("\n📋 数据统计摘要:")
         print(f"  - 最相关特征: {most_corr_feature} (相关系数: {corr_matrix.loc[most_corr_feature, 'MedHouseVal']:.3f})")
         print(f"  - 异常值检测: {np.sum(np.abs(self.y - self.y.mean()) > 3 * self.y.std())} 个潜在异常值")
         print(f"  - 数据完整性: 无缺失值" if not np.any(np.isnan(self.X)) else "  - 警告: 存在缺失值")
+    
+    def _inject_label_anomalies(self, y, anomaly_ratio, random_state=42):
+        """注入标签异常 (使用utils.py中的'shuffle'策略)"""
+        if anomaly_ratio <= 0:
+            return y.copy()
+            
+        np.random.seed(random_state)
+        return add_label_anomalies(y, ratio=anomaly_ratio, task_type='regression', strategy='shuffle')
+    
+    def _train_models(self, X_train, y_train, X_val, y_val, anomaly_ratio, verbose=True):
+        """训练所有模型"""
+        if verbose:
+            print(f"\n🔧 训练模型 (异常比例: {anomaly_ratio:.1%})")
+            print("-" * 50)
+        
+        # 数据预处理 - 标准化
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_val_scaled = scaler.transform(X_val)
+        
+        # 注入标签异常到训练标签
+        y_train_noisy = self._inject_label_anomalies(y_train, anomaly_ratio, random_state=self.config.RANDOM_STATE)
+        
+        models = {}
+        
+        # 1. Sklearn MLPRegressor
+        if verbose:
+            print("   🔧 训练 sklearn MLPRegressor...")
+        sklearn_model = MLPRegressor(
+            hidden_layer_sizes=self.config.SKLEARN_HIDDEN_LAYERS,
+            max_iter=self.config.SKLEARN_MAX_ITER,
+            learning_rate_init=self.config.SKLEARN_LR,
+            early_stopping=True,
+            validation_fraction=0.2,
+            n_iter_no_change=self.config.NN_PATIENCE,
+            tol=self.config.NN_TOLERANCE,
+            random_state=self.config.RANDOM_STATE,
+            alpha=0,  # L2正则化
+            batch_size=X_train_scaled.shape[0]  # 使用全量批次
+        )
+        sklearn_model.fit(X_train_scaled, y_train_noisy)
+        models['sklearn'] = (sklearn_model, scaler)
+        
+        # 2. PyTorch MLP
+        if verbose:
+            print("   🔧 训练 PyTorch MLPRegressor...")
+        pytorch_model = MLPPytorchRegressor(
+            hidden_layer_sizes=self.config.NN_HIDDEN_SIZES,
+            max_iter=self.config.PYTORCH_EPOCHS,
+            learning_rate=self.config.PYTORCH_LR,
+            early_stopping=True,
+            validation_fraction=0.2,
+            n_iter_no_change=self.config.PYTORCH_PATIENCE,
+            tol=self.config.NN_TOLERANCE,
+            random_state=self.config.RANDOM_STATE,
+            verbose=False,
+            alpha=0,
+            batch_size=X_train_scaled.shape[0]  # 🔧 统一使用全量批次
+        )
+        pytorch_model.fit(X_train_scaled, y_train_noisy)
+        models['pytorch'] = (pytorch_model, scaler)
+        
+        # 3. CausalEngine 各种模式
+        for mode in self.config.CAUSAL_MODES:
+            if verbose:
+                print(f"   🔧 训练 CausalEngine ({mode})...")
+            causal_model = MLPCausalRegressor(
+                perception_hidden_layers=self.config.CAUSAL_HIDDEN_SIZES,
+                mode=mode,
+                gamma_init=self.config.CAUSAL_GAMMA_INIT,
+                b_noise_init=self.config.CAUSAL_B_NOISE_INIT,
+                b_noise_trainable=self.config.CAUSAL_B_NOISE_TRAINABLE,
+                max_iter=self.config.CAUSAL_MAX_EPOCHS,
+                learning_rate=self.config.CAUSAL_LR,
+                early_stopping=True,
+                validation_fraction=0.2,
+                n_iter_no_change=self.config.CAUSAL_PATIENCE,
+                tol=self.config.CAUSAL_TOL,
+                random_state=self.config.RANDOM_STATE,
+                verbose=False,
+                alpha=0,
+                batch_size=X_train_scaled.shape[0]  # 🔧 统一使用全量批次
+            )
+            causal_model.fit(X_train_scaled, y_train_noisy)
+            models[mode] = (causal_model, scaler)
+        
+        return models
+    
+    def _evaluate_models(self, models, X_val, y_val, X_test, y_test):
+        """评估所有模型"""
+        results = {}
+        
+        for model_name, (model, scaler) in models.items():
+            # 验证集评估
+            X_val_scaled = scaler.transform(X_val)
+            y_val_pred = model.predict(X_val_scaled)
+            
+            val_metrics = {
+                'MAE': mean_absolute_error(y_val, y_val_pred),
+                'MdAE': median_absolute_error(y_val, y_val_pred),
+                'RMSE': np.sqrt(mean_squared_error(y_val, y_val_pred)),
+                'R²': r2_score(y_val, y_val_pred)
+            }
+            
+            # 测试集评估
+            X_test_scaled = scaler.transform(X_test)
+            y_test_pred = model.predict(X_test_scaled)
+            
+            test_metrics = {
+                'MAE': mean_absolute_error(y_test, y_test_pred),
+                'MdAE': median_absolute_error(y_test, y_test_pred),
+                'RMSE': np.sqrt(mean_squared_error(y_test, y_test_pred)),
+                'R²': r2_score(y_test, y_test_pred)
+            }
+            
+            results[model_name] = {
+                'val': val_metrics,
+                'test': test_metrics
+            }
+        
+        return results
     
     def run_comprehensive_benchmark(self, test_size=None, val_size=None, anomaly_ratio=None, verbose=None):
         """运行全面的基准测试"""
@@ -247,7 +384,7 @@ class CaliforniaHousingTutorial:
             verbose = self.config.VERBOSE
             
         if verbose:
-            print("\\n🚀 开始综合基准测试")
+            print("\n🚀 开始综合基准测试 (Sklearn版本)")
             print("=" * 60)
             print(f"🔧 实验配置:")
             print(f"   - 测试集比例: {test_size:.1%}")
@@ -259,40 +396,51 @@ class CaliforniaHousingTutorial:
             print(f"   - 最大训练轮数: {self.config.CAUSAL_MAX_EPOCHS}")
             print(f"   - 早停patience: {self.config.CAUSAL_PATIENCE}")
         
-        # 使用基准测试模块
-        benchmark = BaselineBenchmark()
+        # 数据分割
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            self.X, self.y, 
+            test_size=test_size, 
+            random_state=self.config.RANDOM_STATE
+        )
         
-        # 运行基准测试
-        self.results = benchmark.compare_models(
-            X=self.X,
-            y=self.y,
-            task_type='regression',
-            test_size=test_size,
-            val_size=val_size,
-            anomaly_ratio=anomaly_ratio,
-            random_state=self.config.RANDOM_STATE,
-            verbose=verbose,
-            # CausalEngine参数
-            causal_modes=self.config.CAUSAL_MODES,
-            hidden_sizes=self.config.CAUSAL_HIDDEN_SIZES,
-            max_epochs=self.config.CAUSAL_MAX_EPOCHS,
-            lr=self.config.CAUSAL_LR,
-            patience=self.config.CAUSAL_PATIENCE,
-            tol=self.config.CAUSAL_TOL,
-            gamma_init=self.config.CAUSAL_GAMMA_INIT,
-            b_noise_init=self.config.CAUSAL_B_NOISE_INIT,
-            b_noise_trainable=self.config.CAUSAL_B_NOISE_TRAINABLE,
-            # sklearn/PyTorch参数
-            hidden_layer_sizes=self.config.SKLEARN_HIDDEN_LAYERS,
-            max_iter=self.config.SKLEARN_MAX_ITER,
-            learning_rate=self.config.SKLEARN_LR
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp,
+            test_size=val_size,
+            random_state=self.config.RANDOM_STATE
         )
         
         if verbose:
+            print(f"\n📊 数据分割:")
+            print(f"   - 训练集: {len(X_train)} 样本")
+            print(f"   - 验证集: {len(X_val)} 样本")
+            print(f"   - 测试集: {len(X_test)} 样本")
+        
+        # 训练模型
+        models = self._train_models(X_train, y_train, X_val, y_val, anomaly_ratio, verbose)
+        
+        # 评估模型
+        self.results = self._evaluate_models(models, X_val, y_val, X_test, y_test)
+        
+        if verbose:
             print(f"\n📊 基准测试结果 (异常比例: {anomaly_ratio:.0%})")
-            benchmark.print_results(self.results, 'regression')
+            self._print_results()
         
         return self.results
+    
+    def _print_results(self):
+        """打印结果表格"""
+        print("=" * 140)
+        print(f"{'方法':<15} {'验证集':<60} {'测试集':<60}")
+        print(f"{'':15} {'MAE':<12} {'MdAE':<12} {'RMSE':<12} {'R²':<12} {'MAE':<12} {'MdAE':<12} {'RMSE':<12} {'R²':<12}")
+        print("-" * 140)
+        
+        for method, metrics in self.results.items():
+            val_m = metrics['val']
+            test_m = metrics['test']
+            print(f"{method:<15} {val_m['MAE']:<12.4f} {val_m['MdAE']:<12.4f} {val_m['RMSE']:<12.4f} {val_m['R²']:<12.4f} "
+                  f"{test_m['MAE']:<12.4f} {test_m['MdAE']:<12.4f} {test_m['RMSE']:<12.4f} {test_m['R²']:<12.4f}")
+        
+        print("=" * 140)
     
     def analyze_performance(self, verbose=True):
         """分析性能结果"""
@@ -301,7 +449,7 @@ class CaliforniaHousingTutorial:
             return
         
         if verbose:
-            print("\\n🔍 性能分析")
+            print("\n🔍 性能分析")
             print("=" * 60)
         
         # 提取测试集R²分数
@@ -325,7 +473,7 @@ class CaliforniaHousingTutorial:
                 print(f"   {i}. {method:<15} R² = {r2:.4f} (+ {improvement:+.1f}%)")
         
         # CausalEngine性能分析
-        causal_methods = [m for m in self.results.keys() if m in ['deterministic', 'standard', 'sampling']]
+        causal_methods = [m for m in self.results.keys() if m in self.config.CAUSAL_MODES]
         if causal_methods:
             best_causal = max(causal_methods, key=lambda x: test_r2_scores[x])
             traditional_methods = [m for m in self.results.keys() if m in ['sklearn', 'pytorch']]
@@ -335,7 +483,7 @@ class CaliforniaHousingTutorial:
                 causal_improvement = ((test_r2_scores[best_causal] - test_r2_scores[best_traditional]) 
                                     / abs(test_r2_scores[best_traditional])) * 100
                 
-                print(f"\\n🎯 CausalEngine优势分析:")
+                print(f"\n🎯 CausalEngine优势分析:")
                 print(f"   最佳CausalEngine模式: {best_causal} (R² = {test_r2_scores[best_causal]:.4f})")
                 print(f"   最佳传统方法: {best_traditional} (R² = {test_r2_scores[best_traditional]:.4f})")
                 print(f"   性能提升: {causal_improvement:+.2f}%")
@@ -356,7 +504,7 @@ class CaliforniaHousingTutorial:
             print("❌ 请先运行基准测试")
             return
         
-        print("\\n📊 创建性能可视化图表")
+        print("\n📊 创建性能可视化图表")
         print("-" * 30)
         
         # 准备数据
@@ -365,7 +513,7 @@ class CaliforniaHousingTutorial:
         
         # 创建子图
         fig, axes = plt.subplots(2, 2, figsize=self.config.FIGURE_SIZE_PERFORMANCE)
-        fig.suptitle('CausalEngine vs Traditional Methods: California Housing Performance (25% Label Anomaly)', fontsize=16, fontweight='bold')
+        fig.suptitle('CausalEngine vs Traditional Methods: California Housing Performance (25% Label Anomaly) - Sklearn Version', fontsize=16, fontweight='bold')
         axes = axes.flatten()  # 展平为一维数组便于访问
         
         colors = ['skyblue', 'lightcoral', 'lightgreen', 'gold', 'plum']
@@ -411,35 +559,35 @@ class CaliforniaHousingTutorial:
             verbose = self.config.VERBOSE
             
         if verbose:
-            print("\\n🛡️ 鲁棒性测试")
+            print("\n🛡️ 鲁棒性测试")
             print("=" * 60)
             print("测试CausalEngine在不同异常标签比例下的表现")
         
         robustness_results = {}
         
+        # 数据分割（固定分割以确保一致性）
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            self.X, self.y, 
+            test_size=0.2, 
+            random_state=self.config.RANDOM_STATE
+        )
+        
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp,
+            test_size=0.2,
+            random_state=self.config.RANDOM_STATE
+        )
+        
         for anomaly_ratio in anomaly_ratios:
             if verbose:
-                print(f"\\n🔬 测试异常比例: {anomaly_ratio:.1%}")
+                print(f"\n🔬 测试异常比例: {anomaly_ratio:.1%}")
                 print("-" * 30)
             
-            # 运行基准测试
-            benchmark = BaselineBenchmark()
-            results = benchmark.compare_models(
-                X=self.X,
-                y=self.y,
-                task_type='regression',
-                test_size=0.2,
-                val_size=0.2,
-                anomaly_ratio=anomaly_ratio,
-                random_state=self.config.RANDOM_STATE,
-                verbose=False,  # 简化输出
-                causal_modes=['deterministic', 'standard'],  # 测试两种重要模式
-                hidden_sizes=self.config.CAUSAL_HIDDEN_SIZES,
-                max_epochs=self.config.CAUSAL_MAX_EPOCHS,
-                patience=self.config.CAUSAL_PATIENCE,
-                tol=self.config.CAUSAL_TOL
-            )
+            # 训练模型 (仅训练核心模型以节省时间)
+            models = self._train_robustness_models(X_train, y_train, X_val, y_val, anomaly_ratio, verbose=False)
             
+            # 评估模型
+            results = self._evaluate_models(models, X_val, y_val, X_test, y_test)
             robustness_results[anomaly_ratio] = results
             
             if verbose:
@@ -460,8 +608,88 @@ class CaliforniaHousingTutorial:
         
         return robustness_results
     
+    def _train_robustness_models(self, X_train, y_train, X_val, y_val, anomaly_ratio, verbose=False):
+        """为鲁棒性测试训练核心模型"""
+        # 数据预处理
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        
+        # 注入标签异常
+        y_train_noisy = self._inject_label_anomalies(y_train, anomaly_ratio, random_state=self.config.RANDOM_STATE)
+        
+        models = {}
+        
+        # 训练核心模型
+        core_models = {
+            'sklearn': MLPRegressor(
+                hidden_layer_sizes=self.config.SKLEARN_HIDDEN_LAYERS,
+                max_iter=self.config.SKLEARN_MAX_ITER,
+                learning_rate_init=self.config.SKLEARN_LR,
+                early_stopping=True,
+                validation_fraction=0.2,
+                n_iter_no_change=self.config.NN_PATIENCE,
+                tol=self.config.NN_TOLERANCE,
+                random_state=self.config.RANDOM_STATE,
+                alpha=0,
+                batch_size=X_train_scaled.shape[0]  # 使用全量批次
+            ),
+            'pytorch': MLPPytorchRegressor(
+                hidden_layer_sizes=self.config.NN_HIDDEN_SIZES,
+                max_iter=self.config.PYTORCH_EPOCHS,
+                learning_rate=self.config.PYTORCH_LR,
+                early_stopping=True,
+                validation_fraction=0.2,
+                n_iter_no_change=self.config.PYTORCH_PATIENCE,
+                tol=self.config.NN_TOLERANCE,
+                random_state=self.config.RANDOM_STATE,
+                verbose=False,
+                alpha=0,
+                batch_size=X_train_scaled.shape[0]  # 🔧 统一使用全量批次
+            ),
+            'deterministic': MLPCausalRegressor(
+                perception_hidden_layers=self.config.CAUSAL_HIDDEN_SIZES,
+                mode='deterministic',
+                gamma_init=self.config.CAUSAL_GAMMA_INIT,
+                b_noise_init=self.config.CAUSAL_B_NOISE_INIT,
+                b_noise_trainable=self.config.CAUSAL_B_NOISE_TRAINABLE,
+                max_iter=self.config.CAUSAL_MAX_EPOCHS,
+                learning_rate=self.config.CAUSAL_LR,
+                early_stopping=True,
+                validation_fraction=0.2,
+                n_iter_no_change=self.config.CAUSAL_PATIENCE,
+                tol=self.config.CAUSAL_TOL,
+                random_state=self.config.RANDOM_STATE,
+                verbose=False,
+                alpha=0,
+                batch_size=X_train_scaled.shape[0]  # 🔧 统一使用全量批次
+            ),
+            'standard': MLPCausalRegressor(
+                perception_hidden_layers=self.config.CAUSAL_HIDDEN_SIZES,
+                mode='standard',
+                gamma_init=self.config.CAUSAL_GAMMA_INIT,
+                b_noise_init=self.config.CAUSAL_B_NOISE_INIT,
+                b_noise_trainable=self.config.CAUSAL_B_NOISE_TRAINABLE,
+                max_iter=self.config.CAUSAL_MAX_EPOCHS,
+                learning_rate=self.config.CAUSAL_LR,
+                early_stopping=True,
+                validation_fraction=0.2,
+                n_iter_no_change=self.config.CAUSAL_PATIENCE,
+                tol=self.config.CAUSAL_TOL,
+                random_state=self.config.RANDOM_STATE,
+                verbose=False,
+                alpha=0,
+                batch_size=X_train_scaled.shape[0]  # 🔧 统一使用全量批次
+            )
+        }
+        
+        for model_name, model in core_models.items():
+            model.fit(X_train_scaled, y_train_noisy)
+            models[model_name] = (model, scaler)
+        
+        return models
+    
     def _print_robustness_table(self, robustness_results, anomaly_ratios):
-        """打印鲁棒性测试详细表格 - 显示所有噪声水平下的模型性能"""
+        """打印鲁棒性测试详细表格"""
         print("\n📊 鲁棒性测试详细结果表格")
         print("=" * 140)
         
@@ -515,9 +743,9 @@ class CaliforniaHousingTutorial:
         print("   - 关注各方法在异常比例增加时的性能变化趋势")
     
     def _plot_robustness_results(self, robustness_results, anomaly_ratios):
-        """绘制鲁棒性测试结果 - 显示所有4个回归指标"""
+        """绘制鲁棒性测试结果"""
         fig, axes = plt.subplots(2, 2, figsize=self.config.FIGURE_SIZE_ROBUSTNESS)
-        fig.suptitle('Robustness Test: Impact of Label Anomaly on Model Performance', fontsize=16, fontweight='bold')
+        fig.suptitle('Robustness Test: Impact of Label Anomaly on Model Performance (Sklearn Version)', fontsize=16, fontweight='bold')
         
         methods = ['sklearn', 'pytorch', 'deterministic', 'standard']
         method_labels = ['sklearn MLP', 'PyTorch MLP', 'CausalEngine (Det)', 'CausalEngine (Std)']
@@ -567,7 +795,7 @@ class CaliforniaHousingTutorial:
         plt.close()  # 关闭图形，避免内存泄漏
     
     def _analyze_robustness_trends(self, robustness_results, anomaly_ratios):
-        """分析鲁棒性趋势 - 验证CausalEngine鲁棒性假设"""
+        """分析鲁棒性趋势"""
         print("\n🔬 鲁棒性趋势分析")
         print("=" * 60)
         
@@ -661,10 +889,12 @@ class CaliforniaHousingTutorial:
         else:
             print("   ⚠️ 建议调整实验参数或检查模型配置")
 
+
 def main():
     """主函数：运行完整的教程"""
-    print("🏠 CausalEngine真实世界回归教程")
+    print("🏠 CausalEngine真实世界回归教程 - Sklearn版本")
     print("🎯 目标：在加州房价预测任务中展示CausalEngine的优越性")
+    print("🔧 特点：使用sklearn-style learners，无需BaselineBenchmark")
     print("=" * 80)
     
     # 创建配置实例（在这里可以自定义配置）
@@ -687,7 +917,7 @@ def main():
     print()
     
     # 创建教程实例
-    tutorial = CaliforniaHousingTutorial(config)
+    tutorial = CaliforniaHousingSklearnTutorial(config)
     
     # 1. 加载和探索数据
     tutorial.load_and_explore_data()
@@ -708,24 +938,26 @@ def main():
     if config.RUN_ROBUSTNESS_TEST:
         tutorial.run_robustness_test()
     else:
-        print("\\n🛡️ 跳过鲁棒性测试（配置中禁用）")
+        print("\n🛡️ 跳过鲁棒性测试（配置中禁用）")
     
-    print("\\n🎉 教程完成！")
+    print("\n🎉 教程完成！")
     print("📋 总结:")
     print("   - 使用了真实世界的加州房价数据集")
     print(f"   - 比较了{len(config.CAUSAL_MODES) + 2}种不同的方法")
     print("   - 展示了CausalEngine的性能优势")
+    print("   - 直接使用sklearn-style learners")
     if config.RUN_ROBUSTNESS_TEST:
         print("   - 测试了模型的鲁棒性")
     print("   - 提供了详细的可视化分析")
-    print("\\n📊 生成的文件:")
+    print("\n📊 生成的文件:")
     if config.SAVE_PLOTS:
         print(f"   - {config.OUTPUT_DIR}/california_housing_analysis.png     (数据分析图)")
         print(f"   - {config.OUTPUT_DIR}/california_housing_performance.png  (性能对比图)")
         if config.RUN_ROBUSTNESS_TEST:
             print(f"   - {config.OUTPUT_DIR}/california_housing_robustness.png   (鲁棒性测试图 - 4个指标)")
     
-    print("\\n💡 提示：在脚本顶部的TutorialConfig类中修改参数来自定义实验！")
+    print("\n💡 提示：在脚本顶部的TutorialConfig类中修改参数来自定义实验！")
+
 
 if __name__ == "__main__":
     main()

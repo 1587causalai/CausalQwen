@@ -32,7 +32,7 @@
 
 ### 核心数学框架
 
-CausalEngine 算法基于结构因果方程：
+CausalEngine 算法基于结构因果方程：就是那个标签异常的。
 
 $$
 Y = f(U, E)

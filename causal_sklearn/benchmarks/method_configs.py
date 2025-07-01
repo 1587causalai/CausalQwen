@@ -130,15 +130,14 @@ DEFAULT_METHOD_CONFIGS = {
         'name': 'XGBoost',
         'type': 'boosting',
         'params': {
-            'n_estimators': 100,
-            'learning_rate': 0.1,
+            'n_estimators': 1000,
+            'learning_rate': 0.05,
             'max_depth': 6,
-            'min_child_weight': 1,
             'subsample': 0.8,
             'colsample_bytree': 0.8,
             'random_state': 42,
             'n_jobs': -1,
-            'verbosity': 0
+            'early_stopping_rounds': 50
         }
     },
     
@@ -155,7 +154,8 @@ DEFAULT_METHOD_CONFIGS = {
             'colsample_bytree': 0.8,
             'random_state': 42,
             'n_jobs': -1,
-            'verbosity': -1
+            'verbosity': False,
+            'thread_count': -1
         }
     },
     

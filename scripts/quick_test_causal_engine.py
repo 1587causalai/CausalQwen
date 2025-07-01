@@ -36,36 +36,39 @@ warnings.filterwarnings('ignore')
 
 # =============================================================================
 # 配置部分 - 在这里修改实验参数
+# 🎯 重点：实现最小必要不同 - 所有算法使用统一的基础配置
 # =============================================================================
 
 REGRESSION_CONFIG = {
     # 数据生成
-    'n_samples': 4000,  # 更大规模
+    'n_samples': 4000,
     'n_features': 12,
     'noise': 1.0,
     'random_state': 42,
-    'test_size': 0.1,  # 测试集比例
-    'anomaly_ratio': 0.2,  # 无异常数据，纯净环境
+    'test_size': 0.1,
+    'anomaly_ratio': 0.2,
     
-    # 网络结构
-    'perception_hidden_layers': (128, 64),  # 更深的网络
+    # 🧠 统一神经网络配置 - 确保所有方法参数一致
+    # =========================================================================
+    'perception_hidden_layers': (128, 64),  # 统一网络结构
     'abduction_hidden_layers': (),
     'repre_size': None,
     'causal_size': None,
     
-    # CausalEngine参数
+    # 🎯 统一训练参数 - 所有方法使用相同配置
+    'max_iter': 2000,                       # 统一最大迭代次数
+    'learning_rate': 0.01,                  # 统一学习率
+    'patience': 50,                         # 统一早停patience
+    'tol': 1e-4,                           # 统一收敛容忍度
+    'validation_fraction': 0.2,             # 统一验证集比例
+    'batch_size': None,                     # 统一使用全量批次
+    'alpha': 0.0,                          # 🔧 统一正则化：无L2正则化
+    # =========================================================================
+    
+    # CausalEngine特有参数
     'gamma_init': 1.0,
     'b_noise_init': 1.0,
     'b_noise_trainable': True,
-    'alpha': 0.0001, # 添加L2正则化，与sklearn默认一致
-    
-    # 训练参数
-    'max_iter': 2000,  # 减少最大迭代次数
-    'learning_rate': 0.01,  # 降低学习率，更接近sklearn默认
-    'patience': 50,  # 减少patience，更接近sklearn默认
-    'tol': 1e-4,  # 更接近sklearn默认tolerance
-    'validation_fraction': 0.2,
-    'batch_size': None,  # 统一使用全量训练(full-batch)
     
     # 测试控制
     'test_sklearn': True,
@@ -76,35 +79,37 @@ REGRESSION_CONFIG = {
 }
 
 CLASSIFICATION_CONFIG = {
-    # 数据生成 - 与sklearn更相似的设置
-    'n_samples': 4000,  # 减少样本量，更像sklearn经典测试
-    'n_features': 10,   # 减少特征数
+    # 数据生成
+    'n_samples': 4000,
+    'n_features': 10,
     'n_classes': 3,
-    'class_sep': 1.0,   # 提高类别分离度
+    'class_sep': 1.0,
     'random_state': 42,
-    'test_size': 0.2,   # 测试集比例
-    'label_noise_ratio': 0.3,  # 降低标签噪声
+    'test_size': 0.2,
+    'label_anomaly_ratio': 0.3,
     
-    # 网络结构 - 更简单的网络
-    'perception_hidden_layers': (100,),  # sklearn默认结构
+    # 🧠 统一神经网络配置 - 确保所有方法参数一致
+    # =========================================================================
+    'perception_hidden_layers': (100,),    # 统一网络结构
     'abduction_hidden_layers': (),
     'repre_size': None,
     'causal_size': None,
     
-    # CausalEngine参数
+    # 🎯 统一训练参数 - 所有方法使用相同配置
+    'max_iter': 3000,                      # 统一最大迭代次数
+    'learning_rate': 0.01,                 # 统一学习率
+    'patience': 10,                        # 统一早停patience
+    'tol': 1e-4,                          # 统一收敛容忍度
+    'validation_fraction': 0.2,            # 统一验证集比例
+    'batch_size': None,                    # 统一使用全量批次
+    'alpha': 0.0,                         # 🔧 统一正则化：无L2正则化
+    # =========================================================================
+    
+    # CausalEngine分类特有参数
     'gamma_init': 1.0,
     'b_noise_init': 1.0,
     'b_noise_trainable': True,
     'ovr_threshold': 2.0,
-    'alpha': 0.0,  # 匹配sklearn默认L2正则化
-    
-    # 训练参数 - 更接近sklearn默认值
-    'max_iter': 3000,   # 减少最大迭代次数
-    'learning_rate': 0.01,  # 使用sklearn默认学习率
-    'patience': 10,     # 使用sklearn默认patience
-    'tol': 1e-4,        # 匹配sklearn默认tolerance
-    'validation_fraction': 0.2,  # 使用sklearn默认验证集比例
-    'batch_size': None,  # 统一使用全量训练(full-batch)
     
     # 测试控制
     'test_sklearn': True,
@@ -120,7 +125,7 @@ CLASSIFICATION_CONFIG = {
 
 def generate_regression_data(config):
     """生成回归测试数据"""
-    print(f"📊 生成回归数据: {config['n_samples']}样本, {config['n_features']}特征, 噪声={config['noise']}")
+    print(f"📊 生成回归数据: {config['n_samples']}样本, {config['n_features']}特征, 数据生成噪声={config['noise']}")
     
     # 生成基础数据
     X, y = make_regression(
@@ -173,7 +178,7 @@ def generate_classification_data(config):
         test_size=config['test_size'], 
         random_state=config['random_state'],
         stratify=y,
-        anomaly_ratio=config['label_noise_ratio'], 
+        anomaly_ratio=config['label_anomaly_ratio'], 
         anomaly_type='classification',
         anomaly_strategy='shuffle'
     )
@@ -185,7 +190,7 @@ def generate_classification_data(config):
     }
     
     print(f"   训练集: {len(X_train)} | 测试集: {len(X_test)}")
-    print(f"   标签噪声: {config['label_noise_ratio']:.1%} (仅影响训练集)")
+    print(f"   标签异常: {config['label_anomaly_ratio']:.1%} (仅影响训练集)")
     return data
 
 # =============================================================================
@@ -543,15 +548,17 @@ def test_classification(config=None):
 def print_config_summary(config, task_type):
     """打印配置摘要"""
     if task_type == 'regression':
-        print(f"数据: {config['n_samples']}样本, {config['n_features']}特征, 噪声={config['noise']}")
-        print(f"异常: {config['anomaly_ratio']:.1%} 异常数据注入")
+        print(f"数据: {config['n_samples']}样本, {config['n_features']}特征, 数据生成噪声={config['noise']}")
+        print(f"标签异常: {config['anomaly_ratio']:.1%} 标签异常注入")
     else:
         print(f"数据: {config['n_samples']}样本, {config['n_features']}特征, {config['n_classes']}类别")
-        print(f"噪声: {config['label_noise_ratio']:.1%} 标签噪声, 分离度={config['class_sep']}")
+        print(f"标签异常: {config['label_anomaly_ratio']:.1%} 标签异常注入, 分离度={config['class_sep']}")
     
-    print(f"网络: {config['perception_hidden_layers']}")
-    print(f"训练: {config['max_iter']} epochs, lr={config['learning_rate']}, patience={config['patience']}")
-    print(f"测试: sklearn={config['test_sklearn']}, pytorch={config['test_pytorch']}, "
+    print(f"🧠 统一网络配置: {config['perception_hidden_layers']}")
+    print(f"🎯 统一训练配置: {config['max_iter']} epochs, lr={config['learning_rate']}, patience={config['patience']}")
+    print(f"🔧 统一批次大小: {'全量批次' if config['batch_size'] is None else config['batch_size']}")
+    print(f"🛡️ 统一正则化: alpha={config['alpha']}")
+    print(f"测试方法: sklearn={config['test_sklearn']}, pytorch={config['test_pytorch']}, "
           f"deterministic={config['test_causal_deterministic']}, standard={config['test_causal_standard']}")
     print()
 

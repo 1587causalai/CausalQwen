@@ -320,6 +320,35 @@ class BaselineMethodFactory:
         if task_type != 'regression':
             raise NotImplementedError("稳健MLP目前只支持回归任务")
         
+        # 参数映射：hidden_sizes -> hidden_layer_sizes
+        if 'hidden_sizes' in params and 'hidden_layer_sizes' not in params:
+            params['hidden_layer_sizes'] = params.pop('hidden_sizes')
+        
+        # 参数映射：max_epochs -> max_iter
+        if 'max_epochs' in params and 'max_iter' not in params:
+            params['max_iter'] = params.pop('max_epochs')
+        
+        # 参数映射：lr -> learning_rate
+        if 'lr' in params and 'learning_rate' not in params:
+            params['learning_rate'] = params.pop('lr')
+        
+        # 参数映射：patience -> n_iter_no_change (sklearn兼容性)
+        if 'patience' in params and 'n_iter_no_change' not in params:
+            params['n_iter_no_change'] = params.pop('patience')
+        
+        # 参数映射：huber_delta -> delta (sklearn兼容性)
+        if 'huber_delta' in params and 'delta' not in params:
+            params['delta'] = params.pop('huber_delta')
+        
+        # 移除不相关的参数
+        irrelevant_params = ['epochs', 'causal_modes', 'baseline_methods', 
+                           'gamma_init', 'b_noise_init', 'b_noise_trainable',
+                           'ovr_threshold', 'anomaly_ratio', 'test_size', 'val_size',
+                           'verbose', 'save_plots', 'output_dir', 'anomaly_strategy',
+                           'loss_function']  # loss_function is determined by method type
+        for param in irrelevant_params:
+            params.pop(param, None)
+        
         if loss_type == 'huber':
             return MLPHuberRegressor(**params)
         elif loss_type == 'pinball':
@@ -340,11 +369,16 @@ class BaselineMethodFactory:
         Returns:
             包含验证集和测试集性能指标的字典
         """
-        # 训练模型 - 支持早停的方法使用验证集
-        if supports_early_stopping(method_name):
-            model = fit_with_early_stopping(
-                method_name, model, X_train, y_train, X_val, y_val, task_type
-            )
+        # 特殊处理需要验证集进行早停的模型
+        if method_name in ['xgboost', 'lightgbm', 'catboost']:
+            # 这些模型可以在fit方法中接受eval_set
+            # 注意：catboost的early_stopping_rounds在初始化时定义
+            fit_params = {'eval_set': [(X_val, y_val)], 'verbose': False}
+            # LightGBM和XGBoost的verbose参数在fit中
+            if method_name in ['lightgbm', 'xgboost']:
+                model.fit(X_train, y_train, **fit_params)
+            else: # CatBoost
+                model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
         else:
             model.fit(X_train, y_train)
         
