@@ -19,7 +19,7 @@ import warnings
 
 from .._causal_engine import create_causal_regressor, create_causal_classifier
 from .methods import BaselineMethodFactory, MethodDependencyChecker, filter_available_methods
-from ..utils import causal_split
+from ..data_processing import inject_shuffle_noise
 from .method_configs import (
     get_method_config, get_method_group, get_task_recommendations, 
     validate_methods, expand_method_groups, list_available_methods
@@ -58,6 +58,10 @@ class BaselineBenchmark:
     
     提供统一的接口来比较CausalEngine与传统机器学习方法的性能。
     支持配置驱动的基准方法选择，包括神经网络、集成方法、SVM、线性方法等。
+    
+    数据预处理策略：
+    - 特征标准化：所有方法都接收StandardScaler标准化后的特征
+    - 目标变量：保持原始尺度，确保与Sklearn-Style实现一致性
     """
     
     def __init__(self):
@@ -67,16 +71,17 @@ class BaselineBenchmark:
     
     
     def train_pytorch_model(self, model, X_train, y_train, X_val=None, y_val=None, 
-                          epochs=1000, lr=0.001, task='regression', patience=50, tol=1e-4):
+                          epochs=1000, lr=0.001, task='regression', patience=50, tol=1e-4, criterion=None):
         """训练PyTorch基线模型"""
         X_train_tensor = torch.FloatTensor(X_train)
         y_train_tensor = torch.FloatTensor(y_train)
         
-        if task == 'regression':
-            criterion = nn.MSELoss()
-        else:
-            criterion = nn.CrossEntropyLoss()
-            y_train_tensor = y_train_tensor.long()
+        if criterion is None:
+            if task == 'regression':
+                criterion = nn.MSELoss()
+            else:
+                criterion = nn.CrossEntropyLoss()
+                y_train_tensor = y_train_tensor.long()
         
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         
@@ -90,10 +95,14 @@ class BaselineBenchmark:
             optimizer.zero_grad()
             
             outputs = model(X_train_tensor)
-            if task == 'regression':
+
+            if callable(criterion): # Handle custom loss functions
                 loss = criterion(outputs.squeeze(), y_train_tensor)
-            else:
-                loss = criterion(outputs, y_train_tensor)
+            else: # Handle nn.Module losses
+                if task == 'regression':
+                    loss = criterion(outputs.squeeze(), y_train_tensor)
+                else:
+                    loss = criterion(outputs, y_train_tensor)
             
             loss.backward()
             optimizer.step()
@@ -104,12 +113,17 @@ class BaselineBenchmark:
                 with torch.no_grad():
                     X_val_tensor = torch.FloatTensor(X_val)
                     val_outputs = model(X_val_tensor)
-                    if task == 'regression':
+
+                    if callable(criterion): # Handle custom loss functions
                         y_val_tensor = torch.FloatTensor(y_val)
                         val_loss = criterion(val_outputs.squeeze(), y_val_tensor).item()
-                    else:
-                        y_val_tensor = torch.LongTensor(y_val)
-                        val_loss = criterion(val_outputs, y_val_tensor).item()
+                    else: # Handle nn.Module losses
+                        if task == 'regression':
+                            y_val_tensor = torch.FloatTensor(y_val)
+                            val_loss = criterion(val_outputs.squeeze(), y_val_tensor).item()
+                        else:
+                            y_val_tensor = torch.LongTensor(y_val)
+                            val_loss = criterion(val_outputs, y_val_tensor).item()
                 
                 if val_loss < best_loss - tol:
                     best_loss = val_loss
@@ -239,9 +253,14 @@ class BaselineBenchmark:
         return model
     
     def compare_models(self, X, y, task_type='regression', test_size=0.2, val_size=0.25, 
-                      anomaly_ratio=0.0, random_state=42, verbose=True, **kwargs):
+                      anomaly_ratio=0.0, random_state=42, verbose=True, global_standardization=False, **kwargs):
         """
         通用模型比较方法
+        
+        数据预处理策略：
+        - 特征(X): 使用StandardScaler进行标准化
+        - 目标(y): 默认保持原始尺度，如果global_standardization=True则也进行标准化
+        - 支持全局标准化策略以确保与Sklearn-Style实现的完全一致性
         
         Args:
             X: 特征数据
@@ -252,24 +271,32 @@ class BaselineBenchmark:
             anomaly_ratio: 标签异常比例
             random_state: 随机种子
             verbose: 是否显示详细信息
+            global_standardization: 是否对y也进行标准化（用于与Sklearn-Style实现完全一致）
             **kwargs: 其他参数
         """
         # 1. 统一数据分割和异常注入
         if verbose and anomaly_ratio > 0:
             print(f"🔥 数据准备: 分割数据集并注入 {anomaly_ratio:.1%} 的标签异常...")
         
-        # 统一使用causal_split进行数据分割和异常注入
+        # 使用标准train_test_split进行数据分割
         stratify_option = y if task_type == 'classification' else None
         
-        X_train_full, X_test, y_train_full, y_test = causal_split(
+        X_train_full, X_test, y_train_full, y_test = train_test_split(
             X, y,
             test_size=test_size,
             random_state=random_state,
-            anomaly_ratio=anomaly_ratio,
-            anomaly_type=task_type,
-            stratify=stratify_option,
-            anomaly_strategy=kwargs.get('anomaly_strategy', 'shuffle')
+            stratify=stratify_option
         )
+        
+        # 对训练集标签进行异常注入
+        if anomaly_ratio > 0:
+            y_train_full, noise_indices = inject_shuffle_noise(
+                y_train_full,
+                noise_ratio=anomaly_ratio,
+                random_state=random_state
+            )
+            if verbose:
+                print(f"   异常注入完成: {anomaly_ratio:.1%} ({len(noise_indices)}/{len(y_train_full)} 样本受影响)")
         
         # 2. 从(可能带噪的)训练集中分割出验证集
         # 注意：这里的y_train_full可能已经带有噪声
@@ -288,20 +315,25 @@ class BaselineBenchmark:
         X_val_scaled = scaler_X.transform(X_val)
         X_test_scaled = scaler_X.transform(X_test)
         
-        # 标签标准化（回归任务）
-        if task_type == 'regression':
+        # 目标变量处理：根据global_standardization参数决定是否标准化
+        scaler_y = None
+        if global_standardization and task_type == 'regression':
+            # 全局标准化策略：对y也进行标准化
             scaler_y = StandardScaler()
-            # 注意：在干净的y_train上拟合scaler
             y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
             y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
             y_test_scaled = scaler_y.transform(y_test.reshape(-1, 1)).flatten()
+            if verbose:
+                print(f"   🎯 全局标准化：X和y都已标准化")
         else:
-            # 分类任务不需要标签标准化
+            # 传统策略：只对特征进行标准化，目标变量保持原始尺度
             y_train_scaled = y_train
-            y_val_scaled = y_val
+            y_val_scaled = y_val  
             y_test_scaled = y_test
+            if verbose and not global_standardization:
+                print(f"   📊 传统标准化：只对X标准化，y保持原始尺度")
 
-        # 4. 异常注入步骤已被causal_split取代，此处无需操作
+        # 4. 异常注入已完成，此处无需额外操作
         
         results = {}
         
@@ -313,25 +345,71 @@ class BaselineBenchmark:
             print(f"\n📊 选择的基准方法: {baseline_methods}")
             print(f"🧠 CausalEngine模式: {causal_modes}")
         
-        # 6. 训练和评估传统基准方法
+        # 6. 准备逆变换参数（用于全局标准化模式）
+        inverse_transform_params = {}
+        if global_standardization and task_type == 'regression' and scaler_y is not None:
+            inverse_transform_params = {
+                'scaler_y': scaler_y,
+                'y_original_val': y_val,
+                'y_original_test': y_test
+            }
+        
+        # 7. 训练和评估传统基准方法
         for method_name in baseline_methods:
             if method_name in ['sklearn', 'sklearn_mlp']:
                 # 保持向后兼容
+                method_config = get_method_config('sklearn_mlp') or {'params': {}}
+                params = method_config['params'].copy()
+                params.update(kwargs)
+
                 results.update(self._train_sklearn_baseline(
                     X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, 
-                    X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
+                    X_test_scaled, y_test_scaled, task_type, verbose, **inverse_transform_params, **params
                 ))
             elif method_name in ['pytorch', 'pytorch_mlp']:
                 # 保持向后兼容
+                method_config = get_method_config('pytorch_mlp') or {'params': {}}
+                params = method_config['params'].copy()
+                params.update(kwargs)
+
                 results.update(self._train_pytorch_baseline(
                     X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, 
-                    X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
+                    X_test_scaled, y_test_scaled, task_type, verbose, **inverse_transform_params, **params
+                ))
+            elif method_name == 'mlp_huber':
+                method_config = get_method_config('mlp_huber') or {'params': {}}
+                params = method_config['params'].copy()
+                params.update(kwargs)
+
+                results.update(self._train_huber_baseline(
+                    X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled,
+                    X_test_scaled, y_test_scaled, task_type, verbose, **inverse_transform_params, **params
+                ))
+            elif method_name == 'mlp_pinball_median':
+                method_config = get_method_config('mlp_pinball_median') or {'params': {}}
+                params = method_config['params'].copy()
+                params.update(kwargs)
+
+                results.update(self._train_pinball_baseline(
+                    X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled,
+                    X_test_scaled, y_test_scaled, task_type, verbose, **inverse_transform_params, **params
+                ))
+            elif method_name == 'mlp_cauchy':
+                method_config = get_method_config('mlp_cauchy') or {'params': {}}
+                params = method_config['params'].copy()
+                params.update(kwargs)
+                
+                results.update(self._train_cauchy_baseline(
+                    X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled,
+                    X_test_scaled, y_test_scaled, task_type, verbose, **inverse_transform_params, **params
                 ))
             else:
                 # 新的基准方法
+                config = get_method_config(method_name)
+                # 统一使用未缩放的y，与其他方法保持一致
                 result = self._train_baseline_method(
                     method_name, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled,
-                    X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
+                    X_test_scaled, y_test_scaled, task_type, verbose, **inverse_transform_params, **kwargs
                 )
                 if result:
                     results.update(result)
@@ -339,18 +417,23 @@ class BaselineBenchmark:
         # 7. 训练和评估CausalEngine模型
         results.update(self._train_causal_engines(
             X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, 
-            X_test_scaled, y_test_scaled, task_type, verbose, **kwargs
+            X_test_scaled, y_test_scaled, task_type, verbose, **inverse_transform_params, **kwargs
         ))
+        
+        # 8. 全局标准化模式下的结果已经在正确的尺度上
+        # 因为我们现在让调用方传递正确的数据并设置合适的参数
         
         return results
     
     def _train_sklearn_baseline(self, X_train, y_train, X_val, y_val, X_test, y_test, 
-                               task_type, verbose, **kwargs):
+                               task_type, verbose, scaler_y=None, y_original_val=None, y_original_test=None, **kwargs):
         """训练sklearn基线"""
         hidden_layer_sizes = kwargs.get('hidden_layer_sizes', (128, 64))
         max_iter = kwargs.get('max_iter', 5000)
-        learning_rate = kwargs.get('learning_rate', 0.01)
+        learning_rate = kwargs.get('learning_rate_init', 0.01)
         random_state = kwargs.get('random_state', 42)
+        patience = kwargs.get('patience', 50)
+        tol = kwargs.get('tol', 1e-4)
         
         if verbose: print("训练 sklearn 基线...")
         
@@ -362,31 +445,49 @@ class BaselineBenchmark:
                 learning_rate_init=learning_rate,
                 early_stopping=False,  # 关闭内部早停
                 random_state=random_state,
-                alpha=0.0001
+                alpha=kwargs.get('alpha', 0.0001)
             )
             
             # 手动实现早停策略，使用外部验证集
             model = self._train_sklearn_with_external_validation(
                 model, X_train, y_train, X_val, y_val, 
-                patience=50, tol=1e-4, task_type='regression'
+                patience=patience, tol=tol, task_type='regression'
             )
             
             pred_test = model.predict(X_test)
             pred_val = model.predict(X_val)
             
+            # 如果使用了全局标准化，需要进行逆变换
+            if scaler_y is not None and y_original_test is not None and y_original_val is not None:
+                # 将预测结果转换回原始尺度
+                pred_test_original = scaler_y.inverse_transform(pred_test.reshape(-1, 1)).flatten()
+                pred_val_original = scaler_y.inverse_transform(pred_val.reshape(-1, 1)).flatten()
+                
+                # 在原始尺度上评估
+                eval_y_test = y_original_test
+                eval_y_val = y_original_val
+                eval_pred_test = pred_test_original
+                eval_pred_val = pred_val_original
+            else:
+                # 在当前尺度上评估（传统模式）
+                eval_y_test = y_test
+                eval_y_val = y_val
+                eval_pred_test = pred_test
+                eval_pred_val = pred_val
+            
             return {
                 'sklearn': {
                     'test': {
-                        'MAE': mean_absolute_error(y_test, pred_test),
-                        'MdAE': median_absolute_error(y_test, pred_test), 
-                        'RMSE': np.sqrt(mean_squared_error(y_test, pred_test)),
-                        'R²': r2_score(y_test, pred_test)
+                        'MAE': mean_absolute_error(eval_y_test, eval_pred_test),
+                        'MdAE': median_absolute_error(eval_y_test, eval_pred_test), 
+                        'RMSE': np.sqrt(mean_squared_error(eval_y_test, eval_pred_test)),
+                        'R²': r2_score(eval_y_test, eval_pred_test)
                     },
                     'val': {
-                        'MAE': mean_absolute_error(y_val, pred_val),
-                        'MdAE': median_absolute_error(y_val, pred_val), 
-                        'RMSE': np.sqrt(mean_squared_error(y_val, pred_val)),
-                        'R²': r2_score(y_val, pred_val)
+                        'MAE': mean_absolute_error(eval_y_val, eval_pred_val),
+                        'MdAE': median_absolute_error(eval_y_val, eval_pred_val), 
+                        'RMSE': np.sqrt(mean_squared_error(eval_y_val, eval_pred_val)),
+                        'R²': r2_score(eval_y_val, eval_pred_val)
                     }
                 }
             }
@@ -398,13 +499,13 @@ class BaselineBenchmark:
                 learning_rate_init=learning_rate,
                 early_stopping=False,  # 关闭内部早停
                 random_state=random_state,
-                alpha=0.0001
+                alpha=kwargs.get('alpha', 0.0001)
             )
             
             # 手动实现早停策略，使用外部验证集
             model = self._train_sklearn_with_external_validation(
                 model, X_train, y_train, X_val, y_val, 
-                patience=50, tol=1e-4, task_type='classification'
+                patience=patience, tol=tol, task_type='classification'
             )
             
             pred_test = model.predict(X_test)
@@ -431,76 +532,113 @@ class BaselineBenchmark:
             }
     
     def _train_pytorch_baseline(self, X_train, y_train, X_val, y_val, X_test, y_test, 
-                               task_type, verbose, **kwargs):
+                               task_type, verbose, scaler_y=None, y_original_val=None, y_original_test=None, **kwargs):
         """训练PyTorch基线"""
-        hidden_layer_sizes = kwargs.get('hidden_layer_sizes', (128, 64))
-        max_iter = kwargs.get('max_iter', 5000)
-        learning_rate = kwargs.get('learning_rate', 0.01)
+        if verbose: print("训练 PyTorch 基线 (legacy)...")
+        return self._train_generic_pytorch_baseline(
+            X_train, y_train, X_val, y_val, X_test, y_test,
+            task_type, nn.MSELoss(), 'pytorch', verbose, scaler_y, y_original_val, y_original_test, **kwargs)
+    
+    def _train_huber_baseline(self, X_train, y_train, X_val, y_val, X_test, y_test,
+                              task_type, verbose, scaler_y=None, y_original_val=None, y_original_test=None, **kwargs):
+        """训练Huber Loss MLP基线（遗产实现）"""
+        if verbose: print("训练 mlp_huber (legacy)...")
+        # Huber Loss 不需要标准化y
+        return self._train_generic_pytorch_baseline(
+            X_train, y_train, X_val, y_val, X_test, y_test,
+            task_type, nn.HuberLoss(), 'mlp_huber', verbose, scaler_y, y_original_val, y_original_test, **kwargs)
+
+    def _train_pinball_baseline(self, X_train, y_train, X_val, y_val, X_test, y_test,
+                                task_type, verbose, scaler_y=None, y_original_val=None, y_original_test=None, **kwargs):
+        """训练Pinball Loss MLP基线（遗产实现）"""
+        if verbose: print("训练 mlp_pinball_median (legacy)...")
+        # Pinball Loss 不需要标准化y
+        return self._train_generic_pytorch_baseline(
+            X_train, y_train, X_val, y_val, X_test, y_test,
+            task_type, self._pinball_loss, 'mlp_pinball_median', verbose, scaler_y, y_original_val, y_original_test, **kwargs)
+
+    def _train_cauchy_baseline(self, X_train, y_train, X_val, y_val, X_test, y_test,
+                               task_type, verbose, scaler_y=None, y_original_val=None, y_original_test=None, **kwargs):
+        """训练Cauchy Loss MLP基线（遗产实现）"""
+        if verbose: print("训练 mlp_cauchy (legacy)...")
+        # Cauchy Loss 不需要标准化y
+        return self._train_generic_pytorch_baseline(
+            X_train, y_train, X_val, y_val, X_test, y_test,
+            task_type, self._cauchy_loss, 'mlp_cauchy', verbose, scaler_y, y_original_val, y_original_test, **kwargs)
+    
+    def _pinball_loss(self, y_pred, y_true, quantile=0.5):
+        """Pinball loss (quantile loss) for PyTorch."""
+        error = y_true - y_pred
+        loss = torch.where(error >= 0,
+                           quantile * error,
+                           (quantile - 1) * error)
+        return loss.mean()
         
-        if verbose: print("训练 PyTorch 基线...")
-        
+    def _cauchy_loss(self, y_pred, y_true):
+        """Cauchy loss function: log(1 + (y_pred - y_true)^2)."""
+        error = y_pred - y_true
+        loss = torch.log(1 + error**2)
+        return loss.mean()
+
+    def _train_generic_pytorch_baseline(self, X_train, y_train, X_val, y_val, X_test, y_test,
+                                        task_type, criterion, method_name, verbose, 
+                                        scaler_y=None, y_original_val=None, y_original_test=None,
+                                        hidden_sizes=(128, 64), epochs=3000, lr=0.01, 
+                                        patience=50, tol=1e-4, **kwargs):
+        """通用的PyTorch模型训练函数（用于各类稳健回归器）"""
         n_features = X_train.shape[1]
-        if task_type == 'regression':
-            output_size = 1
-        else:
-            output_size = len(np.unique(y_train))
+        output_size = 1
+
+        model = PyTorchBaseline(n_features, output_size, hidden_sizes)
         
-        model = PyTorchBaseline(n_features, output_size, hidden_layer_sizes)
+        # 使用通用的PyTorch训练器，但传入特定的损失函数
         model = self.train_pytorch_model(
-            model, X_train, y_train, X_val, y_val, 
-            epochs=max_iter, lr=learning_rate, task=task_type,
-            patience=50, tol=1e-4)
-        
+            model, X_train, y_train, X_val, y_val,
+            epochs=epochs, lr=lr, task=task_type,
+            patience=patience, tol=tol, criterion=criterion)
+
         model.eval()
         with torch.no_grad():
-            if task_type == 'regression':
-                pred_test = model(torch.FloatTensor(X_test)).squeeze().numpy()
-                pred_val = model(torch.FloatTensor(X_val)).squeeze().numpy()
+            pred_test = model(torch.FloatTensor(X_test)).squeeze().numpy()
+            pred_val = model(torch.FloatTensor(X_val)).squeeze().numpy()
+
+            # 如果使用了全局标准化，需要进行逆变换
+            if scaler_y is not None and y_original_test is not None and y_original_val is not None:
+                # 将预测结果转换回原始尺度
+                pred_test_original = scaler_y.inverse_transform(pred_test.reshape(-1, 1)).flatten()
+                pred_val_original = scaler_y.inverse_transform(pred_val.reshape(-1, 1)).flatten()
                 
-                return {
-                    'pytorch': {
-                        'test': {
-                            'MAE': mean_absolute_error(y_test, pred_test),
-                            'MdAE': median_absolute_error(y_test, pred_test),
-                            'RMSE': np.sqrt(mean_squared_error(y_test, pred_test)),
-                            'R²': r2_score(y_test, pred_test)
-                        },
-                        'val': {
-                            'MAE': mean_absolute_error(y_val, pred_val),
-                            'MdAE': median_absolute_error(y_val, pred_val),
-                            'RMSE': np.sqrt(mean_squared_error(y_val, pred_val)),
-                            'R²': r2_score(y_val, pred_val)
-                        }
-                    }
-                }
+                # 在原始尺度上评估
+                eval_y_test = y_original_test
+                eval_y_val = y_original_val
+                eval_pred_test = pred_test_original
+                eval_pred_val = pred_val_original
             else:
-                outputs_test = model(torch.FloatTensor(X_test))
-                pred_test = torch.argmax(outputs_test, dim=1).numpy()
-                outputs_val = model(torch.FloatTensor(X_val))
-                pred_val = torch.argmax(outputs_val, dim=1).numpy()
-                
-                n_classes = len(np.unique(y_test))
-                avg_method = 'binary' if n_classes == 2 else 'macro'
-                
-                return {
-                    'pytorch': {
-                        'test': {
-                            'Acc': accuracy_score(y_test, pred_test),
-                            'Precision': precision_score(y_test, pred_test, average=avg_method, zero_division=0),
-                            'Recall': recall_score(y_test, pred_test, average=avg_method, zero_division=0),
-                            'F1': f1_score(y_test, pred_test, average=avg_method, zero_division=0)
-                        },
-                        'val': {
-                            'Acc': accuracy_score(y_val, pred_val),
-                            'Precision': precision_score(y_val, pred_val, average=avg_method, zero_division=0),
-                            'Recall': recall_score(y_val, pred_val, average=avg_method, zero_division=0),
-                            'F1': f1_score(y_val, pred_val, average=avg_method, zero_division=0)
-                        }
+                # 在当前尺度上评估（传统模式）
+                eval_y_test = y_test
+                eval_y_val = y_val
+                eval_pred_test = pred_test
+                eval_pred_val = pred_val
+
+            return {
+                method_name: {
+                    'test': {
+                        'MAE': mean_absolute_error(eval_y_test, eval_pred_test),
+                        'MdAE': median_absolute_error(eval_y_test, eval_pred_test),
+                        'RMSE': np.sqrt(mean_squared_error(eval_y_test, eval_pred_test)),
+                        'R²': r2_score(eval_y_test, eval_pred_test)
+                    },
+                    'val': {
+                        'MAE': mean_absolute_error(eval_y_val, eval_pred_val),
+                        'MdAE': median_absolute_error(eval_y_val, eval_pred_val),
+                        'RMSE': np.sqrt(mean_squared_error(eval_y_val, eval_pred_val)),
+                        'R²': r2_score(eval_y_val, eval_pred_val)
                     }
                 }
-    
+            }
+
     def _train_causal_engines(self, X_train, y_train, X_val, y_val, X_test, y_test, 
-                             task_type, verbose, **kwargs):
+                             task_type, verbose, scaler_y=None, y_original_val=None, y_original_test=None, **kwargs):
         """训练CausalEngine模型（多种模式）"""
         modes = kwargs.get('causal_modes', ['deterministic', 'standard'])
         results = {}
@@ -529,18 +667,36 @@ class BaselineBenchmark:
                     pred_test = model.predict(X_test_torch, mode).cpu().numpy().flatten()
                     pred_val = model.predict(X_val_torch, mode).cpu().numpy().flatten()
                     
+                    # 如果使用了全局标准化，需要进行逆变换
+                    if scaler_y is not None and y_original_test is not None and y_original_val is not None:
+                        # 将预测结果转换回原始尺度
+                        pred_test_original = scaler_y.inverse_transform(pred_test.reshape(-1, 1)).flatten()
+                        pred_val_original = scaler_y.inverse_transform(pred_val.reshape(-1, 1)).flatten()
+                        
+                        # 在原始尺度上评估
+                        eval_y_test = y_original_test
+                        eval_y_val = y_original_val
+                        eval_pred_test = pred_test_original
+                        eval_pred_val = pred_val_original
+                    else:
+                        # 在当前尺度上评估（传统模式）
+                        eval_y_test = y_test
+                        eval_y_val = y_val
+                        eval_pred_test = pred_test
+                        eval_pred_val = pred_val
+                    
                     results[mode] = {
                         'test': {
-                            'MAE': mean_absolute_error(y_test, pred_test),
-                            'MdAE': median_absolute_error(y_test, pred_test),
-                            'RMSE': np.sqrt(mean_squared_error(y_test, pred_test)),
-                            'R²': r2_score(y_test, pred_test)
+                            'MAE': mean_absolute_error(eval_y_test, eval_pred_test),
+                            'MdAE': median_absolute_error(eval_y_test, eval_pred_test),
+                            'RMSE': np.sqrt(mean_squared_error(eval_y_test, eval_pred_test)),
+                            'R²': r2_score(eval_y_test, eval_pred_test)
                         },
                         'val': {
-                            'MAE': mean_absolute_error(y_val, pred_val),
-                            'MdAE': median_absolute_error(y_val, pred_val),
-                            'RMSE': np.sqrt(mean_squared_error(y_val, pred_val)),
-                            'R²': r2_score(y_val, pred_val)
+                            'MAE': mean_absolute_error(eval_y_val, eval_pred_val),
+                            'MdAE': median_absolute_error(eval_y_val, eval_pred_val),
+                            'RMSE': np.sqrt(mean_squared_error(eval_y_val, eval_pred_val)),
+                            'R²': r2_score(eval_y_val, eval_pred_val)
                         }
                     }
                 else:

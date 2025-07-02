@@ -22,11 +22,13 @@ DEFAULT_METHOD_CONFIGS = {
         'type': 'neural_network',
         'params': {
             'hidden_layer_sizes': NN_HIDDEN_SIZES,
-            'max_iter': 1000,
-            'learning_rate_init': 0.01,
+            'max_iter': NN_MAX_EPOCHS,
+            'learning_rate_init': NN_LEARNING_RATE,
             'early_stopping': False,  # 使用外部验证集早停
             'alpha': 0.0001,
-            'random_state': 42
+            'random_state': 42,
+            'patience': NN_PATIENCE,
+            'tol': NN_TOLERANCE,
         }
     },
     

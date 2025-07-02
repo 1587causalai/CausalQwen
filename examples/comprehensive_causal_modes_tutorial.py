@@ -113,7 +113,7 @@ class ComprehensiveTutorialConfig:
     PYTORCH_PATIENCE = NN_PATIENCE               # 使用统一神经网络配置
     
     # 📊 实验参数
-    ANOMALY_RATIO = 0.25                         # 标签异常比例 (核心实验默认值: 25%噪声挑战)
+    ANOMALY_RATIO = 0.4                         # 标签异常比例 (核心实验默认值: 40%噪声挑战)
     SAVE_PLOTS = True                            # 是否保存图表
     VERBOSE = True                               # 是否显示详细输出
     

@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
-CausalEngine 快速测试脚本 - 重构版本
+CausalEngine 快速测试脚本 - 全局标准化版本
 
-清晰、线性、易于修改的测试脚本。
-每个功能模块独立，便于调试和实验。
+🎯 核心理念：绝对公平的竞技场
+- 全局标准化：对 X 和 y 都进行标准化
+- 统一输入：所有模型接收完全标准化的数据  
+- 统一评估：所有预测结果都转换回原始尺度进行评估
+
+这确保了：
+- 所有模型在相同的抽象空间中学习
+- 稳健回归器不能利用未缩放数据的优势
+- CausalEngine 在困难环境下展示其真正能力
 
 使用说明:
 1. 修改 CONFIG 部分的参数
@@ -20,6 +27,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, m
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.datasets import make_regression, make_classification
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 import os
 import sys
 import warnings
@@ -30,7 +38,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 导入我们的CausalEngine实现
 from causal_sklearn.regressor import MLPCausalRegressor, MLPPytorchRegressor
 from causal_sklearn.classifier import MLPCausalClassifier, MLPPytorchClassifier
-from causal_sklearn.utils import causal_split
+from causal_sklearn.data_processing import inject_shuffle_noise
 
 warnings.filterwarnings('ignore')
 
@@ -44,7 +52,7 @@ REGRESSION_CONFIG = {
     'n_features': 12,
     'noise': 1.0,
     'random_state': 42,
-    'test_size': 0.1,  # 测试集比例
+    'test_size': 0.2,  # 测试集比例
     'anomaly_ratio': 0.2,  # 无异常数据，纯净环境
     
     # 网络结构
@@ -119,7 +127,7 @@ CLASSIFICATION_CONFIG = {
 # =============================================================================
 
 def generate_regression_data(config):
-    """生成回归测试数据"""
+    """生成回归测试数据 - 全局标准化版本"""
     print(f"📊 生成回归数据: {config['n_samples']}样本, {config['n_features']}特征, 噪声={config['noise']}")
     
     # 生成基础数据
@@ -130,27 +138,60 @@ def generate_regression_data(config):
         random_state=config['random_state']
     )
     
-    # 进行数据分割，包含异常注入
-    X_train, X_test, y_train, y_test = causal_split(
+    # 进行数据分割
+    X_train, X_test, y_train, y_test = train_test_split(
         X, y, 
         test_size=config['test_size'], 
-        random_state=config['random_state'],
-        anomaly_ratio=config['anomaly_ratio'], 
-        anomaly_type='regression'
+        random_state=config['random_state']
     )
     
-    # 数据不再进行标准化
-    data = {
-        'X_train': X_train, 'X_test': X_test,
-        'y_train': y_train, 'y_test': y_test
-    }
+    # 对训练集标签进行异常注入
+    if config['anomaly_ratio'] > 0:
+        y_train_noisy, noise_indices = inject_shuffle_noise(
+            y_train, 
+            noise_ratio=config['anomaly_ratio'],
+            random_state=config['random_state']
+        )
+        y_train = y_train_noisy
+        print(f"   异常注入: {config['anomaly_ratio']:.1%} ({len(noise_indices)}/{len(y_train)} 样本受影响)")
+    else:
+        print(f"   无异常注入: 纯净环境")
     
     print(f"   训练集: {len(X_train)} | 测试集: {len(X_test)}")
-    print(f"   异常注入: {config['anomaly_ratio']:.1%} (仅影响训练集)")
+    
+    # 🎯 全局标准化策略
+    print(f"   🎯 实施全局标准化策略:")
+    
+    # 特征标准化
+    scaler_X = StandardScaler()
+    X_train_scaled = scaler_X.fit_transform(X_train)
+    X_test_scaled = scaler_X.transform(X_test)
+    
+    # 目标标准化（关键！）
+    scaler_y = StandardScaler()
+    y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
+    y_test_scaled = scaler_y.transform(y_test.reshape(-1, 1)).flatten()
+    
+    print(f"      - X 和 y 都已标准化")
+    print(f"      - 所有模型将在标准化空间中竞争")
+    
+    data = {
+        # 原始数据（用于最终评估）
+        'X_train_original': X_train, 'X_test_original': X_test,
+        'y_train_original': y_train, 'y_test_original': y_test,
+        
+        # 标准化数据（用于模型训练）
+        'X_train': X_train_scaled, 'X_test': X_test_scaled,
+        'y_train': y_train_scaled, 'y_test': y_test_scaled,
+        
+        # 标准化器（用于逆变换）
+        'scaler_X': scaler_X, 'scaler_y': scaler_y
+    }
+    
     return data
 
 def generate_classification_data(config):
-    """生成分类测试数据"""
+    """生成分类测试数据 - 全局标准化版本"""
     print(f"📊 生成分类数据: {config['n_samples']}样本, {config['n_features']}特征, {config['n_classes']}类别")
     
     n_informative = min(config['n_features'], max(2, config['n_features'] // 2))
@@ -167,25 +208,52 @@ def generate_classification_data(config):
         random_state=config['random_state']
     )
     
-    # 进行数据分割，包含异常注入
-    X_train, X_test, y_train, y_test = causal_split(
+    # 进行数据分割
+    X_train, X_test, y_train, y_test = train_test_split(
         X, y, 
         test_size=config['test_size'], 
         random_state=config['random_state'],
-        stratify=y,
-        anomaly_ratio=config['label_noise_ratio'], 
-        anomaly_type='classification',
-        anomaly_strategy='shuffle'
+        stratify=y
     )
     
-    # 数据不再进行标准化
-    data = {
-        'X_train': X_train, 'X_test': X_test,
-        'y_train': y_train, 'y_test': y_test
-    }
+    # 对训练集标签进行异常注入
+    if config['label_noise_ratio'] > 0:
+        y_train_noisy, noise_indices = inject_shuffle_noise(
+            y_train, 
+            noise_ratio=config['label_noise_ratio'],
+            random_state=config['random_state']
+        )
+        y_train = y_train_noisy
+        print(f"   标签噪声: {config['label_noise_ratio']:.1%} ({len(noise_indices)}/{len(y_train)} 样本受影响)")
+    else:
+        print(f"   无标签噪声: 纯净环境")
     
     print(f"   训练集: {len(X_train)} | 测试集: {len(X_test)}")
-    print(f"   标签噪声: {config['label_noise_ratio']:.1%} (仅影响训练集)")
+    
+    # 🎯 全局标准化策略 - 仅对特征进行标准化（分类任务y不需要标准化）
+    print(f"   🎯 实施全局标准化策略:")
+    
+    # 特征标准化
+    scaler_X = StandardScaler()
+    X_train_scaled = scaler_X.fit_transform(X_train)
+    X_test_scaled = scaler_X.transform(X_test)
+    
+    print(f"      - X 已标准化，y 保持原始（分类标签）")
+    print(f"      - 所有模型将在标准化特征空间中竞争")
+    
+    data = {
+        # 原始数据（用于参考）
+        'X_train_original': X_train, 'X_test_original': X_test,
+        'y_train_original': y_train, 'y_test_original': y_test,
+        
+        # 标准化数据（用于模型训练）
+        'X_train': X_train_scaled, 'X_test': X_test_scaled,
+        'y_train': y_train, 'y_test': y_test,  # 分类标签不标准化
+        
+        # 标准化器
+        'scaler_X': scaler_X
+    }
+    
     return data
 
 # =============================================================================
@@ -383,9 +451,12 @@ def evaluate_classification(y_true, y_pred, n_classes):
     }
 
 def predict_and_evaluate_regression(model, data, model_name, config):
-    """回归模型预测和评估"""
-    # 统一评估逻辑，所有模型都使用原始数据
-    test_pred = model.predict(data['X_test'])
+    """回归模型预测和评估 - 全局标准化版本"""
+    # 在标准化空间中预测
+    test_pred_scaled = model.predict(data['X_test'])
+    
+    # 🎯 关键：将预测结果转换回原始尺度进行评估
+    test_pred_original = data['scaler_y'].inverse_transform(test_pred_scaled.reshape(-1, 1)).flatten()
     
     # 验证集：重新分割来评估
     X_train_pt, X_val_pt, y_train_pt, y_val_pt = train_test_split(
@@ -393,21 +464,25 @@ def predict_and_evaluate_regression(model, data, model_name, config):
         test_size=config['validation_fraction'],
         random_state=config['random_state']
     )
-    val_pred = model.predict(X_val_pt)
-    y_val_orig = y_val_pt
+    val_pred_scaled = model.predict(X_val_pt)
     
+    # 将验证集预测结果也转换回原始尺度
+    val_pred_original = data['scaler_y'].inverse_transform(val_pred_scaled.reshape(-1, 1)).flatten()
+    y_val_original = data['scaler_y'].inverse_transform(y_val_pt.reshape(-1, 1)).flatten()
+    
+    # 在原始尺度下评估性能
     results = {
-        'test': evaluate_regression(data['y_test'], test_pred),
-        'val': evaluate_regression(y_val_orig, val_pred)
+        'test': evaluate_regression(data['y_test_original'], test_pred_original),
+        'val': evaluate_regression(y_val_original, val_pred_original)
     }
     
     return results
 
 def predict_and_evaluate_classification(model, data, model_name, config):
-    """分类模型预测和评估"""
+    """分类模型预测和评估 - 全局标准化版本"""
     n_classes = len(np.unique(data['y_train']))
     
-    # 统一评估逻辑，所有模型都使用原始数据
+    # 在标准化特征空间中预测（分类标签无需转换）
     test_pred = model.predict(data['X_test'])
     
     # 验证集：重新分割来评估
@@ -418,11 +493,11 @@ def predict_and_evaluate_classification(model, data, model_name, config):
         stratify=data['y_train']
     )
     val_pred = model.predict(X_val_pt)
-    y_val_orig = y_val_pt
     
+    # 分类任务：标签无需转换，直接在原始标签空间评估
     results = {
         'test': evaluate_classification(data['y_test'], test_pred, n_classes),
-        'val': evaluate_classification(y_val_orig, val_pred, n_classes)
+        'val': evaluate_classification(y_val_pt, val_pred, n_classes)
     }
     
     return results
@@ -561,7 +636,7 @@ def print_config_summary(config, task_type):
 
 def main():
     """主程序 - 运行所有测试"""
-    print("🚀 CausalEngine 快速测试脚本 - 重构版")
+    print("🚀 CausalEngine 快速测试脚本 - 全局标准化版")
     print("=" * 60)
     
     # 运行回归测试
