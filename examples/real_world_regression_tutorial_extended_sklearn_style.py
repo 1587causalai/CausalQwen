@@ -142,6 +142,7 @@ class TutorialConfig:
     SKLEARN_MAX_ITER = NN_MAX_EPOCHS                # 使用统一神经网络配置
     SKLEARN_LR = NN_LEARNING_RATE                   # 使用统一神经网络配置
     
+    PYTORCH_HIDDEN_SIZES = NN_HIDDEN_SIZES          # 使用统一神经网络配置
     PYTORCH_EPOCHS = NN_MAX_EPOCHS                  # 使用统一神经网络配置
     PYTORCH_LR = NN_LEARNING_RATE                   # 使用统一神经网络配置
     PYTORCH_PATIENCE = NN_PATIENCE                  # 使用统一神经网络配置
