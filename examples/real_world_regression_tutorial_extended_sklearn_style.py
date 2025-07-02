@@ -41,7 +41,7 @@
 
 实验一：核心性能对比 (在40%标签噪声下)
 --------------------------------------------------
-- **目标**: 比较CausalEngine和12种传统方法在含有固定噪声数据上的预测性能。
+- **目标**: 比较CausalEngine和9种传统方法在含有固定噪声数据上的预测性能。
 - **设置**: 默认设置40%的标签噪声（`ANOMALY_RATIO = 0.4`），模拟真实世界中常见的数据质量问题。
 - **对比模型**: 
   - 传统方法: sklearn MLP, PyTorch MLP, MLP Huber, MLP Pinball, MLP Cauchy, Random Forest, XGBoost, LightGBM, CatBoost
@@ -127,7 +127,7 @@ class TutorialConfig:
     # =========================================================================
     
     # 🤖 CausalEngine参数 - 使用统一神经网络配置
-    CAUSAL_MODES = ['deterministic', 'exogenous', 'endogenous', 'standard']  # 4种完整模式
+    CAUSAL_MODES = ['deterministic', 'exogenous', 'endogenous', 'standard']  # 可选: ['deterministic', 'exogenous', 'endogenous', 'standard']
     CAUSAL_HIDDEN_SIZES = NN_HIDDEN_SIZES          # 使用统一神经网络配置
     CAUSAL_MAX_EPOCHS = NN_MAX_EPOCHS              # 使用统一神经网络配置
     CAUSAL_LR = NN_LEARNING_RATE                   # 使用统一神经网络配置
@@ -142,10 +142,22 @@ class TutorialConfig:
     SKLEARN_MAX_ITER = NN_MAX_EPOCHS                # 使用统一神经网络配置
     SKLEARN_LR = NN_LEARNING_RATE                   # 使用统一神经网络配置
     
-    PYTORCH_HIDDEN_SIZES = NN_HIDDEN_SIZES          # 使用统一神经网络配置
     PYTORCH_EPOCHS = NN_MAX_EPOCHS                  # 使用统一神经网络配置
     PYTORCH_LR = NN_LEARNING_RATE                   # 使用统一神经网络配置
     PYTORCH_PATIENCE = NN_PATIENCE                  # 使用统一神经网络配置
+    
+    # 🎯 基准方法配置 - 扩展版包含更多强力方法
+    BASELINE_METHODS = [
+        'sklearn_mlp',       # sklearn神经网络  
+        'pytorch_mlp',       # PyTorch神经网络
+        'mlp_huber',         # Huber损失MLP（稳健回归）
+        'mlp_pinball_median',# Pinball损失MLP（稳健回归）
+        'mlp_cauchy',        # Cauchy损失MLP（稳健回归）
+        'random_forest',     # 随机森林
+        'xgboost',           # XGBoost - 强力梯度提升
+        'lightgbm',          # LightGBM - 轻量梯度提升
+        'catboost'           # CatBoost - 强力梯度提升
+    ]
     
     # 🛡️ 稳健回归器参数 - 使用统一配置
     ROBUST_HIDDEN_SIZES = NN_HIDDEN_SIZES           # 使用统一神经网络配置
@@ -179,9 +191,8 @@ class TutorialConfig:
     VERBOSE = True                               # 是否显示详细输出
     
     # 🛡️ 鲁棒性测试参数 - 验证"CausalEngine鲁棒性优势"的假设
-    ROBUSTNESS_NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]  # 6个关键噪声水平就足够
-    ROBUSTNESS_METHODS = ['sklearn_mlp', 'pytorch_mlp', 'random_forest', 'standard', 'endogenous']  # 主要方法对比
-    RUN_ROBUSTNESS_TEST = True                   # 是否运行鲁棒性测试
+    ROBUSTNESS_ANOMALY_RATIOS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]  # 噪声水平
+    RUN_ROBUSTNESS_TEST = True                      # 是否运行鲁棒性测试
     
     # 📈 可视化参数
     FIGURE_DPI = 300                             # 图表分辨率
@@ -591,7 +602,9 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
         for robust_type in ['huber', 'pinball', 'cauchy']:
             robust_model = self._train_robust_regressor(data, robust_type)
             if robust_model is not None:
-                self.results[f'mlp_{robust_type}'] = self._evaluate_model(robust_model, data, f'mlp_{robust_type}')
+                # 使用与Legacy版本一致的键名
+                result_key = f'mlp_{robust_type}_median' if robust_type == 'pinball' else f'mlp_{robust_type}'
+                self.results[result_key] = self._evaluate_model(robust_model, data, result_key)
         
         # 4. 树模型
         for tree_type in ['random_forest', 'xgboost', 'lightgbm', 'catboost']:
@@ -750,7 +763,7 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
     def run_robustness_analysis(self, noise_levels=None, verbose=None):
         """运行鲁棒性分析"""
         if noise_levels is None:
-            noise_levels = self.config.ROBUSTNESS_NOISE_LEVELS
+            noise_levels = self.config.ROBUSTNESS_ANOMALY_RATIOS
         if verbose is None:
             verbose = self.config.VERBOSE
             
@@ -758,7 +771,7 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
             print("\n🔬 开始鲁棒性分析")
             print("=" * 60)
             print(f"🎯 测试噪声水平: {[f'{level:.0%}' for level in noise_levels]}")
-            print(f"   比较方法: {', '.join(self.config.ROBUSTNESS_METHODS)}")
+            print(f"   比较方法: 选取主要方法进行鲁棒性测试")
         
         robustness_results = {}
         
@@ -771,10 +784,11 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
             original_config = self.config.ANOMALY_RATIO
             self.config.ANOMALY_RATIO = noise_level
             
-            # 只测试指定的方法以节省时间
+            # 选取主要方法进行鲁棒性测试以节省时间
             original_causal_modes = self.config.CAUSAL_MODES
+            robustness_methods = ['sklearn_mlp', 'pytorch_mlp', 'random_forest', 'standard', 'endogenous']
             self.config.CAUSAL_MODES = [mode for mode in self.config.CAUSAL_MODES 
-                                      if mode in self.config.ROBUSTNESS_METHODS]
+                                      if mode in robustness_methods]
             
             try:
                 # 加载数据（如果尚未加载）
@@ -792,24 +806,24 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
                 noise_results = {}
                 
                 # 测试sklearn MLP
-                if 'sklearn_mlp' in self.config.ROBUSTNESS_METHODS:
+                if 'sklearn_mlp' in robustness_methods:
                     sklearn_model = self._train_sklearn_model(data)
                     noise_results['sklearn_mlp'] = self._evaluate_model(sklearn_model, data, 'sklearn_mlp')
                 
                 # 测试PyTorch MLP
-                if 'pytorch_mlp' in self.config.ROBUSTNESS_METHODS:
+                if 'pytorch_mlp' in robustness_methods:
                     pytorch_model = self._train_pytorch_model(data)
                     noise_results['pytorch_mlp'] = self._evaluate_model(pytorch_model, data, 'pytorch_mlp')
                 
                 # 测试CausalEngine
                 for mode in self.config.CAUSAL_MODES:
-                    if not mode in self.config.ROBUSTNESS_METHODS:
+                    if not mode in robustness_methods:
                         continue
                     causal_model = self._train_causal_model(data, mode)
                     noise_results[mode] = self._evaluate_model(causal_model, data, mode)
                 
                 # 测试最佳树模型（Random Forest作为代表）
-                if 'random_forest' in self.config.ROBUSTNESS_METHODS:
+                if 'random_forest' in robustness_methods:
                     rf_model = self._train_tree_model(data, 'random_forest')
                     if rf_model is not None:
                         noise_results['random_forest'] = self._evaluate_model(rf_model, data, 'random_forest')
@@ -941,47 +955,38 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
 
 
 def main():
-    """主函数"""
-    print("🏠 扩展版真实世界回归教程：加州房价预测 - Sklearn-Style版本")
-    print("=" * 80)
-    print("📊 将比较13种方法的性能表现")
-    print("🎯 神经网络方法: sklearn MLP, PyTorch MLP")
-    print("🎯 稳健回归方法: MLP Huber, MLP Pinball, MLP Cauchy")
-    print("🎯 树模型方法: Random Forest, XGBoost, LightGBM, CatBoost")
-    print("🎯 CausalEngine方法: deterministic, exogenous, endogenous, standard")
-    print()
+    """主函数 - 运行扩展版教程 (Sklearn-Style版本)"""
+    print("🚀 扩展版加州房价回归教程 - Sklearn-Style版本")
+    print("=" * 60)
     
-    # 初始化教程
+    # 创建教程实例
     tutorial = ExtendedCaliforniaHousingTutorialSklearnStyle()
     
-    # 实验一：综合性能对比
-    print("🚀 实验一：综合性能对比")
-    print("-" * 40)
-    results = tutorial.run_comprehensive_benchmark(verbose=True)
+    # 1. 加载和分析数据
+    tutorial.load_and_explore_data()
     
-    # 性能分析
-    tutorial.analyze_performance(verbose=True)
+    # 2. 运行核心性能测试
+    core_results = tutorial.run_comprehensive_benchmark()
     
-    # 创建性能可视化
-    tutorial.create_performance_visualization()
+    # 3. 运行鲁棒性测试
+    if tutorial.config.RUN_ROBUSTNESS_TEST:
+        robustness_results = tutorial.run_robustness_analysis()
+        
+        # 创建鲁棒性可视化
+        tutorial.create_robustness_visualization(robustness_results)
     
-    # 实验二：鲁棒性分析
-    print("\n🚀 实验二：鲁棒性分析")
-    print("-" * 40)
-    robustness_results = tutorial.run_robustness_analysis(verbose=True)
-    
-    # 创建鲁棒性可视化
-    tutorial.create_robustness_visualization(robustness_results)
-    
-    print("\n" + "=" * 80)
-    print("🎉 扩展教程运行完成！")
-    print("📊 所有图表已保存到输出目录")
-    print("💡 关键发现:")
-    print("   1. 13种方法的全面性能对比已完成")
-    print("   2. CausalEngine在多种噪声水平下的鲁棒性已验证")
-    print("   3. 稳健回归和树模型提供了有价值的基准对比")
-    print("   4. Sklearn-style实现确保了实验的可重现性")
-    print("=" * 80)
+    if tutorial.config.VERBOSE:
+        print("\n🎉 扩展版教程运行完成！")
+        print(f"📁 所有结果已保存到: {tutorial.config.OUTPUT_DIR}")
+        print("\n主要输出文件:")
+        print("- california_housing_performance_extended_sklearn_style.png: 核心性能对比图表")
+        if tutorial.config.RUN_ROBUSTNESS_TEST:
+            print("- california_housing_robustness_extended_sklearn_style.png: 鲁棒性分析图表")
+        print("\n💡 关键发现:")
+        print("   1. 13种方法的全面性能对比已完成")
+        print("   2. CausalEngine在多种噪声水平下的鲁棒性已验证")
+        print("   3. 稳健回归和树模型提供了有价值的基准对比")
+        print("   4. Sklearn-style实现确保了实验的可重现性")
 
 
 if __name__ == "__main__":
