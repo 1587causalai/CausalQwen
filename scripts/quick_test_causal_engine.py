@@ -53,10 +53,10 @@ REGRESSION_CONFIG = {
     'noise': 1.0,
     'random_state': 42,
     'test_size': 0.2,  # 测试集比例
-    'anomaly_ratio': 0.2,  # 无异常数据，纯净环境
+    'anomaly_ratio': 0.4,  # 40%异常数据，匹配其他脚本
     
     # 网络结构
-    'perception_hidden_layers': (128, 64),  # 更深的网络
+    'perception_hidden_layers': (128, 64, 32),  # 统一网络结构
     'abduction_hidden_layers': (),
     'repre_size': None,
     'causal_size': None,
@@ -68,7 +68,7 @@ REGRESSION_CONFIG = {
     'alpha': 0.0001, # 添加L2正则化，与sklearn默认一致
     
     # 训练参数
-    'max_iter': 2000,  # 减少最大迭代次数
+    'max_iter': 3000,  # 统一最大迭代次数
     'learning_rate': 0.01,  # 降低学习率，更接近sklearn默认
     'patience': 50,  # 减少patience，更接近sklearn默认
     'tol': 1e-4,  # 更接近sklearn默认tolerance
@@ -91,10 +91,10 @@ CLASSIFICATION_CONFIG = {
     'class_sep': 1.0,   # 提高类别分离度
     'random_state': 42,
     'test_size': 0.2,   # 测试集比例
-    'label_noise_ratio': 0.3,  # 降低标签噪声
+    'label_noise_ratio': 0.4,  # 统一标签噪声水平
     
     # 网络结构 - 更简单的网络
-    'perception_hidden_layers': (100,),  # sklearn默认结构
+    'perception_hidden_layers': (128, 64, 32),  # 统一网络结构
     'abduction_hidden_layers': (),
     'repre_size': None,
     'causal_size': None,

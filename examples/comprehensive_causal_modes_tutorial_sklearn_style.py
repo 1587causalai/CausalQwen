@@ -11,36 +11,45 @@
 - 目标：预测房价中位数
 
 我们将比较所有方法：
+**标准版比较图（9种核心方法）：**
 1. sklearn MLPRegressor（传统神经网络）
 2. PyTorch MLP（传统深度学习）
-3. MLP Huber（Huber损失稳健回归）
-4. MLP Pinball Median（中位数回归）
-5. MLP Cauchy（Cauchy损失稳健回归）
-6. CausalEngine - deterministic（确定性推理）
+3. Random Forest（随机森林）
+4. XGBoost（梯度提升）
+5. LightGBM（轻量梯度提升）
+6. CatBoost（强力梯度提升）
 7. CausalEngine - exogenous（外生噪声主导）
 8. CausalEngine - endogenous（内生不确定性主导）
 9. CausalEngine - standard（内生+外生混合）
 
-关键特点：
-- 使用sklearn-style regressor实现，与Legacy版本形成对比
+**扩展版比较图（包含所有13种方法）：**
+- 上述9种核心方法 + 4种额外方法：
+10. CausalEngine - deterministic（确定性推理）
+11. MLP Huber（Huber损失稳健回归）
+12. MLP Pinball Median（中位数回归）
+13. MLP Cauchy（Cauchy损失稳健回归）
+
+关键亮点：
 - 4种CausalEngine推理模式的全面对比
-- 5种强力传统机器学习方法（包含3种稳健回归）
+- 9种强力传统机器学习方法（包含2种神经网络+3种梯度提升+1种随机森林+3种稳健回归）
 - 真实世界数据的鲁棒性测试
 - 因果推理vs传统方法的性能差异分析
-- 全局标准化策略确保公平竞技
+- 标准版(9种核心)与扩展版(13种全部)双重可视化
+- 使用sklearn-style regressor实现，与Legacy版本形成对比
 
 实验设计说明
 ==================================================================
 本脚本使用sklearn-style实现专注于全面评估CausalEngine的4种推理模式，
 旨在揭示不同因果推理策略在真实回归任务上的性能特点和适用场景。
 
-核心实验：全模式性能对比 (在25%标签噪声下)
+核心实验：全模式性能对比 (在40%标签噪声下)
 --------------------------------------------------
-- **目标**: 比较所有4种CausalEngine模式和5种传统方法的预测性能
-- **设置**: 25%标签噪声，模拟真实世界数据质量挑战
+- **目标**: 比较所有4种CausalEngine模式和9种传统方法的预测性能（标准版9种核心方法，扩展版13种总方法）
+- **设置**: 40%标签噪声，模拟真实世界数据质量挑战
 - **对比模型**: 
-  - 传统方法: sklearn MLP, PyTorch MLP, Huber MLP, Pinball MLP, Cauchy MLP
-  - CausalEngine: deterministic, exogenous, endogenous, standard
+  - 传统方法（核心6种）: sklearn MLP, PyTorch MLP, Random Forest, XGBoost, LightGBM, CatBoost
+  - 稳健回归（额外3种）: Huber MLP, Pinball MLP, Cauchy MLP
+  - CausalEngine（4种模式）: deterministic, exogenous, endogenous, standard
 - **分析重点**: 
   - 哪种因果推理模式表现最优？
   - 不同模式的性能特点和差异
@@ -140,7 +149,7 @@ class SklearnStyleTutorialConfig:
     PYTORCH_ALPHA = 0.0001                       # PyTorch MLP L2正则化
     
     # 📊 实验参数
-    ANOMALY_RATIO = 0.25                         # 标签异常比例 (核心实验默认值: 25%噪声挑战)
+    ANOMALY_RATIO = 0.4                          # 标签异常比例 (核心实验默认值: 40%噪声挑战)
     SAVE_PLOTS = True                            # 是否保存图表
     VERBOSE = True                               # 是否显示详细输出
     
@@ -181,7 +190,7 @@ class SklearnStyleTutorialConfig:
     # 📈 可视化参数
     FIGURE_DPI = 300                             # 图表分辨率
     FIGURE_SIZE_ANALYSIS = (16, 12)              # 数据分析图表大小
-    FIGURE_SIZE_PERFORMANCE = (20, 16)           # 性能对比图表大小
+    FIGURE_SIZE_PERFORMANCE = (24, 20)           # 性能对比图表大小（更大以容纳13个方法）
     FIGURE_SIZE_MODES_COMPARISON = (18, 12)      # CausalEngine模式对比图表大小
     
     # 📁 输出目录参数
@@ -827,8 +836,8 @@ class SklearnStyleCausalModesTutorial:
         
         return causal_results, traditional_results
     
-    def create_comprehensive_performance_visualization(self, save_plot=None):
-        """创建全面的性能可视化图表"""
+    def create_comprehensive_performance_visualization(self, save_plot=None, extended=False):
+        """创建全面的性能可视化图表 - 支持标准版和扩展版"""
         if save_plot is None:
             save_plot = self.config.SAVE_PLOTS
             
@@ -836,13 +845,25 @@ class SklearnStyleCausalModesTutorial:
             print("❌ 请先运行基准测试")
             return
         
-        print("\n📊 创建全面性能可视化图表")
+        chart_type = "扩展版" if extended else "标准版"
+        print(f"\n📊 创建全面性能可视化图表 ({chart_type})")
         print("-" * 40)
         
-        # 准备数据
-        traditional_methods = [m for m in self.results.keys() if m not in self.config.CAUSAL_MODES]
-        causal_methods = [m for m in self.config.CAUSAL_MODES if m in self.results]
-        methods = traditional_methods + causal_methods
+        # 准备数据 - 根据扩展标志决定包含的方法
+        if extended:
+            # 扩展版：包含所有可用方法
+            all_available_methods = list(self.results.keys())
+            # 按类型排序：先传统方法，后CausalEngine
+            traditional_methods = [m for m in all_available_methods if m not in self.config.CAUSAL_MODES]
+            causal_methods = [m for m in self.config.CAUSAL_MODES if m in self.results]
+            methods = traditional_methods + causal_methods
+        else:
+            # 标准版：包含9种核心方法（除了3种robust MLP）
+            robust_mlp_methods = ['huber', 'pinball', 'cauchy']  # 排除的robust MLP方法
+            standard_traditional = [m for m in self.results.keys() 
+                                  if m not in self.config.CAUSAL_MODES and m not in robust_mlp_methods]
+            causal_methods = [m for m in self.config.CAUSAL_MODES if m in self.results]
+            methods = standard_traditional + causal_methods
         
         # 为不同类型的方法设置颜色
         colors = []
@@ -856,7 +877,8 @@ class SklearnStyleCausalModesTutorial:
         
         # 创建子图
         fig, axes = plt.subplots(2, 2, figsize=self.config.FIGURE_SIZE_PERFORMANCE)
-        fig.suptitle('Sklearn-Style CausalEngine Modes vs Traditional Methods\nCalifornia Housing Performance (25% Label Noise)', 
+        title_suffix = " (Extended with All Methods)" if extended else ""
+        fig.suptitle(f'Sklearn-Style CausalEngine Modes vs Traditional Methods{title_suffix}\nCalifornia Housing Performance (40% Label Noise)', 
                      fontsize=16, fontweight='bold')
         axes = axes.flatten()
         
@@ -885,7 +907,7 @@ class SklearnStyleCausalModesTutorial:
                     method_labels.append(display_name)
             
             axes[i].set_xticks(range(len(methods)))
-            axes[i].set_xticklabels(method_labels, rotation=45, ha='right', fontsize=9)
+            axes[i].set_xticklabels(method_labels, rotation=45, ha='right', fontsize=8)
             
             # 添加数值标签
             for bar, value in zip(bars, values):
@@ -905,9 +927,13 @@ class SklearnStyleCausalModesTutorial:
         plt.tight_layout()
         
         if save_plot:
-            output_path = self._get_output_path('sklearn_style_performance_comparison.png')
+            if extended:
+                filename = 'sklearn_style_performance_comparison_extended.png'
+            else:
+                filename = 'sklearn_style_performance_comparison.png'
+            output_path = self._get_output_path(filename)
             plt.savefig(output_path, dpi=self.config.FIGURE_DPI, bbox_inches='tight')
-            print(f"📊 性能对比图表已保存为 {output_path}")
+            print(f"📊 {chart_type}性能对比图表已保存为 {output_path}")
         
         plt.close()
     
@@ -1116,8 +1142,9 @@ def main():
     # 4. 专门分析CausalEngine模式性能
     tutorial.analyze_causal_modes_performance()
     
-    # 5. 创建全面性能可视化
-    tutorial.create_comprehensive_performance_visualization()
+    # 5. 创建全面性能可视化 - 生成标准版和扩展版
+    tutorial.create_comprehensive_performance_visualization(extended=False)  # 标准版
+    tutorial.create_comprehensive_performance_visualization(extended=True)   # 扩展版
     
     # 6. 创建CausalEngine模式专项对比
     tutorial.create_causal_modes_comparison()
@@ -1135,9 +1162,10 @@ def main():
     
     print("\n📊 生成的文件:")
     if config.SAVE_PLOTS:
-        print(f"   - {config.OUTPUT_DIR}/sklearn_style_data_analysis.png          (数据分析图)")
-        print(f"   - {config.OUTPUT_DIR}/sklearn_style_performance_comparison.png (全面性能对比图)")
-        print(f"   - {config.OUTPUT_DIR}/sklearn_style_causal_modes_comparison.png (CausalEngine模式专项对比图)")
+        print(f"   - {config.OUTPUT_DIR}/sklearn_style_data_analysis.png                   (数据分析图)")
+        print(f"   - {config.OUTPUT_DIR}/sklearn_style_performance_comparison.png          (标准性能对比图)")
+        print(f"   - {config.OUTPUT_DIR}/sklearn_style_performance_comparison_extended.png (扩展性能对比图)")
+        print(f"   - {config.OUTPUT_DIR}/sklearn_style_causal_modes_comparison.png         (CausalEngine模式专项对比图)")
     
     print("\n💡 提示：通过修改SklearnStyleTutorialConfig类来自定义实验参数！")
     print("🔬 对比建议：运行Legacy版本的comprehensive_causal_modes_tutorial.py进行性能对比")

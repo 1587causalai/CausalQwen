@@ -137,6 +137,8 @@ class BaselineMethodFactory:
         # 创建模型
         if method_name == 'sklearn_mlp':
             return self._create_sklearn_mlp(task_type, **filtered_params)
+        elif method_name == 'pytorch_mlp':
+            return self._create_pytorch_mlp(task_type, **filtered_params)
         elif method_name == 'mlp_huber':
             return self._create_robust_mlp(task_type, 'huber', **filtered_params)
         elif method_name == 'mlp_pinball_median':
@@ -203,6 +205,14 @@ class BaselineMethodFactory:
             return MLPRegressor(**params)
         else:
             return MLPClassifier(**params)
+    
+    def _create_pytorch_mlp(self, task_type: str, **params) -> Any:
+        """创建PyTorch MLP模型"""
+        from ..regressor import MLPPytorchRegressor
+        if task_type == 'regression':
+            return MLPPytorchRegressor(**params)
+        else:
+            raise NotImplementedError("PyTorch MLP目前只支持回归任务")
     
     def _create_random_forest(self, task_type: str, **params) -> Any:
         """创建随机森林模型"""

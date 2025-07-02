@@ -24,10 +24,11 @@ DEFAULT_METHOD_CONFIGS = {
             'hidden_layer_sizes': NN_HIDDEN_SIZES,
             'max_iter': NN_MAX_EPOCHS,
             'learning_rate_init': NN_LEARNING_RATE,
-            'early_stopping': False,  # 使用外部验证集早停
+            'early_stopping': True,
+            'validation_fraction': 0.2,
+            'n_iter_no_change': NN_PATIENCE,
             'alpha': 0.0001,
             'random_state': 42,
-            'patience': NN_PATIENCE,
             'tol': NN_TOLERANCE,
         }
     },
@@ -36,10 +37,10 @@ DEFAULT_METHOD_CONFIGS = {
         'name': 'PyTorch MLP',
         'type': 'neural_network',
         'params': {
-            'hidden_sizes': NN_HIDDEN_SIZES,
-            'epochs': NN_MAX_EPOCHS,
-            'lr': NN_LEARNING_RATE,
-            'patience': NN_PATIENCE,
+            'hidden_layer_sizes': NN_HIDDEN_SIZES,
+            'max_iter': NN_MAX_EPOCHS,
+            'learning_rate': NN_LEARNING_RATE,
+            'n_iter_no_change': NN_PATIENCE,
             'tol': NN_TOLERANCE
         }
     },
@@ -48,13 +49,12 @@ DEFAULT_METHOD_CONFIGS = {
         'name': 'MLP Huber',
         'type': 'robust_neural_network',
         'params': {
-            'hidden_sizes': NN_HIDDEN_SIZES,
-            'epochs': NN_MAX_EPOCHS,
-            'lr': NN_LEARNING_RATE,
-            'patience': NN_PATIENCE,
+            'hidden_layer_sizes': NN_HIDDEN_SIZES,
+            'max_iter': NN_MAX_EPOCHS,
+            'learning_rate': NN_LEARNING_RATE,
+            'n_iter_no_change': NN_PATIENCE,
             'tol': NN_TOLERANCE,
-            'loss_function': 'huber',
-            'huber_delta': 1.0  # Huber损失的delta参数
+            'delta': 1.0  # Huber损失的delta参数
         }
     },
     
@@ -62,12 +62,11 @@ DEFAULT_METHOD_CONFIGS = {
         'name': 'MLP Pinball Median',
         'type': 'robust_neural_network', 
         'params': {
-            'hidden_sizes': NN_HIDDEN_SIZES,
-            'epochs': NN_MAX_EPOCHS,
-            'lr': NN_LEARNING_RATE,
-            'patience': NN_PATIENCE,
+            'hidden_layer_sizes': NN_HIDDEN_SIZES,
+            'max_iter': NN_MAX_EPOCHS,
+            'learning_rate': NN_LEARNING_RATE,
+            'n_iter_no_change': NN_PATIENCE,
             'tol': NN_TOLERANCE,
-            'loss_function': 'pinball',
             'quantile': 0.5  # 中位数回归 (50%分位数)
         }
     },
@@ -76,12 +75,11 @@ DEFAULT_METHOD_CONFIGS = {
         'name': 'MLP Cauchy',
         'type': 'robust_neural_network',
         'params': {
-            'hidden_sizes': NN_HIDDEN_SIZES,
-            'epochs': NN_MAX_EPOCHS,
-            'lr': NN_LEARNING_RATE,
-            'patience': NN_PATIENCE,
-            'tol': NN_TOLERANCE,
-            'loss_function': 'cauchy'  # Cauchy分布损失函数
+            'hidden_layer_sizes': NN_HIDDEN_SIZES,
+            'max_iter': NN_MAX_EPOCHS,
+            'learning_rate': NN_LEARNING_RATE,
+            'n_iter_no_change': NN_PATIENCE,
+            'tol': NN_TOLERANCE
         }
     },
     

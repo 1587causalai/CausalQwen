@@ -10,39 +10,45 @@
 - 8个特征（房屋年龄、收入、人口等）
 - 目标：预测房价中位数
 
-我们将比较所有13种方法：
+我们将比较所有方法：
+**标准版比较图（9种核心方法）：**
 1. sklearn MLPRegressor（传统神经网络）
 2. PyTorch MLP（传统深度学习）
-3. MLP Huber（Huber损失稳健回归）
-4. MLP Pinball Median（中位数回归）
-5. MLP Cauchy（Cauchy损失稳健回归）
-6. Random Forest（随机森林）
-7. XGBoost（梯度提升）
-8. LightGBM（轻量梯度提升）
-9. CatBoost（强力梯度提升）
+3. Random Forest（随机森林）
+4. XGBoost（梯度提升）
+5. LightGBM（轻量梯度提升）
+6. CatBoost（强力梯度提升）
+7. CausalEngine - exogenous（外生噪声主导）
+8. CausalEngine - endogenous（内生不确定性主导）
+9. CausalEngine - standard（内生+外生混合）
+
+**扩展版比较图（包含所有13种方法）：**
+- 上述9种核心方法 + 4种额外方法：
 10. CausalEngine - deterministic（确定性推理）
-11. CausalEngine - exogenous（外生噪声主导）
-12. CausalEngine - endogenous（内生不确定性主导）
-13. CausalEngine - standard（内生+外生混合）
+11. MLP Huber（Huber损失稳健回归）
+12. MLP Pinball Median（中位数回归）
+13. MLP Cauchy（Cauchy损失稳健回归）
 
 关键亮点：
 - 4种CausalEngine推理模式的全面对比
-- 9种强力传统机器学习方法（包含3种稳健回归+3种梯度提升）
+- 9种强力传统机器学习方法（包含2种神经网络+3种梯度提升+1种随机森林+3种稳健回归）
 - 真实世界数据的鲁棒性测试
 - 因果推理vs传统方法的性能差异分析
+- 标准版(9种核心)与扩展版(13种全部)双重可视化
 
 实验设计说明
 ==================================================================
 本脚本专注于全面评估CausalEngine的4种推理模式，旨在揭示不同因果推理策略
 在真实回归任务上的性能特点和适用场景。
 
-核心实验：全模式性能对比 (在25%标签噪声下)
+核心实验：全模式性能对比 (在40%标签噪声下)
 --------------------------------------------------
-- **目标**: 比较所有4种CausalEngine模式和9种传统方法的预测性能
-- **设置**: 25%标签噪声，模拟真实世界数据质量挑战
+- **目标**: 比较所有4种CausalEngine模式和9种传统方法的预测性能（标准版9种核心方法，扩展版13种总方法）
+- **设置**: 40%标签噪声，模拟真实世界数据质量挑战
 - **对比模型**: 
-  - 传统方法: sklearn MLP, PyTorch MLP, Huber MLP, Pinball MLP, Cauchy MLP, Random Forest, XGBoost, LightGBM, CatBoost
-  - CausalEngine: deterministic, exogenous, endogenous, standard
+  - 传统方法（核心6种）: sklearn MLP, PyTorch MLP, Random Forest, XGBoost, LightGBM, CatBoost
+  - 稳健回归（额外3种）: Huber MLP, Pinball MLP, Cauchy MLP
+  - CausalEngine（4种模式）: deterministic, exogenous, endogenous, standard
 - **分析重点**: 
   - 哪种因果推理模式表现最优？
   - 不同模式的性能特点和差异
@@ -117,17 +123,17 @@ class ComprehensiveTutorialConfig:
     SAVE_PLOTS = True                            # 是否保存图表
     VERBOSE = True                               # 是否显示详细输出
     
-    # 🎯 基准方法配置 - 新增！支持更多传统方法对比
+    # 🎯 基准方法配置 - 包含9种传统方法（与sklearn-style版本完全一致）
     BASELINE_METHODS = [
-        'sklearn_mlp',      # sklearn神经网络  
-        'pytorch_mlp',      # PyTorch神经网络
-        'mlp_huber',        # Huber损失MLP（稳健回归）
-        'mlp_pinball_median', # Pinball损失MLP（中位数回归）
-        'mlp_cauchy',       # Cauchy损失MLP（稳健回归）
-        'random_forest',    # 随机森林
-        'xgboost',         # XGBoost
-        'lightgbm',        # LightGBM  
-        'catboost'         # CatBoost - 强力梯度提升
+        'sklearn_mlp',          # sklearn MLPRegressor
+        'pytorch_mlp',          # PyTorch MLP
+        'random_forest',        # 随机森林
+        'xgboost',              # XGBoost
+        'lightgbm',             # LightGBM  
+        'catboost',             # CatBoost - 强力梯度提升
+        'mlp_huber',            # MLP Huber（Huber损失稳健回归）
+        'mlp_pinball_median',   # MLP Pinball Median（中位数回归）
+        'mlp_cauchy'            # MLP Cauchy（Cauchy损失稳健回归）
     ]
     
     # 或者使用预定义组合：
@@ -137,7 +143,7 @@ class ComprehensiveTutorialConfig:
     # 📈 可视化参数
     FIGURE_DPI = 300                             # 图表分辨率
     FIGURE_SIZE_ANALYSIS = (16, 12)              # 数据分析图表大小
-    FIGURE_SIZE_PERFORMANCE = (26, 16)           # 性能对比图表大小（更大以容纳13个方法）
+    FIGURE_SIZE_PERFORMANCE = (24, 20)           # 性能对比图表大小（更大以容纳13个方法）
     FIGURE_SIZE_MODES_COMPARISON = (18, 12)      # CausalEngine模式对比图表大小
     
     # 📁 输出目录参数
@@ -388,8 +394,8 @@ class ComprehensiveCausalModesTutorial:
         
         return causal_results, traditional_results
     
-    def create_comprehensive_performance_visualization(self, save_plot=None):
-        """创建全面的性能可视化图表 - 展示所有7种方法"""
+    def create_comprehensive_performance_visualization(self, save_plot=None, extended=False):
+        """创建全面的性能可视化图表 - 支持标准版和扩展版"""
         if save_plot is None:
             save_plot = self.config.SAVE_PLOTS
             
@@ -397,13 +403,25 @@ class ComprehensiveCausalModesTutorial:
             print("❌ 请先运行基准测试")
             return
         
-        print("\n📊 创建全面性能可视化图表")
+        chart_type = "扩展版" if extended else "标准版"
+        print(f"\n📊 创建全面性能可视化图表 ({chart_type})")
         print("-" * 40)
         
-        # 准备数据 - 分类排列：传统方法 + CausalEngine模式
-        traditional_methods = [m for m in self.results.keys() if m not in self.config.CAUSAL_MODES]
-        causal_methods = [m for m in self.config.CAUSAL_MODES if m in self.results]
-        methods = traditional_methods + causal_methods
+        # 准备数据 - 根据扩展标志决定包含的方法
+        if extended:
+            # 扩展版：包含所有可用方法
+            all_available_methods = list(self.results.keys())
+            # 按类型排序：先传统方法，后CausalEngine
+            traditional_methods = [m for m in all_available_methods if m not in self.config.CAUSAL_MODES]
+            causal_methods = [m for m in self.config.CAUSAL_MODES if m in self.results]
+            methods = traditional_methods + causal_methods
+        else:
+            # 标准版：包含9种核心方法（除了robust MLP方法）
+            robust_mlp_methods = ['mlp_huber', 'mlp_pinball_median', 'mlp_cauchy']  # 排除的robust MLP方法
+            standard_traditional = [m for m in self.results.keys() 
+                                  if m not in self.config.CAUSAL_MODES and m not in robust_mlp_methods]
+            causal_methods = [m for m in self.config.CAUSAL_MODES if m in self.results]
+            methods = standard_traditional + causal_methods
         
         # 为不同类型的方法设置颜色
         colors = []
@@ -417,7 +435,8 @@ class ComprehensiveCausalModesTutorial:
         
         # 创建子图 - 2x2布局展示4个指标
         fig, axes = plt.subplots(2, 2, figsize=self.config.FIGURE_SIZE_PERFORMANCE)
-        fig.suptitle('Comprehensive CausalEngine Modes vs Traditional Methods\nCalifornia Housing Performance (25% Label Noise)', 
+        title_suffix = " (Extended with All Methods)" if extended else ""
+        fig.suptitle(f'Comprehensive CausalEngine Modes vs Traditional Methods{title_suffix}\nCalifornia Housing Performance (40% Label Noise)', 
                      fontsize=16, fontweight='bold')
         axes = axes.flatten()
         
@@ -454,7 +473,7 @@ class ComprehensiveCausalModesTutorial:
             for bar, value in zip(bars, values):
                 height = bar.get_height()
                 axes[i].text(bar.get_x() + bar.get_width()/2., height + height*0.01,
-                           f'{value:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=9)
+                           f'{value:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=8)
             
             # 高亮最佳结果
             if metric == 'R²':
@@ -468,9 +487,10 @@ class ComprehensiveCausalModesTutorial:
         plt.tight_layout()
         
         if save_plot:
-            output_path = self._get_output_path('comprehensive_performance_comparison.png')
+            filename = 'comprehensive_performance_comparison_extended.png' if extended else 'comprehensive_performance_comparison.png'
+            output_path = self._get_output_path(filename)
             plt.savefig(output_path, dpi=self.config.FIGURE_DPI, bbox_inches='tight')
-            print(f"📊 全面性能图表已保存为 {output_path}")
+            print(f"📊 {chart_type}全面性能图表已保存为 {output_path}")
         
         plt.close()
     
@@ -645,7 +665,7 @@ def main():
     print(f"   - 最大轮数: {config.CAUSAL_MAX_EPOCHS}")
     print(f"   - 早停patience: {config.CAUSAL_PATIENCE}")
     print(f"   - 异常比例: {config.ANOMALY_RATIO:.1%}")
-    print(f"   - 总计对比方法: {len(config.CAUSAL_MODES) + 2} 种")
+    print(f"   - 总计对比方法: {len(config.CAUSAL_MODES) + len(config.BASELINE_METHODS)} 种")
     print(f"   - 输出目录: {config.OUTPUT_DIR}/")
     print()
     
@@ -664,8 +684,9 @@ def main():
     # 4. 专门分析CausalEngine模式性能
     tutorial.analyze_causal_modes_performance()
     
-    # 5. 创建全面性能可视化
-    tutorial.create_comprehensive_performance_visualization()
+    # 5. 创建全面性能可视化 - 生成标准版和扩展版
+    tutorial.create_comprehensive_performance_visualization(extended=False)  # 标准版
+    tutorial.create_comprehensive_performance_visualization(extended=True)   # 扩展版
     
     # 6. 创建CausalEngine模式专项对比
     tutorial.create_causal_modes_comparison()
@@ -684,9 +705,10 @@ def main():
     
     print("\n📊 生成的文件:")
     if config.SAVE_PLOTS:
-        print(f"   - {config.OUTPUT_DIR}/comprehensive_data_analysis.png           (数据分析图)")
-        print(f"   - {config.OUTPUT_DIR}/comprehensive_performance_comparison.png  (全面性能对比图)")
-        print(f"   - {config.OUTPUT_DIR}/causal_modes_detailed_comparison.png      (CausalEngine模式专项对比图)")
+        print(f"   - {config.OUTPUT_DIR}/comprehensive_data_analysis.png                    (数据分析图)")
+        print(f"   - {config.OUTPUT_DIR}/comprehensive_performance_comparison.png           (标准性能对比图)")
+        print(f"   - {config.OUTPUT_DIR}/comprehensive_performance_comparison_extended.png  (扩展性能对比图)")
+        print(f"   - {config.OUTPUT_DIR}/causal_modes_detailed_comparison.png               (CausalEngine模式专项对比图)")
     
     print("\n💡 提示：通过修改ComprehensiveTutorialConfig类来自定义实验参数！")
     print("🔬 下一步：可以尝试不同的数据集或调整模型参数来进一步验证CausalEngine的优越性")
