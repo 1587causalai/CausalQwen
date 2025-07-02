@@ -1135,7 +1135,9 @@ def main():
     
     print("\n📊 生成的文件:")
     if config.SAVE_PLOTS:
-        print(f"   - {config.OUTPUT_DIR}/sklearn_style_performance_comparison.png")
+        print(f"   - {config.OUTPUT_DIR}/sklearn_style_data_analysis.png          (数据分析图)")
+        print(f"   - {config.OUTPUT_DIR}/sklearn_style_performance_comparison.png (全面性能对比图)")
+        print(f"   - {config.OUTPUT_DIR}/sklearn_style_causal_modes_comparison.png (CausalEngine模式专项对比图)")
     
     print("\n💡 提示：通过修改SklearnStyleTutorialConfig类来自定义实验参数！")
     print("🔬 对比建议：运行Legacy版本的comprehensive_causal_modes_tutorial.py进行性能对比")
