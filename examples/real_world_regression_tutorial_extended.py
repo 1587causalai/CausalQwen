@@ -90,7 +90,7 @@ class TutorialConfig:
     NN_HIDDEN_SIZES = (128, 64, 32)                 # 神经网络隐藏层结构
     NN_MAX_EPOCHS = 3000                            # 最大训练轮数
     NN_LEARNING_RATE = 0.01                         # 学习率
-    NN_PATIENCE = 50                                # 早停patience
+    NN_PATIENCE = 100                               # 早停patience
     NN_TOLERANCE = 1e-4                             # 早停tolerance
     # =========================================================================
     
@@ -451,7 +451,7 @@ class ExtendedCaliforniaHousingTutorial:
             print(f"📊 性能对比图表已保存: {performance_plot_path}")
     
     def _create_robustness_plots(self, robustness_results):
-        """创建鲁棒性测试图表"""
+        """创建鲁棒性测试图表 - 4个指标的2x2子图布局"""
         if self.config.VERBOSE:
             print("📊 生成鲁棒性测试图表...")
         
@@ -463,6 +463,7 @@ class ExtendedCaliforniaHousingTutorial:
         noise_levels = list(robustness_results.keys())
         methods = list(robustness_results[noise_levels[0]].keys())
         metrics = ['MAE', 'MdAE', 'RMSE', 'R²']
+        metric_labels = ['Mean Absolute Error (MAE)', 'Median Absolute Error (MdAE)', 'Root Mean Squared Error (RMSE)', 'R-squared Score (R²)']
         
         # 设置颜色和线型
         method_styles = {}
@@ -470,37 +471,50 @@ class ExtendedCaliforniaHousingTutorial:
         robust_methods = [m for m in methods if any(robust in m.lower() for robust in ['huber', 'cauchy', 'pinball'])]
         traditional_methods = [m for m in methods if m not in causal_methods and m not in robust_methods]
         
-        colors = ['red', 'orange', 'gold', 'green', 'blue', 'purple', 'brown', 'pink', 'gray', 'olive']
+        colors = ['#1f77b4', '#ff7f0e', '#d62728', '#2ca02c', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+        markers = ['o', 's', 'v', '^', 'D', 'P', 'X', 'h', '+', '*']
         
         for i, method in enumerate(methods):
             if method in causal_methods:
-                method_styles[method] = {'color': 'red', 'linestyle': '-', 'linewidth': 3, 'marker': 'o', 'markersize': 8}
+                method_styles[method] = {'color': '#d62728', 'linestyle': '-', 'linewidth': 3, 'marker': 'o', 'markersize': 8}
             elif method in robust_methods:
-                method_styles[method] = {'color': colors[i], 'linestyle': '--', 'linewidth': 2, 'marker': 's', 'markersize': 6}
+                method_styles[method] = {'color': colors[i % len(colors)], 'linestyle': '--', 'linewidth': 2, 'marker': 's', 'markersize': 6}
             else:
-                method_styles[method] = {'color': colors[i], 'linestyle': ':', 'linewidth': 2, 'marker': '^', 'markersize': 6}
+                method_styles[method] = {'color': colors[i % len(colors)], 'linestyle': ':', 'linewidth': 2, 'marker': markers[i % len(markers)], 'markersize': 6}
         
         # 为每个指标创建子图
-        for i, metric in enumerate(metrics):
-            ax = axes[i//2, i%2]
+        for idx, (metric, metric_label) in enumerate(zip(metrics, metric_labels)):
+            row, col = idx // 2, idx % 2
+            ax = axes[row, col]
             
             for method in methods:
                 # 收集该方法在各噪声水平下的测试集性能
-                values = [robustness_results[noise][method]['test'][metric] for noise in noise_levels]
+                values = []
+                for noise in noise_levels:
+                    if method in robustness_results[noise]:
+                        values.append(robustness_results[noise][method]['test'][metric])
+                    else:
+                        values.append(np.nan)
                 
                 ax.plot(noise_levels, values, 
                        label=method, 
                        **method_styles[method])
             
-            ax.set_title(f'{metric} vs Noise Level')
-            ax.set_xlabel('Anomaly Ratio')
-            ax.set_ylabel(metric)
-            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax.set_title(metric_label, fontsize=12, fontweight='bold')
+            ax.set_xlabel('Label Noise Ratio', fontsize=11)
+            ax.set_ylabel(metric, fontsize=11)
+            ax.legend(fontsize=9, bbox_to_anchor=(1.05, 1), loc='upper left')
             ax.grid(True, alpha=0.3)
             
             # 设置x轴刻度标签
             ax.set_xticks(noise_levels)
             ax.set_xticklabels([f'{r:.1%}' for r in noise_levels])
+            
+            # 为R²添加特殊处理（越高越好），其他指标越低越好
+            if metric == 'R²':
+                ax.set_ylim(bottom=0)  # R²从0开始显示
+            else:
+                ax.set_ylim(bottom=0)  # 误差指标从0开始显示
         
         plt.tight_layout()
         

@@ -122,7 +122,7 @@ class TutorialConfig:
     NN_HIDDEN_SIZES = (128, 64, 32)                 # 神经网络隐藏层结构
     NN_MAX_EPOCHS = 3000                            # 最大训练轮数
     NN_LEARNING_RATE = 0.01                         # 学习率
-    NN_PATIENCE = 50                                # 早停patience
+    NN_PATIENCE = 100                               # 早停patience
     NN_TOLERANCE = 1e-4                             # 早停tolerance
     # =========================================================================
     
@@ -198,8 +198,8 @@ class TutorialConfig:
     # 📈 可视化参数
     FIGURE_DPI = 300                             # 图表分辨率
     FIGURE_SIZE_ANALYSIS = (24, 20)              # 数据分析图表大小
-    FIGURE_SIZE_PERFORMANCE = (30, 25)           # 性能对比图表大小 (更大以容纳更多方法)
-    FIGURE_SIZE_ROBUSTNESS = (30, 25)            # 鲁棒性测试图表大小 (更大以容纳更多方法)
+    FIGURE_SIZE_PERFORMANCE = (24, 20)           # 性能对比图表大小
+    FIGURE_SIZE_ROBUSTNESS = (24, 20)            # 鲁棒性测试图表大小
     
     # 📁 输出目录参数
     OUTPUT_DIR = "results/california_housing_regression_extended_sklearn_style"  # 输出目录名称
@@ -264,7 +264,7 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
         
         # 创建图形
         fig, axes = plt.subplots(2, 2, figsize=self.config.FIGURE_SIZE_ANALYSIS)
-        fig.suptitle('California Housing Dataset Analysis - Extended Sklearn-Style Tutorial', fontsize=16, fontweight='bold')
+        fig.suptitle('California Housing Dataset Analysis - Extended Regression Tutorial', fontsize=16, fontweight='bold')
         
         # 1. 目标变量分布
         axes[0, 0].hist(self.y, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
@@ -302,7 +302,7 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
         plt.tight_layout()
         
         if save_plots:
-            output_path = self._get_output_path('california_housing_analysis_extended_sklearn_style.png')
+            output_path = self._get_output_path('extended_data_analysis.png')
             plt.savefig(output_path, dpi=self.config.FIGURE_DPI, bbox_inches='tight')
             print(f"📊 数据分析图表已保存为 {output_path}")
         
@@ -710,7 +710,7 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
         
         # 创建子图
         fig, axes = plt.subplots(2, 2, figsize=self.config.FIGURE_SIZE_PERFORMANCE)
-        fig.suptitle('Extended CausalEngine vs Traditional Methods: California Housing Performance (40% Label Noise) - Sklearn-Style', 
+        fig.suptitle('Extended California Housing Test Set Performance\\nNoise Level: 40.0%', 
                     fontsize=16, fontweight='bold')
         axes = axes.flatten()  # 展平为一维数组便于访问
         
@@ -755,7 +755,7 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
         plt.tight_layout()
         
         if save_plot:
-            output_path = self._get_output_path('california_housing_performance_extended_sklearn_style.png')
+            output_path = self._get_output_path('core_performance_comparison.png')
             plt.savefig(output_path, dpi=self.config.FIGURE_DPI, bbox_inches='tight')
             print(f"📊 性能图表已保存为 {output_path}")
         
@@ -785,12 +785,7 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
             original_config = self.config.ANOMALY_RATIO
             self.config.ANOMALY_RATIO = noise_level
             
-            # 选取主要方法进行鲁棒性测试以节省时间
-            original_causal_modes = self.config.CAUSAL_MODES
-            robustness_methods = ['sklearn_mlp', 'pytorch_mlp', 'random_forest', 'standard', 'endogenous']
-            self.config.CAUSAL_MODES = [mode for mode in self.config.CAUSAL_MODES 
-                                      if mode in robustness_methods]
-            
+            # 使用所有方法进行鲁棒性测试（与核心性能测试一致）
             try:
                 # 加载数据（如果尚未加载）
                 if self.X is None or self.y is None:
@@ -806,35 +801,38 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
                 
                 noise_results = {}
                 
-                # 测试sklearn MLP
-                if 'sklearn_mlp' in robustness_methods:
-                    sklearn_model = self._train_sklearn_model(data)
-                    noise_results['sklearn_mlp'] = self._evaluate_model(sklearn_model, data, 'sklearn_mlp')
+                # 1. sklearn模型
+                sklearn_model = self._train_sklearn_model(data)
+                noise_results['sklearn_mlp'] = self._evaluate_model(sklearn_model, data, 'sklearn_mlp')
                 
-                # 测试PyTorch MLP
-                if 'pytorch_mlp' in robustness_methods:
-                    pytorch_model = self._train_pytorch_model(data)
-                    noise_results['pytorch_mlp'] = self._evaluate_model(pytorch_model, data, 'pytorch_mlp')
+                # 2. PyTorch模型
+                pytorch_model = self._train_pytorch_model(data)
+                noise_results['pytorch_mlp'] = self._evaluate_model(pytorch_model, data, 'pytorch_mlp')
                 
-                # 测试CausalEngine
+                # 3. 稳健回归器
+                for robust_type in ['huber', 'pinball', 'cauchy']:
+                    robust_model = self._train_robust_regressor(data, robust_type)
+                    if robust_model is not None:
+                        # 使用与核心测试一致的键名
+                        result_key = f'mlp_{robust_type}_median' if robust_type == 'pinball' else f'mlp_{robust_type}'
+                        noise_results[result_key] = self._evaluate_model(robust_model, data, result_key)
+                
+                # 4. 树模型
+                for tree_type in ['random_forest', 'xgboost', 'lightgbm', 'catboost']:
+                    tree_model = self._train_tree_model(data, tree_type)
+                    if tree_model is not None:
+                        noise_results[tree_type] = self._evaluate_model(tree_model, data, tree_type)
+                
+                # 5. CausalEngine模型
                 for mode in self.config.CAUSAL_MODES:
-                    if not mode in robustness_methods:
-                        continue
                     causal_model = self._train_causal_model(data, mode)
                     noise_results[mode] = self._evaluate_model(causal_model, data, mode)
-                
-                # 测试最佳树模型（Random Forest作为代表）
-                if 'random_forest' in robustness_methods:
-                    rf_model = self._train_tree_model(data, 'random_forest')
-                    if rf_model is not None:
-                        noise_results['random_forest'] = self._evaluate_model(rf_model, data, 'random_forest')
                 
                 robustness_results[noise_level] = noise_results
                 
             finally:
                 # 恢复原始配置
                 self.config.ANOMALY_RATIO = original_config
-                self.config.CAUSAL_MODES = original_causal_modes
         
         if verbose:
             self._print_robustness_results(robustness_results, noise_levels)
@@ -893,7 +891,7 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
             print(f"   {i}. {method:<15} 标准差: {std:.4f}")
     
     def create_robustness_visualization(self, robustness_results, save_plot=None):
-        """创建鲁棒性可视化图表"""
+        """创建鲁棒性可视化图表 - 4个指标的2x2子图布局"""
         if save_plot is None:
             save_plot = self.config.SAVE_PLOTS
             
@@ -903,61 +901,231 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
         noise_levels = list(robustness_results.keys())
         methods = list(robustness_results[noise_levels[0]].keys())
         
-        fig, ax = plt.subplots(figsize=self.config.FIGURE_SIZE_ROBUSTNESS)
+        # 创建2x2子图布局
+        fig, axes = plt.subplots(2, 2, figsize=self.config.FIGURE_SIZE_ROBUSTNESS)
+        fig.suptitle('Extended Robustness Analysis: Performance vs Noise Level', fontsize=16, fontweight='bold')
         
-        # 为每个方法绘制线图
-        for method in methods:
-            r2_scores = []
-            valid_noise_levels = []
+        # 4个回归指标
+        metrics = ['MAE', 'MdAE', 'RMSE', 'R²']
+        metric_labels = ['Mean Absolute Error (MAE)', 'Median Absolute Error (MdAE)', 'Root Mean Squared Error (RMSE)', 'R-squared Score (R²)']
+        
+        # 设置颜色和线型
+        method_styles = {}
+        causal_methods = [m for m in methods if m in ['deterministic', 'exogenous', 'endogenous', 'standard']]
+        
+        colors = ['#1f77b4', '#ff7f0e', '#d62728', '#2ca02c', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+        markers = ['o', 's', 'v', '^', 'D', 'P', 'X', 'h', '+', '*']
+        
+        for i, method in enumerate(methods):
+            if method in causal_methods:
+                method_styles[method] = {'color': '#d62728', 'linestyle': '-', 'linewidth': 3, 'marker': 'o', 'markersize': 8}
+            else:
+                method_styles[method] = {'color': colors[i % len(colors)], 'linestyle': '--', 'linewidth': 2, 'marker': markers[i % len(markers)], 'markersize': 6}
+        
+        # 为每个指标创建子图
+        for idx, (metric, metric_label) in enumerate(zip(metrics, metric_labels)):
+            row, col = idx // 2, idx % 2
+            ax = axes[row, col]
             
-            for noise_level in noise_levels:
-                if method in robustness_results[noise_level]:
-                    r2_scores.append(robustness_results[noise_level][method]['test']['R²'])
-                    valid_noise_levels.append(noise_level * 100)  # 转换为百分比
-            
-            if r2_scores:
-                # 设置线条样式
-                if method in ['deterministic', 'exogenous', 'endogenous', 'standard']:
-                    linestyle = '-'
-                    linewidth = 3
-                    marker = 'o'
-                    markersize = 8
-                else:
-                    linestyle = '--'
-                    linewidth = 2
-                    marker = 's'
-                    markersize = 6
+            # 为每个方法绘制线图
+            for method in methods:
+                scores = []
+                valid_noise_levels = []
                 
-                ax.plot(valid_noise_levels, r2_scores, 
-                       label=method, linestyle=linestyle, linewidth=linewidth,
-                       marker=marker, markersize=markersize)
-        
-        ax.set_xlabel('噪声水平 (%)', fontweight='bold')
-        ax.set_ylabel('R² 分数', fontweight='bold')
-        ax.set_title('Extended Methods Robustness Analysis: Performance vs Noise Level - Sklearn-Style', 
-                    fontweight='bold')
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        ax.grid(True, alpha=0.3)
+                for noise_level in noise_levels:
+                    if method in robustness_results[noise_level]:
+                        scores.append(robustness_results[noise_level][method]['test'][metric])
+                        valid_noise_levels.append(noise_level * 100)  # 转换为百分比
+                
+                if scores:
+                    ax.plot(valid_noise_levels, scores, 
+                           label=method, 
+                           **method_styles[method])
+            
+            ax.set_xlabel('Label Noise Ratio (%)', fontsize=11)
+            ax.set_ylabel(metric, fontsize=11)
+            ax.set_title(metric_label, fontsize=12, fontweight='bold')
+            ax.legend(fontsize=9)
+            ax.grid(True, alpha=0.3)
+            
+            # 为R²添加特殊处理（越高越好），其他指标越低越好
+            if metric == 'R²':
+                ax.set_ylim(bottom=0)  # R²从0开始显示
+            else:
+                ax.set_ylim(bottom=0)  # 误差指标从0开始显示
         
         plt.tight_layout()
         
         if save_plot:
-            output_path = self._get_output_path('california_housing_robustness_extended_sklearn_style.png')
+            output_path = self._get_output_path('extended_robustness_analysis.png')
             plt.savefig(output_path, dpi=self.config.FIGURE_DPI, bbox_inches='tight')
             print(f"📊 鲁棒性图表已保存为 {output_path}")
         
         plt.close()
     
-    def _get_output_path(self, filename):
-        """获取输出文件路径"""
-        output_dir = os.path.join(os.path.dirname(__file__), self.config.OUTPUT_DIR)
-        os.makedirs(output_dir, exist_ok=True)
-        return os.path.join(output_dir, filename)
+    def generate_summary_report(self):
+        """生成实验总结报告"""
+        if self.config.VERBOSE:
+            print("\\n📋 生成实验总结报告...")
+        
+        report_lines = []
+        report_lines.append("# 扩展版加州房价回归实验总结报告 (Sklearn-Style)")
+        report_lines.append("")
+        report_lines.append("🏠 **California Housing Dataset Regression Analysis - Sklearn-Style Implementation**")
+        report_lines.append("")
+        report_lines.append("---")
+        report_lines.append("")
+        
+        # 实验配置
+        report_lines.append("## 📊 实验配置")
+        report_lines.append("")
+        report_lines.append(f"- **数据集**: 加州房价数据集")
+        report_lines.append(f"  - 样本数: {self.X.shape[0]:,}")
+        report_lines.append(f"  - 特征数: {self.X.shape[1]}")
+        report_lines.append(f"  - 房价范围: ${self.y.min():.2f} - ${self.y.max():.2f} (10万美元)")
+        report_lines.append("")
+        report_lines.append(f"- **数据分割**:")
+        report_lines.append(f"  - 测试集比例: {self.config.TEST_SIZE:.1%}")
+        report_lines.append(f"  - 验证集比例: {self.config.VAL_SIZE:.1%}")
+        report_lines.append(f"  - 随机种子: {self.config.RANDOM_STATE}")
+        report_lines.append("")
+        report_lines.append(f"- **神经网络统一配置**:")
+        report_lines.append(f"  - 网络结构: {self.config.NN_HIDDEN_SIZES}")
+        report_lines.append(f"  - 最大轮数: {self.config.NN_MAX_EPOCHS}")
+        report_lines.append(f"  - 学习率: {self.config.NN_LEARNING_RATE}")
+        report_lines.append(f"  - 早停patience: {self.config.NN_PATIENCE}")
+        report_lines.append("")
+        report_lines.append(f"- **实验方法**: {len(self.config.BASELINE_METHODS) + len(self.config.CAUSAL_MODES)} 种")
+        report_lines.append(f"  - 传统方法 ({len(self.config.BASELINE_METHODS)}种): {', '.join(self.config.BASELINE_METHODS)}")
+        report_lines.append(f"  - CausalEngine ({len(self.config.CAUSAL_MODES)}种): {', '.join(self.config.CAUSAL_MODES)}")
+        report_lines.append("")
+        
+        # 核心性能测试结果
+        if self.results:
+            results = self.results
+            report_lines.append("## 🎯 核心性能测试结果")
+            report_lines.append("")
+            report_lines.append(f"**噪声水平**: {self.config.ANOMALY_RATIO:.1%}")
+            report_lines.append("")
+            
+            # 创建性能表格 - 按MdAE排序
+            methods_by_mdae = sorted(results.keys(), key=lambda x: results[x]['test']['MdAE'])
+            
+            report_lines.append("### 📈 测试集性能排名 (按MdAE升序)")
+            report_lines.append("")
+            
+            # 表格头
+            report_lines.append("| 排名 | 方法 | MAE | MdAE | RMSE | R² | 方法类型 |")
+            report_lines.append("|:----:|------|----:|-----:|-----:|---:|----------|")
+            
+            for i, method in enumerate(methods_by_mdae, 1):
+                test_metrics = results[method]['test']
+                
+                # 判断方法类型
+                if any(mode in method for mode in ['deterministic', 'standard', 'exogenous', 'endogenous']):
+                    method_type = "🤖 CausalEngine"
+                elif any(robust in method.lower() for robust in ['huber', 'cauchy', 'pinball']):
+                    method_type = "🛡️ 稳健回归"
+                elif method.lower() in ['catboost', 'random_forest', 'xgboost', 'lightgbm']:
+                    method_type = "🌲 集成学习"
+                else:
+                    method_type = "🧠 神经网络"
+                
+                report_lines.append(f"| {i} | **{method}** | "
+                                  f"{test_metrics['MAE']:.4f} | "
+                                  f"**{test_metrics['MdAE']:.4f}** | "
+                                  f"{test_metrics['RMSE']:.4f} | "
+                                  f"{test_metrics['R²']:.4f} | "
+                                  f"{method_type} |")
+            
+            report_lines.append("")
+            
+            # 验证集vs测试集对比（展示噪声影响）
+            report_lines.append("### 🔍 验证集 vs 测试集性能对比")
+            report_lines.append("")
+            report_lines.append("*验证集包含噪声，测试集为纯净数据*")
+            report_lines.append("")
+            
+            report_lines.append("| 方法 | 验证集MdAE | 测试集MdAE | 性能提升 |")
+            report_lines.append("|------|----------:|----------:|--------:|")
+            
+            for method in methods_by_mdae:
+                val_mdae = results[method]['val']['MdAE']
+                test_mdae = results[method]['test']['MdAE']
+                improvement = ((val_mdae - test_mdae) / val_mdae) * 100
+                
+                report_lines.append(f"| {method} | "
+                                  f"{val_mdae:.4f} | "
+                                  f"{test_mdae:.4f} | "
+                                  f"{improvement:+.1f}% |")
+            
+            report_lines.append("")
+            
+            # 关键发现
+            best_mdae_method = methods_by_mdae[0]
+            best_mdae_score = results[best_mdae_method]['test']['MdAE']
+            
+            # 识别CausalEngine方法
+            causal_methods = [m for m in results.keys() if any(mode in m for mode in ['deterministic', 'standard', 'exogenous', 'endogenous'])]
+            
+            report_lines.append("### 🏆 关键发现")
+            report_lines.append("")
+            report_lines.append(f"- **🥇 最佳整体性能**: `{best_mdae_method}` (MdAE: {best_mdae_score:.4f})")
+            
+            if causal_methods:
+                best_causal = min(causal_methods, key=lambda x: results[x]['test']['MdAE'])
+                causal_rank = methods_by_mdae.index(best_causal) + 1
+                causal_score = results[best_causal]['test']['MdAE']
+                report_lines.append(f"- **🤖 最佳CausalEngine**: `{best_causal}` (排名: {causal_rank}/{len(methods_by_mdae)}, MdAE: {causal_score:.4f})")
+                
+                # CausalEngine模式对比
+                if len(causal_methods) > 1:
+                    report_lines.append("")
+                    report_lines.append("**CausalEngine模式对比**:")
+                    for causal_method in sorted(causal_methods, key=lambda x: results[x]['test']['MdAE']):
+                        rank = methods_by_mdae.index(causal_method) + 1
+                        score = results[causal_method]['test']['MdAE']
+                        report_lines.append(f"  - `{causal_method}`: 排名 {rank}, MdAE {score:.4f}")
+            
+            # 传统方法分析
+            traditional_methods = [m for m in results.keys() if m not in causal_methods]
+            if traditional_methods:
+                best_traditional = min(traditional_methods, key=lambda x: results[x]['test']['MdAE'])
+                traditional_rank = methods_by_mdae.index(best_traditional) + 1
+                traditional_score = results[best_traditional]['test']['MdAE']
+                report_lines.append(f"- **🏅 最佳传统方法**: `{best_traditional}` (排名: {traditional_rank}/{len(methods_by_mdae)}, MdAE: {traditional_score:.4f})")
+            
+            report_lines.append("")
+        
+        # 添加脚注
+        report_lines.append("---")
+        report_lines.append("")
+        report_lines.append("## 📝 说明")
+        report_lines.append("")
+        report_lines.append("- **MdAE**: Median Absolute Error (中位数绝对误差) - 主要评估指标")
+        report_lines.append("- **MAE**: Mean Absolute Error (平均绝对误差)")
+        report_lines.append("- **RMSE**: Root Mean Square Error (均方根误差)")
+        report_lines.append("- **R²**: 决定系数 (越接近1越好)")
+        report_lines.append("- **噪声设置**: 验证集包含人工噪声，测试集为纯净数据")
+        report_lines.append("- **统一配置**: 所有神经网络方法使用相同的超参数确保公平比较")
+        report_lines.append("- **实现方式**: 使用sklearn-style regressor实现")
+        report_lines.append("")
+        report_lines.append(f"📊 **生成时间**: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 保存报告
+        report_path = self._get_output_path('extended_experiment_summary.md')
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write('\\n'.join(report_lines))
+        
+        if self.config.VERBOSE:
+            print(f"📋 实验总结报告已保存: {report_path}")
+        
+        return report_lines
 
 
 def main():
     """主函数 - 运行扩展版教程 (Sklearn-Style版本)"""
-    print("🚀 扩展版加州房价回归教程 - Sklearn-Style版本")
+    print("🚀 扩展版加州房价回归教程")
     print("=" * 60)
     
     # 创建教程实例
@@ -966,28 +1134,37 @@ def main():
     # 1. 加载和分析数据
     tutorial.load_and_explore_data()
     
-    # 2. 运行核心性能测试
+    # 2. 创建数据分析可视化
+    tutorial.visualize_data()
+    
+    # 3. 运行核心性能测试
     core_results = tutorial.run_comprehensive_benchmark()
     
-    # 3. 运行鲁棒性测试
+    # 4. 分析性能结果
+    tutorial.analyze_performance()
+    
+    # 5. 创建性能对比可视化
+    tutorial.create_performance_visualization()
+    
+    # 6. 运行鲁棒性测试
     if tutorial.config.RUN_ROBUSTNESS_TEST:
         robustness_results = tutorial.run_robustness_analysis()
         
         # 创建鲁棒性可视化
         tutorial.create_robustness_visualization(robustness_results)
     
+    # 7. 生成总结报告
+    tutorial.generate_summary_report()
+    
     if tutorial.config.VERBOSE:
         print("\n🎉 扩展版教程运行完成！")
         print(f"📁 所有结果已保存到: {tutorial.config.OUTPUT_DIR}")
         print("\n主要输出文件:")
-        print("- california_housing_performance_extended_sklearn_style.png: 核心性能对比图表")
+        print("- extended_data_analysis.png: 数据分析图表")
+        print("- core_performance_comparison.png: 核心性能对比图表")
         if tutorial.config.RUN_ROBUSTNESS_TEST:
-            print("- california_housing_robustness_extended_sklearn_style.png: 鲁棒性分析图表")
-        print("\n💡 关键发现:")
-        print("   1. 13种方法的全面性能对比已完成")
-        print("   2. CausalEngine在多种噪声水平下的鲁棒性已验证")
-        print("   3. 稳健回归和树模型提供了有价值的基准对比")
-        print("   4. Sklearn-style实现确保了实验的可重现性")
+            print("- extended_robustness_analysis.png: 鲁棒性分析图表")
+        print("- extended_experiment_summary.md: 实验总结报告")
 
 
 if __name__ == "__main__":
