@@ -12,9 +12,7 @@
 
 - **[ONE_PAGER.md](ONE_PAGER.md)** - 算法概览与高管摘要
 - **[MATHEMATICAL_FOUNDATIONS_CN.md](MATHEMATICAL_FOUNDATIONS_CN.md)** - 🌟 **最核心** CausalEngine 数学基础 (中文完整版)
-- **[IMPLEMENTATION_SPECIFICATION.md](IMPLEMENTATION_SPECIFICATION.md)** - 📋 **实现规范**，直接指导代码开发
 - **[mathematical_equivalence_deep_dive.md](mathematical_equivalence_deep_dive.md)** - 与传统机器学习模型的数学等价性深度分析
-- **[MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md](MATHEMATICAL_IMPLEMENTATION_VERIFICATION.md)** - 数学实现正确性验证指南
 
 ### 🚀 CausalLLM (未来探索方向)
 

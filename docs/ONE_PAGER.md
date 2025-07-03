@@ -6,18 +6,38 @@
 
 While traditional AI learns *what* typically happens, CausalEngine understands *why* things happen.
 
-## The Core Innovation
+## The Core Logic of CausalEngine
+
+This transforms the core logic of AI. We move from statistical correlation to causal computation:
 
 ```
-Traditional AI: X → P(Y|X) → Sample → Y
+Traditional AI: X → P(Y|X) → Y
 CausalEngine:   X → U → f(U,ε) → Y
 ```
 
-**Translation**: Instead of predicting probabilities, we identify the individual (U), apply universal laws (f), and generate deterministic outcomes with quantified uncertainty.
+This is not just a different process; it's a different paradigm.
+
+- **Traditional AI** computes a **statistical probability** (`P(Y|X)`). It learns correlations to answer: "Given `X`, what is the likely `Y`?"
+
+- **CausalEngine** computes a **causal outcome** by learning a structural equation (`f`). It first answers "Who is the actor `U`?" (`X → U`), then applies the universal law `f` to determine the outcome `Y`.
+
+In short, traditional AI fits data; CausalEngine models reality.
+
+
+From the perspective of realization, CausalEngine reframes this into a transparent, four-stage causal reasoning chain: 
+
+> `Perception → Abduction → Action → Decision`
+
+1.  **Perception (感知):** Extracts high-level features (`Z`) from data (`X`).
+2.  **Abduction (归因):** Answers *"Who are you?"* by inferring the unobservable "individual causal representation" (`U`) from the features (`Z`).
+3.  **Action (行动):** Answers *"What to do?"* by using a deterministic function to compute a "decision score" (`S`) from the individual representation (`U`). This is the equivalent of traditional logits.
+4.  **Decision (决断):** A simple output head that converts the abstract score (`S`) into a final task-specific output (`Y`), like a class label or a numerical value.
+
+
 
 ## The Four Axioms
 
-1. **Intelligence = Abduction + Action**  
+1. **Inference = Abduction + Action**  
    First understand "who you are", then decide "what to do"
 
 2. **Cauchy Mathematics**  
@@ -61,4 +81,4 @@ Every intelligent system of tomorrow will be powered by causal reasoning, not st
 
 ---
 
-*"We found the algorithm of intelligence itself."* 
+*"We found the algorithm of intelligence itself."*
