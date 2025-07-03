@@ -146,7 +146,7 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         y : array-like of shape (n_samples,)
             Target values. Should be preprocessed if needed.
         sample_weight : array-like of shape (n_samples,), default=None
-            Sample weights (not implemented yet).
+            Sample weights. If provided, the loss function will be weighted by these values.
             
         Returns
         -------
@@ -156,19 +156,34 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         # Validate input
         X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
         
+        # Validate sample_weight if provided
+        if sample_weight is not None:
+            sample_weight = check_array(sample_weight, ensure_2d=False, accept_sparse=False)
+            if sample_weight.shape[0] != X.shape[0]:
+                raise ValueError(f"sample_weight has {sample_weight.shape[0]} samples, but X has {X.shape[0]} samples.")
+        
         # Store input info
         self.n_features_in_ = X.shape[1]
         
         # Split for validation if early stopping is enabled
         if self.early_stopping:
-            X_train, X_val, y_train, y_val = train_test_split(
-                X, y, 
-                test_size=self.validation_fraction,
-                random_state=self.random_state
-            )
+            if sample_weight is not None:
+                X_train, X_val, y_train, y_val, sw_train, sw_val = train_test_split(
+                    X, y, sample_weight,
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state
+                )
+            else:
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X, y, 
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state
+                )
+                sw_train, sw_val = None, None
         else:
             X_train, y_train = X, y
             X_val, y_val = None, None
+            sw_train, sw_val = sample_weight, None
         
         # Convert to torch tensors
         X_train_tensor = torch.FloatTensor(X_train)
@@ -178,12 +193,24 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         if len(y_train_tensor.shape) == 1:
             y_train_tensor = y_train_tensor.unsqueeze(1)
         
+        # Convert sample weights to tensor if provided
+        if sw_train is not None:
+            sw_train_tensor = torch.FloatTensor(sw_train)
+        else:
+            sw_train_tensor = None
+        
         if X_val is not None:
             X_val_tensor = torch.FloatTensor(X_val)
             y_val_tensor = torch.FloatTensor(y_val)
             # Also reshape validation y
             if len(y_val_tensor.shape) == 1:
                 y_val_tensor = y_val_tensor.unsqueeze(1)
+            
+            # Convert validation sample weights to tensor if provided
+            if sw_val is not None:
+                sw_val_tensor = torch.FloatTensor(sw_val)
+            else:
+                sw_val_tensor = None
         
         # Create CausalEngine
         self.engine_ = create_causal_regressor(
@@ -226,6 +253,10 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
             indices = torch.randperm(n_samples)
             X_train_shuffled = X_train_tensor[indices]
             y_train_shuffled = y_train_tensor[indices]
+            if sw_train_tensor is not None:
+                sw_train_shuffled = sw_train_tensor[indices]
+            else:
+                sw_train_shuffled = None
             
             # Mini-batch training
             for i in range(0, n_samples, batch_size):
@@ -233,8 +264,37 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
                 X_batch = X_train_shuffled[i:end_idx]
                 y_batch = y_train_shuffled[i:end_idx]
                 
+                # Get sample weights for this batch
+                if sw_train_shuffled is not None:
+                    sw_batch = sw_train_shuffled[i:end_idx]
+                else:
+                    sw_batch = None
+                
                 optimizer.zero_grad()
-                loss = self.engine_.compute_loss(X_batch, y_batch, mode=self.mode)
+                
+                # Compute loss with sample weights
+                if sw_batch is not None:
+                    # Get decision scores for weighted loss computation
+                    decision_scores = self.engine_._get_decision_scores(X_batch, mode=self.mode)
+                    mu_pred, gamma_pred = decision_scores
+                    
+                    # Compute individual losses based on mode
+                    if self.mode == 'deterministic':
+                        # MSE loss for each sample
+                        individual_losses = (y_batch.squeeze() - mu_pred.squeeze()) ** 2
+                    else:
+                        # Cauchy NLL loss for each sample
+                        from ._causal_engine.math_utils import CauchyMath
+                        individual_losses = CauchyMath.nll_loss(y_batch, mu_pred, gamma_pred, reduction='none')
+                        if individual_losses.dim() > 1:
+                            individual_losses = individual_losses.mean(dim=1)  # Average over output dimensions
+                    
+                    # Apply sample weights
+                    loss = (individual_losses * sw_batch).mean()
+                else:
+                    # Standard loss computation
+                    loss = self.engine_.compute_loss(X_batch, y_batch, mode=self.mode)
+                
                 loss.backward()
                 optimizer.step()
                 
@@ -248,7 +308,28 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
             if self.early_stopping and X_val is not None:
                 self.engine_.eval()
                 with torch.no_grad():
-                    val_loss = self.engine_.compute_loss(X_val_tensor, y_val_tensor, mode=self.mode)
+                    # Compute validation loss with sample weights
+                    if sw_val_tensor is not None:
+                        # Get decision scores for weighted validation loss computation
+                        decision_scores = self.engine_._get_decision_scores(X_val_tensor, mode=self.mode)
+                        mu_pred, gamma_pred = decision_scores
+                        
+                        # Compute individual validation losses based on mode
+                        if self.mode == 'deterministic':
+                            # MSE loss for each sample
+                            individual_val_losses = (y_val_tensor.squeeze() - mu_pred.squeeze()) ** 2
+                        else:
+                            # Cauchy NLL loss for each sample
+                            from ._causal_engine.math_utils import CauchyMath
+                            individual_val_losses = CauchyMath.nll_loss(y_val_tensor, mu_pred, gamma_pred, reduction='none')
+                            if individual_val_losses.dim() > 1:
+                                individual_val_losses = individual_val_losses.mean(dim=1)  # Average over output dimensions
+                        
+                        # Apply sample weights to validation loss
+                        val_loss = (individual_val_losses * sw_val_tensor).mean()
+                    else:
+                        # Standard validation loss computation
+                        val_loss = self.engine_.compute_loss(X_val_tensor, y_val_tensor, mode=self.mode)
                     
                     if val_loss < best_val_loss - self.tol:
                         best_val_loss = val_loss
@@ -522,7 +603,7 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         y : array-like of shape (n_samples,)
             Target values.
         sample_weight : array-like of shape (n_samples,), default=None
-            Sample weights (not implemented yet).
+            Sample weights. If provided, the loss function will be weighted by these values.
             
         Returns
         -------
@@ -537,27 +618,54 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         # Validate input
         X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
         
+        # Validate sample_weight if provided
+        if sample_weight is not None:
+            sample_weight = check_array(sample_weight, ensure_2d=False, accept_sparse=False)
+            if sample_weight.shape[0] != X.shape[0]:
+                raise ValueError(f"sample_weight has {sample_weight.shape[0]} samples, but X has {X.shape[0]} samples.")
+        
         # Store input info
         self.n_features_in_ = X.shape[1]
         
         # Split for validation if early stopping is enabled
         if self.early_stopping:
-            X_train, X_val, y_train, y_val = train_test_split(
-                X, y, 
-                test_size=self.validation_fraction,
-                random_state=self.random_state
-            )
+            if sample_weight is not None:
+                X_train, X_val, y_train, y_val, sw_train, sw_val = train_test_split(
+                    X, y, sample_weight,
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state
+                )
+            else:
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X, y, 
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state
+                )
+                sw_train, sw_val = None, None
         else:
             X_train, y_train = X, y
             X_val, y_val = None, None
+            sw_train, sw_val = sample_weight, None
         
         # Convert to torch tensors
         X_train_tensor = torch.FloatTensor(X_train)
         y_train_tensor = torch.FloatTensor(y_train)
         
+        # Convert sample weights to tensor if provided
+        if sw_train is not None:
+            sw_train_tensor = torch.FloatTensor(sw_train)
+        else:
+            sw_train_tensor = None
+        
         if X_val is not None:
             X_val_tensor = torch.FloatTensor(X_val)
             y_val_tensor = torch.FloatTensor(y_val)
+            
+            # Convert validation sample weights to tensor if provided
+            if sw_val is not None:
+                sw_val_tensor = torch.FloatTensor(sw_val)
+            else:
+                sw_val_tensor = None
         
         # Build model
         self.model_ = self._build_model(self.n_features_in_, 1)
@@ -590,6 +698,10 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
             indices = torch.randperm(n_samples)
             X_train_shuffled = X_train_tensor[indices]
             y_train_shuffled = y_train_tensor[indices]
+            if sw_train_tensor is not None:
+                sw_train_shuffled = sw_train_tensor[indices]
+            else:
+                sw_train_shuffled = None
             
             # Mini-batch training
             for i in range(0, n_samples, batch_size):
@@ -597,9 +709,23 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
                 X_batch = X_train_shuffled[i:end_idx]
                 y_batch = y_train_shuffled[i:end_idx]
                 
+                # Get sample weights for this batch
+                if sw_train_shuffled is not None:
+                    sw_batch = sw_train_shuffled[i:end_idx]
+                else:
+                    sw_batch = None
+                
                 optimizer.zero_grad()
                 outputs = self.model_(X_batch)
-                loss = criterion(outputs.squeeze(), y_batch)
+                
+                # Compute loss with sample weights
+                if sw_batch is not None:
+                    # Compute individual MSE losses for each sample
+                    individual_losses = (outputs.squeeze() - y_batch) ** 2
+                    loss = (individual_losses * sw_batch).mean()
+                else:
+                    loss = criterion(outputs.squeeze(), y_batch)
+                
                 loss.backward()
                 optimizer.step()
                 
@@ -614,7 +740,14 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
                 self.model_.eval()
                 with torch.no_grad():
                     val_outputs = self.model_(X_val_tensor)
-                    val_loss = criterion(val_outputs.squeeze(), y_val_tensor).item()
+                    
+                    # Compute validation loss with sample weights
+                    if sw_val_tensor is not None:
+                        # Compute individual MSE losses for each validation sample
+                        individual_val_losses = (val_outputs.squeeze() - y_val_tensor) ** 2
+                        val_loss = (individual_val_losses * sw_val_tensor).mean().item()
+                    else:
+                        val_loss = criterion(val_outputs.squeeze(), y_val_tensor).item()
                     
                     if val_loss < best_val_loss - self.tol:
                         best_val_loss = val_loss
@@ -835,7 +968,7 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
         y : array-like of shape (n_samples,)
             Target values.
         sample_weight : array-like of shape (n_samples,), default=None
-            Sample weights (not implemented yet).
+            Sample weights. If provided, the loss function will be weighted by these values.
             
         Returns
         -------
@@ -850,6 +983,12 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
         # Validate input
         X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
         
+        # Validate sample_weight if provided
+        if sample_weight is not None:
+            sample_weight = check_array(sample_weight, ensure_2d=False, accept_sparse=False)
+            if sample_weight.shape[0] != X.shape[0]:
+                raise ValueError(f"sample_weight has {sample_weight.shape[0]} samples, but X has {X.shape[0]} samples.")
+        
         # Store input info
         self.n_features_in_ = X.shape[1]
         
@@ -857,23 +996,44 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
         
         # Split for validation if early stopping is enabled
         if self.early_stopping:
-            X_train, X_val, y_train, y_val = train_test_split(
-                X, y,
-                test_size=self.validation_fraction,
-                random_state=self.random_state
-            )
+            if sample_weight is not None:
+                X_train, X_val, y_train, y_val, sw_train, sw_val = train_test_split(
+                    X, y, sample_weight,
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state
+                )
+            else:
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X, y,
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state
+                )
+                sw_train, sw_val = None, None
         else:
             X_train, y_train = X, y
             X_val, y_val = None, None
+            sw_train, sw_val = sample_weight, None
         
         # Convert to torch tensors
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         X_train_tensor = torch.FloatTensor(X_train).to(device)
         y_train_tensor = torch.FloatTensor(y_train).to(device)
         
+        # Convert sample weights to tensor if provided
+        if sw_train is not None:
+            sw_train_tensor = torch.FloatTensor(sw_train).to(device)
+        else:
+            sw_train_tensor = None
+        
         if X_val is not None:
             X_val_tensor = torch.FloatTensor(X_val).to(device)
             y_val_tensor = torch.FloatTensor(y_val).to(device)
+            
+            # Convert validation sample weights to tensor if provided
+            if sw_val is not None:
+                sw_val_tensor = torch.FloatTensor(sw_val).to(device)
+            else:
+                sw_val_tensor = None
         
         # Build model
         self.model_ = self._build_model(self.n_features_in_).to(device)
@@ -906,6 +1066,10 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
             indices = torch.randperm(n_samples)
             X_train_shuffled = X_train_tensor[indices]
             y_train_shuffled = y_train_tensor[indices]
+            if sw_train_tensor is not None:
+                sw_train_shuffled = sw_train_tensor[indices]
+            else:
+                sw_train_shuffled = None
             
             # Mini-batch training
             for i in range(0, n_samples, batch_size):
@@ -913,9 +1077,23 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
                 X_batch = X_train_shuffled[i:end_idx]
                 y_batch = y_train_shuffled[i:end_idx]
                 
+                # Get sample weights for this batch
+                if sw_train_shuffled is not None:
+                    sw_batch = sw_train_shuffled[i:end_idx]
+                else:
+                    sw_batch = None
+                
                 optimizer.zero_grad()
                 outputs = self.model_(X_batch).squeeze()
-                loss = criterion(outputs, y_batch)
+                
+                # Compute loss with sample weights
+                if sw_batch is not None:
+                    # Compute individual Huber losses for each sample
+                    individual_losses = nn.functional.huber_loss(outputs, y_batch, reduction='none', delta=self.delta)
+                    loss = (individual_losses * sw_batch).mean()
+                else:
+                    loss = criterion(outputs, y_batch)
+                
                 loss.backward()
                 optimizer.step()
                 
@@ -930,7 +1108,14 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
                 self.model_.eval()
                 with torch.no_grad():
                     val_outputs = self.model_(X_val_tensor).squeeze()
-                    val_loss = criterion(val_outputs, y_val_tensor).item()
+                    
+                    # Compute validation loss with sample weights
+                    if sw_val_tensor is not None:
+                        # Compute individual Huber losses for each validation sample
+                        individual_val_losses = nn.functional.huber_loss(val_outputs, y_val_tensor, reduction='none', delta=self.delta)
+                        val_loss = (individual_val_losses * sw_val_tensor).mean().item()
+                    else:
+                        val_loss = criterion(val_outputs, y_val_tensor).item()
                     
                     if val_loss < best_val_loss - self.tol:
                         best_val_loss = val_loss
@@ -1119,13 +1304,18 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
         self.out_activation_ = None
         self.loss_ = None
     
-    def _pinball_loss(self, y_pred, y_true):
+    def _pinball_loss(self, y_pred, y_true, reduction='mean'):
         """Pinball loss (quantile loss)"""
         error = y_true - y_pred
         loss = torch.where(error >= 0, 
                           self.quantile * error, 
                           (self.quantile - 1) * error)
-        return loss.mean()
+        if reduction == 'mean':
+            return loss.mean()
+        elif reduction == 'none':
+            return loss
+        else:
+            raise ValueError(f"Unknown reduction: {reduction}")
         
     def _build_model(self, input_size):
         """Build the neural network model"""
@@ -1155,7 +1345,7 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
         y : array-like of shape (n_samples,)
             Target values.
         sample_weight : array-like of shape (n_samples,), default=None
-            Sample weights (not implemented yet).
+            Sample weights. If provided, the loss function will be weighted by these values.
             
         Returns
         -------
@@ -1170,6 +1360,12 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
         # Validate input
         X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
         
+        # Validate sample_weight if provided
+        if sample_weight is not None:
+            sample_weight = check_array(sample_weight, ensure_2d=False, accept_sparse=False)
+            if sample_weight.shape[0] != X.shape[0]:
+                raise ValueError(f"sample_weight has {sample_weight.shape[0]} samples, but X has {X.shape[0]} samples.")
+        
         # Store input info
         self.n_features_in_ = X.shape[1]
         
@@ -1177,23 +1373,44 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
         
         # Split for validation if early stopping is enabled
         if self.early_stopping:
-            X_train, X_val, y_train, y_val = train_test_split(
-                X, y,
-                test_size=self.validation_fraction,
-                random_state=self.random_state
-            )
+            if sample_weight is not None:
+                X_train, X_val, y_train, y_val, sw_train, sw_val = train_test_split(
+                    X, y, sample_weight,
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state
+                )
+            else:
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X, y,
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state
+                )
+                sw_train, sw_val = None, None
         else:
             X_train, y_train = X, y
             X_val, y_val = None, None
+            sw_train, sw_val = sample_weight, None
         
         # Convert to torch tensors
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         X_train_tensor = torch.FloatTensor(X_train).to(device)
         y_train_tensor = torch.FloatTensor(y_train).to(device)
         
+        # Convert sample weights to tensor if provided
+        if sw_train is not None:
+            sw_train_tensor = torch.FloatTensor(sw_train).to(device)
+        else:
+            sw_train_tensor = None
+        
         if X_val is not None:
             X_val_tensor = torch.FloatTensor(X_val).to(device)
             y_val_tensor = torch.FloatTensor(y_val).to(device)
+            
+            # Convert validation sample weights to tensor if provided
+            if sw_val is not None:
+                sw_val_tensor = torch.FloatTensor(sw_val).to(device)
+            else:
+                sw_val_tensor = None
         
         # Build model
         self.model_ = self._build_model(self.n_features_in_).to(device)
@@ -1225,6 +1442,10 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
             indices = torch.randperm(n_samples)
             X_train_shuffled = X_train_tensor[indices]
             y_train_shuffled = y_train_tensor[indices]
+            if sw_train_tensor is not None:
+                sw_train_shuffled = sw_train_tensor[indices]
+            else:
+                sw_train_shuffled = None
             
             # Mini-batch training
             for i in range(0, n_samples, batch_size):
@@ -1232,9 +1453,23 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
                 X_batch = X_train_shuffled[i:end_idx]
                 y_batch = y_train_shuffled[i:end_idx]
                 
+                # Get sample weights for this batch
+                if sw_train_shuffled is not None:
+                    sw_batch = sw_train_shuffled[i:end_idx]
+                else:
+                    sw_batch = None
+                
                 optimizer.zero_grad()
                 outputs = self.model_(X_batch).squeeze()
-                loss = self._pinball_loss(outputs, y_batch)
+                
+                # Compute loss with sample weights
+                if sw_batch is not None:
+                    # Compute individual Pinball losses for each sample
+                    individual_losses = self._pinball_loss(outputs, y_batch, reduction='none')
+                    loss = (individual_losses * sw_batch).mean()
+                else:
+                    loss = self._pinball_loss(outputs, y_batch)
+                
                 loss.backward()
                 optimizer.step()
                 
@@ -1249,7 +1484,14 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
                 self.model_.eval()
                 with torch.no_grad():
                     val_outputs = self.model_(X_val_tensor).squeeze()
-                    val_loss = self._pinball_loss(val_outputs, y_val_tensor).item()
+                    
+                    # Compute validation loss with sample weights
+                    if sw_val_tensor is not None:
+                        # Compute individual Pinball losses for each validation sample
+                        individual_val_losses = self._pinball_loss(val_outputs, y_val_tensor, reduction='none')
+                        val_loss = (individual_val_losses * sw_val_tensor).mean().item()
+                    else:
+                        val_loss = self._pinball_loss(val_outputs, y_val_tensor).item()
                     
                     if val_loss < best_val_loss - self.tol:
                         best_val_loss = val_loss
@@ -1433,11 +1675,16 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
         self.out_activation_ = None
         self.loss_ = None
     
-    def _cauchy_loss(self, y_pred, y_true):
+    def _cauchy_loss(self, y_pred, y_true, reduction='mean'):
         """Cauchy loss function: log(1 + (y - yhat)^2)"""
         error = y_true - y_pred
         loss = torch.log(1 + error**2)
-        return loss.mean()
+        if reduction == 'mean':
+            return loss.mean()
+        elif reduction == 'none':
+            return loss
+        else:
+            raise ValueError(f"Unknown reduction: {reduction}")
         
     def _build_model(self, input_size):
         """Build the neural network model"""
@@ -1467,7 +1714,7 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
         y : array-like of shape (n_samples,)
             Target values.
         sample_weight : array-like of shape (n_samples,), default=None
-            Sample weights (not implemented yet).
+            Sample weights. If provided, the loss function will be weighted by these values.
             
         Returns
         -------
@@ -1482,6 +1729,12 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
         # Validate input
         X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
         
+        # Validate sample_weight if provided
+        if sample_weight is not None:
+            sample_weight = check_array(sample_weight, ensure_2d=False, accept_sparse=False)
+            if sample_weight.shape[0] != X.shape[0]:
+                raise ValueError(f"sample_weight has {sample_weight.shape[0]} samples, but X has {X.shape[0]} samples.")
+        
         # Store input info
         self.n_features_in_ = X.shape[1]
         
@@ -1489,23 +1742,44 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
         
         # Split for validation if early stopping is enabled
         if self.early_stopping:
-            X_train, X_val, y_train, y_val = train_test_split(
-                X, y,
-                test_size=self.validation_fraction,
-                random_state=self.random_state
-            )
+            if sample_weight is not None:
+                X_train, X_val, y_train, y_val, sw_train, sw_val = train_test_split(
+                    X, y, sample_weight,
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state
+                )
+            else:
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X, y,
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state
+                )
+                sw_train, sw_val = None, None
         else:
             X_train, y_train = X, y
             X_val, y_val = None, None
+            sw_train, sw_val = sample_weight, None
         
         # Convert to torch tensors
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         X_train_tensor = torch.FloatTensor(X_train).to(device)
         y_train_tensor = torch.FloatTensor(y_train).to(device)
         
+        # Convert sample weights to tensor if provided
+        if sw_train is not None:
+            sw_train_tensor = torch.FloatTensor(sw_train).to(device)
+        else:
+            sw_train_tensor = None
+        
         if X_val is not None:
             X_val_tensor = torch.FloatTensor(X_val).to(device)
             y_val_tensor = torch.FloatTensor(y_val).to(device)
+            
+            # Convert validation sample weights to tensor if provided
+            if sw_val is not None:
+                sw_val_tensor = torch.FloatTensor(sw_val).to(device)
+            else:
+                sw_val_tensor = None
         
         # Build model
         self.model_ = self._build_model(self.n_features_in_).to(device)
@@ -1537,6 +1811,10 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
             indices = torch.randperm(n_samples)
             X_train_shuffled = X_train_tensor[indices]
             y_train_shuffled = y_train_tensor[indices]
+            if sw_train_tensor is not None:
+                sw_train_shuffled = sw_train_tensor[indices]
+            else:
+                sw_train_shuffled = None
             
             # Mini-batch training
             for i in range(0, n_samples, batch_size):
@@ -1544,9 +1822,23 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
                 X_batch = X_train_shuffled[i:end_idx]
                 y_batch = y_train_shuffled[i:end_idx]
                 
+                # Get sample weights for this batch
+                if sw_train_shuffled is not None:
+                    sw_batch = sw_train_shuffled[i:end_idx]
+                else:
+                    sw_batch = None
+                
                 optimizer.zero_grad()
                 outputs = self.model_(X_batch).squeeze()
-                loss = self._cauchy_loss(outputs, y_batch)
+                
+                # Compute loss with sample weights
+                if sw_batch is not None:
+                    # Compute individual Cauchy losses for each sample
+                    individual_losses = self._cauchy_loss(outputs, y_batch, reduction='none')
+                    loss = (individual_losses * sw_batch).mean()
+                else:
+                    loss = self._cauchy_loss(outputs, y_batch)
+                
                 loss.backward()
                 optimizer.step()
                 
@@ -1561,7 +1853,14 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
                 self.model_.eval()
                 with torch.no_grad():
                     val_outputs = self.model_(X_val_tensor).squeeze()
-                    val_loss = self._cauchy_loss(val_outputs, y_val_tensor).item()
+                    
+                    # Compute validation loss with sample weights
+                    if sw_val_tensor is not None:
+                        # Compute individual Cauchy losses for each validation sample
+                        individual_val_losses = self._cauchy_loss(val_outputs, y_val_tensor, reduction='none')
+                        val_loss = (individual_val_losses * sw_val_tensor).mean().item()
+                    else:
+                        val_loss = self._cauchy_loss(val_outputs, y_val_tensor).item()
                     
                     if val_loss < best_val_loss - self.tol:
                         best_val_loss = val_loss
