@@ -9,8 +9,8 @@
 # 🔧 修改这些变量会影响所有神经网络方法的参数！
 NN_HIDDEN_SIZES = (128, 64, 32)                 # 神经网络隐藏层结构
 NN_MAX_EPOCHS = 3000                            # 最大训练轮数
-NN_LEARNING_RATE = 0.03                         # 学习率
-NN_PATIENCE = 50                                # 早停patience
+NN_LEARNING_RATE = 0.01                         # 学习率
+NN_PATIENCE = 200                               # 早停patience
 NN_TOLERANCE = 1e-4                             # 早停tolerance
 # =========================================================================
 
@@ -27,7 +27,7 @@ DEFAULT_METHOD_CONFIGS = {
             'early_stopping': True,
             'validation_fraction': 0.2,
             'n_iter_no_change': NN_PATIENCE,
-            'alpha': 0.0001,
+            'alpha': 0.0,
             'random_state': 42,
             'tol': NN_TOLERANCE,
         }
@@ -40,8 +40,13 @@ DEFAULT_METHOD_CONFIGS = {
             'hidden_layer_sizes': NN_HIDDEN_SIZES,
             'max_iter': NN_MAX_EPOCHS,
             'learning_rate': NN_LEARNING_RATE,
+            'early_stopping': True,
+            'validation_fraction': 0.2,
             'n_iter_no_change': NN_PATIENCE,
-            'tol': NN_TOLERANCE
+            'tol': NN_TOLERANCE,
+            'alpha': 0.0,
+            'random_state': 42,
+            'batch_size': None
         }
     },
     
@@ -52,8 +57,13 @@ DEFAULT_METHOD_CONFIGS = {
             'hidden_layer_sizes': NN_HIDDEN_SIZES,
             'max_iter': NN_MAX_EPOCHS,
             'learning_rate': NN_LEARNING_RATE,
+            'early_stopping': True,
+            'validation_fraction': 0.2,
             'n_iter_no_change': NN_PATIENCE,
             'tol': NN_TOLERANCE,
+            'alpha': 0.0,
+            'random_state': 42,
+            'batch_size': None,
             'delta': 1.0  # Huber损失的delta参数
         }
     },
@@ -65,8 +75,13 @@ DEFAULT_METHOD_CONFIGS = {
             'hidden_layer_sizes': NN_HIDDEN_SIZES,
             'max_iter': NN_MAX_EPOCHS,
             'learning_rate': NN_LEARNING_RATE,
+            'early_stopping': True,
+            'validation_fraction': 0.2,
             'n_iter_no_change': NN_PATIENCE,
             'tol': NN_TOLERANCE,
+            'alpha': 0.0,
+            'random_state': 42,
+            'batch_size': None,
             'quantile': 0.5  # 中位数回归 (50%分位数)
         }
     },
@@ -78,8 +93,13 @@ DEFAULT_METHOD_CONFIGS = {
             'hidden_layer_sizes': NN_HIDDEN_SIZES,
             'max_iter': NN_MAX_EPOCHS,
             'learning_rate': NN_LEARNING_RATE,
+            'early_stopping': True,
+            'validation_fraction': 0.2,
             'n_iter_no_change': NN_PATIENCE,
-            'tol': NN_TOLERANCE
+            'tol': NN_TOLERANCE,
+            'alpha': 0.0,
+            'random_state': 42,
+            'batch_size': None
         }
     },
     

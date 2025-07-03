@@ -122,7 +122,7 @@ class TutorialConfig:
     NN_HIDDEN_SIZES = (128, 64, 32)                 # 神经网络隐藏层结构
     NN_MAX_EPOCHS = 3000                            # 最大训练轮数
     NN_LEARNING_RATE = 0.01                         # 学习率
-    NN_PATIENCE = 100                               # 早停patience
+    NN_PATIENCE = 200                               # 早停patience
     NN_TOLERANCE = 1e-4                             # 早停tolerance
     # =========================================================================
     
@@ -360,7 +360,7 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
             max_iter=self.config.SKLEARN_MAX_ITER,
             learning_rate_init=self.config.SKLEARN_LR,
             early_stopping=True,
-            validation_fraction=0.2,
+            validation_fraction=self.config.VAL_SIZE,  # 与BaselineBenchmark一致
             n_iter_no_change=self.config.NN_PATIENCE,
             tol=self.config.NN_TOLERANCE,
             random_state=self.config.RANDOM_STATE
@@ -382,8 +382,11 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
             max_iter=self.config.PYTORCH_EPOCHS,
             learning_rate=self.config.PYTORCH_LR,
             early_stopping=True,
+            validation_fraction=self.config.VAL_SIZE,  # 与BaselineBenchmark一致
             n_iter_no_change=self.config.PYTORCH_PATIENCE,
             tol=self.config.NN_TOLERANCE,
+            alpha=0.0,  # 统一无正则化
+            batch_size=None,  # 全批次训练，与BaselineBenchmark一致
             random_state=self.config.RANDOM_STATE,
             verbose=False
         )
@@ -412,8 +415,11 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
             max_iter=self.config.ROBUST_MAX_EPOCHS,
             learning_rate=self.config.ROBUST_LR,
             early_stopping=True,
+            validation_fraction=self.config.VAL_SIZE,  # 与BaselineBenchmark一致
             n_iter_no_change=self.config.ROBUST_PATIENCE,
             tol=self.config.NN_TOLERANCE,
+            alpha=0.0,  # 稳健回归器通常不需要额外正则化
+            batch_size=None,  # 全批次训练，与BaselineBenchmark一致
             random_state=self.config.RANDOM_STATE,
             verbose=False
         )
@@ -499,11 +505,14 @@ class ExtendedCaliforniaHousingTutorialSklearnStyle:
             max_iter=self.config.CAUSAL_MAX_EPOCHS,
             learning_rate=self.config.CAUSAL_LR,
             early_stopping=True,
+            validation_fraction=self.config.VAL_SIZE,  # 与BaselineBenchmark一致
             n_iter_no_change=self.config.CAUSAL_PATIENCE,
             tol=self.config.CAUSAL_TOL,
             gamma_init=self.config.CAUSAL_GAMMA_INIT,
             b_noise_init=self.config.CAUSAL_B_NOISE_INIT,
             b_noise_trainable=self.config.CAUSAL_B_NOISE_TRAINABLE,
+            alpha=0.0,  # 与BaselineBenchmark一致的正则化
+            batch_size=None,  # 全批次训练，与BaselineBenchmark一致
             random_state=self.config.RANDOM_STATE,
             verbose=False
         )

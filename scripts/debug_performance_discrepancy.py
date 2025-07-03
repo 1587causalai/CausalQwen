@@ -69,26 +69,22 @@ class ExperimentConfig:
     RANDOM_STATE = 42
     ANOMALY_RATIO = 0.25  # 统一使用旧脚本的25%噪声比例进行对比
 
-    # 🧠 模型超参数 (关键！在这里对齐新旧实现)
+    # 🧠 模型超参数 (与最新统一配置保持一致)
     # ----------------------------------------------------------------------
-    # 假设1: 尝试复现旧脚本的 "更好" 性能
-    # 旧脚本的学习率是 0.01，而新脚本是 0.001。这是最大的嫌疑。
+    # 统一使用最新的参数配置，确保与tutorial脚本完全一致
     LEARNING_RATE = 0.01
 
-    # 正则化: 新脚本中 CausalEngine 的 alpha 明确为 0，Pytorch MLP 为 0.0001
-    # 我们在这里保持一致，并假设旧脚本的默认行为与此类似。
+    # 统一所有alpha参数为0.0 (与最新的参数统一保持一致)
     ALPHA_CAUSAL = 0.0
-    ALPHA_PYTORCH = 0.0001
+    ALPHA_PYTORCH = 0.0  # 更新为0.0
     
-    # 批处理大小: 新的 sklearn-style regressor 默认为 'auto' (即200)
-    # 我们假设旧的 Benchmark 也是类似行为。可以修改为 `None` 来测试全量批次。
-    BATCH_SIZE = 200 # 使用 'auto' 的默认值
-    # BATCH_SIZE = None # 设为None来强制使用全量批次
+    # 批处理大小: 统一使用None (全批次训练)
+    BATCH_SIZE = None  # 全批次训练，与最新配置一致
 
-    # 其他通用参数 (在两个脚本中基本一致)
+    # 其他通用参数 (与最新统一配置保持一致)
     HIDDEN_SIZES = (128, 64, 32)
     MAX_EPOCHS = 3000
-    PATIENCE = 50
+    PATIENCE = 200  # 更新为200
     TOL = 1e-4
     
     # CausalEngine专属参数
@@ -110,6 +106,11 @@ class ExperimentConfig:
         'mlp_pinball': True,          # MLPPinballRegressor vs BaselineBenchmark('mlp_pinball_median')
         'mlp_cauchy': True,           # MLPCauchyRegressor vs BaselineBenchmark('mlp_cauchy')
     }
+    
+    # 🔍 分析增强配置
+    DETAILED_ANALYSIS = True          # 是否进行详细分析
+    SAVE_TRAINING_LOGS = False        # 是否保存训练日志(用于深度分析)
+    COMPARE_TRAINING_CURVES = False   # 是否比较训练曲线
 
 
 def load_and_prepare_data(config: ExperimentConfig):
@@ -248,45 +249,49 @@ def run_legacy_benchmark(config: ExperimentConfig, data: dict):
     if config.MODELS_TO_TEST.get('causal_deterministic'):
         causal_modes.append('deterministic')
 
-    # 🎯 关键改进：传递原始干净数据，让BaselineBenchmark自己处理异常注入
-    # 这确保了与Sklearn-Style实现完全相同的异常注入和数据处理流程
-    X_combined_original = np.concatenate([data['X_train_original'], data['X_val_original'], data['X_test_original']])
-    y_combined_original = np.concatenate([data['y_train_original'], data['y_val_original'], data['y_test_original']])
+    # 🎯 关键修正：使用原始干净数据让BaselineBenchmark自己处理
+    # BaselineBenchmark内部会自动进行数据分割和噪声注入
+    X_combined = data['X_full']
+    y_combined = data['y_full']
     
-    print(f"   - 传递原始干净数据: X({X_combined_original.shape}), y({y_combined_original.shape})")
-    print(f"   - 让BaselineBenchmark自己处理异常注入，确保完全一致")
+    print(f"   - 传递原始完整数据集: X({X_combined.shape}), y({y_combined.shape})")
+    print(f"   - BaselineBenchmark将自动处理数据分割和噪声注入")
     
     results = benchmark.compare_models(
-        X=X_combined_original,  # 🎯 原始干净特征
-        y=y_combined_original,  # 🎯 原始干净目标
+        X=X_combined,
+        y=y_combined,
         task_type='regression',
-        baseline_methods=baseline_methods,
-        causal_modes=causal_modes,
-        global_standardization=True,  # 🎯 启用全局标准化以匹配Sklearn-Style实现
-        # 数据参数 - 使用相同的分割比例和异常注入比例
-        test_size=len(data['X_test_original']) / len(X_combined_original),
-        val_size=len(data['X_val_original']) / (len(data['X_train_original']) + len(data['X_val_original'])),
-        anomaly_ratio=config.ANOMALY_RATIO,  # 🎯 关键：让BaselineBenchmark执行相同的异常注入
-        anomaly_strategy='shuffle',  # 使用新的简化策略
+        test_size=config.TEST_SIZE,
+        val_size=config.VAL_SIZE,
         random_state=config.RANDOM_STATE,
-        # 统一模型参数
+        anomaly_ratio=config.ANOMALY_RATIO,
+        verbose=False,
+        
+        # 基准方法配置
+        baseline_methods=baseline_methods,
+        
+        # CausalEngine配置
+        causal_modes=causal_modes,
+        
+        # 统一参数（与tutorial脚本完全一致）
         hidden_sizes=config.HIDDEN_SIZES,
+        hidden_layer_sizes=config.HIDDEN_SIZES,
         max_epochs=config.MAX_EPOCHS,
+        max_iter=config.MAX_EPOCHS,
         lr=config.LEARNING_RATE,
+        learning_rate=config.LEARNING_RATE,
         patience=config.PATIENCE,
         tol=config.TOL,
-        alpha=config.ALPHA_PYTORCH, # for pytorch_mlp
-        batch_size=config.BATCH_SIZE,
-        # CausalEngine 参数
+        
+        # CausalEngine专属参数
         gamma_init=config.GAMMA_INIT,
         b_noise_init=config.B_NOISE_INIT,
-        b_noise_trainable=config.B_NOISE_TRAINABLE,
-        causal_alpha=config.ALPHA_CAUSAL,
-        verbose=False # 保持输出整洁
+        b_noise_trainable=config.B_NOISE_TRAINABLE
     )
     
     # 🎯 关键改进：BaselineBenchmark现在自动处理全局标准化和逆变换
     print("   - BaselineBenchmark将自动处理标准化和逆变换")
+    print(f"   - 返回的结果键: {list(results.keys())}")
     
     print("   - Legacy 实现运行完成。")
     return results
@@ -317,7 +322,8 @@ def run_sklearn_benchmark(config: ExperimentConfig, data: dict):
     
     scaler_y = StandardScaler()
     y_train_val_scaled = scaler_y.fit_transform(y_train_val_original.reshape(-1, 1)).flatten()
-    y_test_scaled = scaler_y.transform(y_test_original.reshape(-1, 1)).flatten()
+    # 注意: y_test_scaled 在此脚本中不需要，因为我们在原始尺度下评估
+    # y_test_scaled = scaler_y.transform(y_test_original.reshape(-1, 1)).flatten()
     
     print(f"   - 手动全局标准化: X_train_val({X_train_val_scaled.shape}), y_train_val({y_train_val_scaled.shape})")
     print(f"   - 确保与Legacy实现使用完全相同的标准化策略")
@@ -337,6 +343,8 @@ def run_sklearn_benchmark(config: ExperimentConfig, data: dict):
         # 🎯 关键改进：将预测结果转换回原始尺度进行评估
         y_pred_original = scaler_y.inverse_transform(y_pred_scaled.reshape(-1, 1)).flatten()
         
+        # 记录训练时间和模型信息(用于详细分析)
+        
         # 在原始尺度下计算性能指标
         results[result_key] = {
             'test': {
@@ -345,7 +353,12 @@ def run_sklearn_benchmark(config: ExperimentConfig, data: dict):
                 'RMSE': np.sqrt(mean_squared_error(y_test_original, y_pred_original)),
                 'R²': r2_score(y_test_original, y_pred_original)
             },
-            'time': time.time() - start_time
+            'time': time.time() - start_time,
+            'model_info': {
+                'model_class': model.__class__.__name__,
+                'n_features': X_train_val_scaled.shape[1],
+                'n_samples': X_train_val_scaled.shape[0]
+            }
         }
         print(f"     ...完成 (用时: {results[result_key]['time']:.2f}s)")
 
@@ -406,7 +419,101 @@ def run_sklearn_benchmark(config: ExperimentConfig, data: dict):
         train_and_evaluate('MLP Cauchy', MLPCauchyRegressor, robust_base_params, 'mlp_cauchy')
     
     print("   - Sklearn-Style 实现运行完成。")
+    print(f"   - 返回的结果键: {list(results.keys())}")
     return results
+
+def perform_detailed_analysis(legacy_results, sklearn_results, config):
+    """执行详细的性能差异分析"""
+    print("\n📈 总结分析:")
+    
+    # 修正的模型映射：(config_key, legacy_key, sklearn_key, display_name)
+    # 注意：legacy_key 使用 BaselineBenchmark 实际返回的结果键名
+    models_map = [
+        ('pytorch_mlp', 'pytorch', 'pytorch_mlp', 'PyTorch MLP'),  # 修正: BaselineBenchmark返回'pytorch'不是'pytorch_mlp'
+        ('causal_standard', 'standard', 'standard', 'Causal (standard)'),
+        ('causal_deterministic', 'deterministic', 'deterministic', 'Causal (deterministic)'),
+        ('mlp_huber', 'mlp_huber', 'mlp_huber', 'MLP Huber'),
+        ('mlp_pinball', 'mlp_pinball_median', 'mlp_pinball', 'MLP Pinball'),  # 修正: BaselineBenchmark返回'mlp_pinball_median'
+        ('mlp_cauchy', 'mlp_cauchy', 'mlp_cauchy', 'MLP Cauchy'),
+    ]
+    
+    significant_diffs = []
+    all_diffs = []
+    
+    for config_key, legacy_key, sklearn_key, display_name in models_map:
+        if not config.MODELS_TO_TEST.get(config_key):
+            continue
+            
+        if legacy_key in legacy_results and sklearn_key in sklearn_results:
+            legacy_result = legacy_results[legacy_key]['test']
+            sklearn_result = sklearn_results[sklearn_key]['test']
+            
+            # 计算所有指标的差异
+            metrics_diff = {}
+            for metric in ['MAE', 'MdAE', 'RMSE', 'R²']:
+                if metric in legacy_result and metric in sklearn_result:
+                    legacy_val = legacy_result[metric]
+                    sklearn_val = sklearn_result[metric]
+                    
+                    if metric == 'R²':
+                        # R²越高越好，计算方向相反
+                        diff_pct = ((sklearn_val - legacy_val) / abs(legacy_val)) * 100
+                    else:
+                        # MAE、MdAE、RMSE越低越好
+                        diff_pct = ((sklearn_val - legacy_val) / legacy_val) * 100
+                    
+                    metrics_diff[metric] = diff_pct
+            
+            # 以MdAE为主要指标判断显著性差异
+            main_diff = metrics_diff.get('MdAE', 0)
+            all_diffs.append((display_name, main_diff, metrics_diff))
+            
+            if abs(main_diff) > 5.0:  # 差异超过5%
+                significant_diffs.append((display_name, main_diff, metrics_diff))
+    
+    # 打印总体分析
+    print(f"\n📊 分析了 {len(all_diffs)} 个算法的性能对比")
+    
+    if significant_diffs:
+        print(f"   ⚠️ 发现 {len(significant_diffs)} 个方法存在显著性能差异 (>5%):")
+        for name, main_diff, metrics_diff in significant_diffs:
+            direction = "Legacy更好" if main_diff > 0 else "Sklearn-Style更好"
+            print(f"\n      🔍 {name}: MdAE差异 {main_diff:+.2f}% ({direction})")
+            
+            # 打印详细指标对比
+            if config.DETAILED_ANALYSIS:
+                print(f"         详细指标差异:")
+                for metric, diff in metrics_diff.items():
+                    direction_detail = "Legacy更好" if diff > 0 else "Sklearn-Style更好"
+                    print(f"           - {metric}: {diff:+.2f}% ({direction_detail})")
+        
+        print("\n   💡 建议检查这些方法的参数配置或实现细节")
+        print("   🔧 可能的原因包括:")
+        print("      - 训练过程中的随机性")
+        print("      - 数据预处理策略差异")
+        print("      - 早停策略的微妙差异")
+        print("      - 优化器或学习率调度差异")
+        
+    else:
+        print("   ✅ 所有方法的性能差异都在可接受范围内 (<5%)")
+        print("   💡 两种实现基本一致，性能差异可能来自:")
+        print("      - 训练过程中的正常随机波动")
+        print("      - 数值精度差异")
+        print("      - 模型初始化的微小差异")
+    
+    # 打印最大和最小差异
+    if all_diffs:
+        max_diff = max(all_diffs, key=lambda x: abs(x[1]))
+        min_diff = min(all_diffs, key=lambda x: abs(x[1]))
+        
+        print(f"\n📏 差异范围:")
+        print(f"   - 最大差异: {max_diff[0]} ({max_diff[1]:+.2f}%)")
+        print(f"   - 最小差异: {min_diff[0]} ({min_diff[1]:+.2f}%)")
+        
+        # 计算平均差异
+        avg_abs_diff = np.mean([abs(diff[1]) for diff in all_diffs])
+        print(f"   - 平均绝对差异: {avg_abs_diff:.2f}%")
+
 
 def print_comparison_table(legacy_results, sklearn_results, config):
     """打印最终的性能对比表格"""
@@ -431,11 +538,11 @@ def print_comparison_table(legacy_results, sklearn_results, config):
     # 模型映射：(config_key, legacy_key, sklearn_key, display_name)
     # 注意：legacy_key 使用 BaselineBenchmark 实际返回的结果键名
     models_map = [
-        ('pytorch_mlp', 'pytorch', 'pytorch_mlp', 'PyTorch MLP'),
+        ('pytorch_mlp', 'pytorch', 'pytorch_mlp', 'PyTorch MLP'),  # 修正: BaselineBenchmark返回'pytorch'不是'pytorch_mlp'
         ('causal_standard', 'standard', 'standard', 'Causal (standard)'),
         ('causal_deterministic', 'deterministic', 'deterministic', 'Causal (deterministic)'),
         ('mlp_huber', 'mlp_huber', 'mlp_huber', 'MLP Huber'),
-        ('mlp_pinball', 'mlp_pinball_median', 'mlp_pinball', 'MLP Pinball'),
+        ('mlp_pinball', 'mlp_pinball_median', 'mlp_pinball', 'MLP Pinball'),  # 修正: BaselineBenchmark返回'mlp_pinball_median'
         ('mlp_cauchy', 'mlp_cauchy', 'mlp_cauchy', 'MLP Cauchy'),
     ]
 
@@ -502,39 +609,14 @@ def main():
     print_comparison_table(legacy_results, sklearn_results, config)
     
     # 4. 总结分析
-    print("\n📈 总结分析:")
-    significant_diffs = []
-    for config_key, legacy_key, sklearn_key, display_name in [
-        ('pytorch_mlp', 'PyTorch MLP', 'pytorch_mlp', 'PyTorch MLP'),
-        ('causal_standard', 'standard', 'standard', 'Causal (standard)'),
-        ('causal_deterministic', 'deterministic', 'deterministic', 'Causal (deterministic)'),
-        ('mlp_huber', 'MLP Huber', 'mlp_huber', 'MLP Huber'),
-        ('mlp_pinball', 'MLP Pinball Median', 'mlp_pinball', 'MLP Pinball'),
-        ('mlp_cauchy', 'MLP Cauchy', 'mlp_cauchy', 'MLP Cauchy'),
-    ]:
-        if (config.MODELS_TO_TEST.get(config_key) and 
-            legacy_key in legacy_results and sklearn_key in sklearn_results):
-            
-            legacy_mdae = legacy_results[legacy_key]['test']['MdAE']
-            sklearn_mdae = sklearn_results[sklearn_key]['test']['MdAE']
-            diff_pct = ((sklearn_mdae - legacy_mdae) / legacy_mdae) * 100
-            
-            if abs(diff_pct) > 5.0:  # 差异超过5%
-                significant_diffs.append((display_name, diff_pct))
-    
-    if significant_diffs:
-        print(f"   ⚠️ 发现 {len(significant_diffs)} 个方法存在显著性能差异 (>5%):")
-        for name, diff in significant_diffs:
-            direction = "Sklearn-Style更差" if diff > 0 else "Sklearn-Style更好"
-            print(f"      - {name}: {diff:+.2f}% ({direction})")
-        print("   💡 建议检查这些方法的参数配置或实现细节")
-    else:
-        print("   ✅ 所有方法的性能差异都在可接受范围内 (<5%)")
-        print("   💡 两种实现基本一致，性能差异可能来自其他因素")
+    perform_detailed_analysis(legacy_results, sklearn_results, config)
     
     print("\n🎉 调试脚本运行完毕！")
-    print("💡 如需调整测试参数，请修改 ExperimentConfig 类中的配置")
-    print("🔧 如需测试特定方法，请在 MODELS_TO_TEST 中启用/禁用相应选项")
+    print("💡 使用建议:")
+    print("   - 如需调整测试参数，请修改 ExperimentConfig 类中的配置")
+    print("   - 如需测试特定方法，请在 MODELS_TO_TEST 中启用/禁用相应选项")
+    print("   - 如需详细分析，请将 DETAILED_ANALYSIS 设为 True")
+    print("   - 如需较大差异，请检查训练随机性或参数配置")
 
 
 if __name__ == "__main__":

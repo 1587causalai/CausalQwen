@@ -94,7 +94,7 @@ class ComprehensiveTutorialConfig:
     NN_HIDDEN_SIZES = (128, 64, 32)                  # 神经网络隐藏层结构
     NN_MAX_EPOCHS = 3000                         # 最大训练轮数
     NN_LEARNING_RATE = 0.01                      # 学习率
-    NN_PATIENCE = 50                             # 早停patience
+    NN_PATIENCE = 200                            # 早停patience
     NN_TOLERANCE = 1e-4                          # 早停tolerance
     # =========================================================================
     

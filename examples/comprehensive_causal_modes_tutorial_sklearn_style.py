@@ -120,7 +120,7 @@ class SklearnStyleTutorialConfig:
     NN_HIDDEN_SIZES = (128, 64, 32)                  # 神经网络隐藏层结构
     NN_MAX_EPOCHS = 3000                         # 最大训练轮数
     NN_LEARNING_RATE = 0.01                      # 学习率
-    NN_PATIENCE = 50                             # 早停patience
+    NN_PATIENCE = 200                            # 早停patience
     NN_TOLERANCE = 1e-4                          # 早停tolerance
     NN_BATCH_SIZE = 200                          # 批处理大小
     # =========================================================================
@@ -141,12 +141,12 @@ class SklearnStyleTutorialConfig:
     SKLEARN_HIDDEN_LAYERS = NN_HIDDEN_SIZES      # 使用统一神经网络配置
     SKLEARN_MAX_ITER = NN_MAX_EPOCHS             # 使用统一神经网络配置
     SKLEARN_LR = NN_LEARNING_RATE                # 使用统一神经网络配置
-    SKLEARN_ALPHA = 0.0001                       # sklearn MLP L2正则化
+    SKLEARN_ALPHA = 0.0                          # sklearn MLP L2正则化
     
     PYTORCH_EPOCHS = NN_MAX_EPOCHS               # 使用统一神经网络配置
     PYTORCH_LR = NN_LEARNING_RATE                # 使用统一神经网络配置
     PYTORCH_PATIENCE = NN_PATIENCE               # 使用统一神经网络配置
-    PYTORCH_ALPHA = 0.0001                       # PyTorch MLP L2正则化
+    PYTORCH_ALPHA = 0.0                          # PyTorch MLP L2正则化
     
     # 📊 实验参数
     ANOMALY_RATIO = 0.4                          # 标签异常比例 (核心实验默认值: 40%噪声挑战)
