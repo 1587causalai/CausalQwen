@@ -48,10 +48,12 @@ CausalEngine Core Implementation for sklearn-compatible ML tasks
 ║  Final Output (Y)                                                              ║
 ║                                                                                ║
 ║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
-║  │                           推理模式                                           │  ║
-║  │  • deterministic: 确定性模式（无随机性）                                      │  ║
-║  │  • standard: 标准模式（完整因果推理）                                          │  ║
-║  │  • sampling: 采样模式（蒙特卡洛采样）                                          │  ║
+║  │                         五种推理模式                                         │  ║
+║  │  • deterministic: 确定性模式（U' = μ_U，无随机性）                            │  ║
+║  │  • exogenous: 外生模式（U' ~ Cauchy(μ_U, |b_noise|)，外生噪声主导）          │  ║    注：也可以理解成 endogenous 的特例（样本间共享尺度模式）
+║  │  • endogenous: 内生模式（U' ~ Cauchy(μ_U, γ_U)，内生不确定性主导）           │  ║
+║  │  • standard: 标准模式（U' ~ Cauchy(μ_U, γ_U + |b_noise|)，内生+外生叠加）    │  ║
+║  │  • sampling: 采样模式（U' ~ Cauchy(μ_U + b_noise*ε, γ_U)，位置参数扰动）      │  ║
 ║  └─────────────────────────────────────────────────────────────────────────┘  ║
 ║                                                                                ║
 ║  核心特性：                                                                      ║
