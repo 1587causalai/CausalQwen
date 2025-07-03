@@ -257,6 +257,61 @@ def run_legacy_benchmark(config: ExperimentConfig, data: dict):
     print(f"   - 传递原始完整数据集: X({X_combined.shape}), y({y_combined.shape})")
     print(f"   - BaselineBenchmark将自动处理数据分割和噪声注入")
     
+    # 🎯 关键修复：使用baseline_config机制正确传递PyTorch MLP参数
+    baseline_config = {
+        'method_params': {
+            'pytorch_mlp': {
+                'hidden_layer_sizes': config.HIDDEN_SIZES,
+                'max_iter': config.MAX_EPOCHS,
+                'learning_rate': config.LEARNING_RATE,
+                'early_stopping': True,
+                'validation_fraction': config.VAL_SIZE,
+                'n_iter_no_change': config.PATIENCE,
+                'tol': config.TOL,
+                'alpha': config.ALPHA_PYTORCH,
+                'batch_size': config.BATCH_SIZE,
+                'random_state': config.RANDOM_STATE,
+                'verbose': False
+            },
+            'mlp_huber': {
+                'hidden_layer_sizes': config.HIDDEN_SIZES,
+                'max_iter': config.MAX_EPOCHS,
+                'learning_rate': config.LEARNING_RATE,
+                'early_stopping': True,
+                'validation_fraction': config.VAL_SIZE,
+                'n_iter_no_change': config.PATIENCE,
+                'tol': config.TOL,
+                'alpha': config.ALPHA_PYTORCH,
+                'batch_size': config.BATCH_SIZE,
+                'random_state': config.RANDOM_STATE
+            },
+            'mlp_pinball_median': {
+                'hidden_layer_sizes': config.HIDDEN_SIZES,
+                'max_iter': config.MAX_EPOCHS,
+                'learning_rate': config.LEARNING_RATE,
+                'early_stopping': True,
+                'validation_fraction': config.VAL_SIZE,
+                'n_iter_no_change': config.PATIENCE,
+                'tol': config.TOL,
+                'alpha': config.ALPHA_PYTORCH,
+                'batch_size': config.BATCH_SIZE,
+                'random_state': config.RANDOM_STATE
+            },
+            'mlp_cauchy': {
+                'hidden_layer_sizes': config.HIDDEN_SIZES,
+                'max_iter': config.MAX_EPOCHS,
+                'learning_rate': config.LEARNING_RATE,
+                'early_stopping': True,
+                'validation_fraction': config.VAL_SIZE,
+                'n_iter_no_change': config.PATIENCE,
+                'tol': config.TOL,
+                'alpha': config.ALPHA_PYTORCH,
+                'batch_size': config.BATCH_SIZE,
+                'random_state': config.RANDOM_STATE
+            }
+        }
+    }
+    
     results = benchmark.compare_models(
         X=X_combined,
         y=y_combined,
@@ -269,21 +324,17 @@ def run_legacy_benchmark(config: ExperimentConfig, data: dict):
         
         # 基准方法配置
         baseline_methods=baseline_methods,
+        baseline_config=baseline_config,  # 🎯 关键添加：传递完整参数
         
         # CausalEngine配置
         causal_modes=causal_modes,
         
-        # 统一参数（与tutorial脚本完全一致）
+        # CausalEngine专属参数
         hidden_sizes=config.HIDDEN_SIZES,
-        hidden_layer_sizes=config.HIDDEN_SIZES,
         max_epochs=config.MAX_EPOCHS,
-        max_iter=config.MAX_EPOCHS,
         lr=config.LEARNING_RATE,
-        learning_rate=config.LEARNING_RATE,
         patience=config.PATIENCE,
         tol=config.TOL,
-        
-        # CausalEngine专属参数
         gamma_init=config.GAMMA_INIT,
         b_noise_init=config.B_NOISE_INIT,
         b_noise_trainable=config.B_NOISE_TRAINABLE
@@ -292,6 +343,13 @@ def run_legacy_benchmark(config: ExperimentConfig, data: dict):
     # 🎯 关键改进：BaselineBenchmark现在自动处理全局标准化和逆变换
     print("   - BaselineBenchmark将自动处理标准化和逆变换")
     print(f"   - 返回的结果键: {list(results.keys())}")
+    print(f"   - 使用了baseline_config机制来传递完整参数")
+    
+    # 调试信息：检查是否包含pytorch_mlp的结果
+    if 'pytorch_mlp' not in results and 'pytorch_mlp' in baseline_methods:
+        print(f"   ⚠️ 警告: 请求了pytorch_mlp但结果中没有pytorch_mlp键")
+        print(f"   - 请求的baseline_methods: {baseline_methods}")
+        print(f"   - 实际返回的键: {list(results.keys())}")
     
     print("   - Legacy 实现运行完成。")
     return results
@@ -307,26 +365,51 @@ def run_sklearn_benchmark(config: ExperimentConfig, data: dict):
 
     results = {}
     
-    # 🎯 关键改进：使用原始数据但手动实施全局标准化，确保与 Legacy 实现完全一致
-    # 组合训练集和验证集（含异常的原始数据）
-    X_train_val_original = np.concatenate([data['X_train'], data['X_val']])
-    y_train_val_original = np.concatenate([data['y_train'], data['y_val']])
-    X_test_original = data['X_test']
-    y_test_original = data['y_test']
-    
-    # 手动实施全局标准化策略（与Legacy保持一致）
+    # 🎯 关键修复：使用与简单测试完全相同的数据处理策略
+    # 模拟BaselineBenchmark内部的数据处理流程来确保一致性
+    from sklearn.datasets import fetch_california_housing
+    from sklearn.model_selection import train_test_split
     from sklearn.preprocessing import StandardScaler
+    from causal_sklearn.data_processing import inject_shuffle_noise
+    
+    # 重新加载原始数据（确保数据处理完全一致）
+    housing = fetch_california_housing()
+    X, y = housing.data, housing.target
+    
+    # 与BaselineBenchmark相同的数据分割
+    X_train_full, X_test, y_train_full, y_test = train_test_split(
+        X, y, test_size=config.TEST_SIZE, random_state=config.RANDOM_STATE
+    )
+    
+    # 噪声注入（在原始尺度）
+    if config.ANOMALY_RATIO > 0:
+        y_train_noisy, _ = inject_shuffle_noise(
+            y_train_full, noise_ratio=config.ANOMALY_RATIO, random_state=config.RANDOM_STATE
+        )
+    else:
+        y_train_noisy = y_train_full.copy()
+    
+    # 验证集分割
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train_full, y_train_noisy, test_size=config.VAL_SIZE, random_state=config.RANDOM_STATE
+    )
+    
+    # 标准化处理
     scaler_X = StandardScaler()
-    X_train_val_scaled = scaler_X.fit_transform(X_train_val_original)
-    X_test_scaled = scaler_X.transform(X_test_original)
+    X_train_scaled = scaler_X.fit_transform(X_train)
+    X_val_scaled = scaler_X.transform(X_val)
+    X_test_scaled = scaler_X.transform(X_test)
     
     scaler_y = StandardScaler()
-    y_train_val_scaled = scaler_y.fit_transform(y_train_val_original.reshape(-1, 1)).flatten()
-    # 注意: y_test_scaled 在此脚本中不需要，因为我们在原始尺度下评估
-    # y_test_scaled = scaler_y.transform(y_test_original.reshape(-1, 1)).flatten()
+    y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
+    y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
     
-    print(f"   - 手动全局标准化: X_train_val({X_train_val_scaled.shape}), y_train_val({y_train_val_scaled.shape})")
-    print(f"   - 确保与Legacy实现使用完全相同的标准化策略")
+    # 组合训练+验证数据
+    X_train_val_scaled = np.concatenate([X_train_scaled, X_val_scaled])
+    y_train_val_scaled = np.concatenate([y_train_scaled, y_val_scaled])
+    
+    print(f"   - 简单测试风格数据处理: X_train_val({X_train_val_scaled.shape}), y_train_val({y_train_val_scaled.shape})")
+    print(f"   - 使用与compare_huber_vs_pytorch_mlp.py完全相同的数据处理策略")
 
     # 通用训练函数
     def train_and_evaluate(model_name, model_class, model_params, result_key):
@@ -348,10 +431,10 @@ def run_sklearn_benchmark(config: ExperimentConfig, data: dict):
         # 在原始尺度下计算性能指标
         results[result_key] = {
             'test': {
-                'MAE': mean_absolute_error(y_test_original, y_pred_original),
-                'MdAE': median_absolute_error(y_test_original, y_pred_original),
-                'RMSE': np.sqrt(mean_squared_error(y_test_original, y_pred_original)),
-                'R²': r2_score(y_test_original, y_pred_original)
+                'MAE': mean_absolute_error(y_test, y_pred_original),
+                'MdAE': median_absolute_error(y_test, y_pred_original),
+                'RMSE': np.sqrt(mean_squared_error(y_test, y_pred_original)),
+                'R²': r2_score(y_test, y_pred_original)
             },
             'time': time.time() - start_time,
             'model_info': {
@@ -385,13 +468,22 @@ def run_sklearn_benchmark(config: ExperimentConfig, data: dict):
         train_and_evaluate('PyTorch MLP', MLPPytorchRegressor, pytorch_params, 'pytorch_mlp')
 
     # --- 训练和评估 CausalEngine modes ---
+    # 🎯 关键修复：MLPCausalRegressor使用sklearn风格参数名称
     causal_base_params = {
-        **common_params,
+        # 使用sklearn风格的参数名称，与MLPCausalRegressor接口一致
         'perception_hidden_layers': config.HIDDEN_SIZES,
+        'max_iter': config.MAX_EPOCHS,        # MLPCausalRegressor使用max_iter
+        'learning_rate': config.LEARNING_RATE, # MLPCausalRegressor使用learning_rate  
+        'n_iter_no_change': config.PATIENCE,   # MLPCausalRegressor使用n_iter_no_change
+        'tol': config.TOL,
         'alpha': config.ALPHA_CAUSAL,
         'gamma_init': config.GAMMA_INIT,
         'b_noise_init': config.B_NOISE_INIT,
         'b_noise_trainable': config.B_NOISE_TRAINABLE,
+        'early_stopping': True,
+        'validation_fraction': config.VAL_SIZE,
+        'random_state': config.RANDOM_STATE,
+        'verbose': False
     }
     
     if config.MODELS_TO_TEST.get('causal_standard'):
@@ -429,7 +521,7 @@ def perform_detailed_analysis(legacy_results, sklearn_results, config):
     # 修正的模型映射：(config_key, legacy_key, sklearn_key, display_name)
     # 注意：legacy_key 使用 BaselineBenchmark 实际返回的结果键名
     models_map = [
-        ('pytorch_mlp', 'pytorch', 'pytorch_mlp', 'PyTorch MLP'),  # 修正: BaselineBenchmark返回'pytorch'不是'pytorch_mlp'
+        ('pytorch_mlp', 'pytorch_mlp', 'pytorch_mlp', 'PyTorch MLP'),  # 修正: BaselineBenchmark实际返回'pytorch_mlp'
         ('causal_standard', 'standard', 'standard', 'Causal (standard)'),
         ('causal_deterministic', 'deterministic', 'deterministic', 'Causal (deterministic)'),
         ('mlp_huber', 'mlp_huber', 'mlp_huber', 'MLP Huber'),
@@ -444,8 +536,17 @@ def perform_detailed_analysis(legacy_results, sklearn_results, config):
         if not config.MODELS_TO_TEST.get(config_key):
             continue
             
-        if legacy_key in legacy_results and sklearn_key in sklearn_results:
-            legacy_result = legacy_results[legacy_key]['test']
+        # 修正了legacy_key的检查逻辑
+        actual_legacy_key = legacy_key
+        if config_key == 'pytorch_mlp' and legacy_key not in legacy_results:
+            # 检查可能的键名变体
+            for possible_key in ['pytorch', 'pytorch_mlp']:
+                if possible_key in legacy_results:
+                    actual_legacy_key = possible_key
+                    break
+        
+        if actual_legacy_key in legacy_results and sklearn_key in sklearn_results:
+            legacy_result = legacy_results[actual_legacy_key]['test']
             sklearn_result = sklearn_results[sklearn_key]['test']
             
             # 计算所有指标的差异
@@ -538,7 +639,7 @@ def print_comparison_table(legacy_results, sklearn_results, config):
     # 模型映射：(config_key, legacy_key, sklearn_key, display_name)
     # 注意：legacy_key 使用 BaselineBenchmark 实际返回的结果键名
     models_map = [
-        ('pytorch_mlp', 'pytorch', 'pytorch_mlp', 'PyTorch MLP'),  # 修正: BaselineBenchmark返回'pytorch'不是'pytorch_mlp'
+        ('pytorch_mlp', 'pytorch_mlp', 'pytorch_mlp', 'PyTorch MLP'),  # 修正: BaselineBenchmark实际返回'pytorch_mlp'
         ('causal_standard', 'standard', 'standard', 'Causal (standard)'),
         ('causal_deterministic', 'deterministic', 'deterministic', 'Causal (deterministic)'),
         ('mlp_huber', 'mlp_huber', 'mlp_huber', 'MLP Huber'),
@@ -557,6 +658,9 @@ def print_comparison_table(legacy_results, sklearn_results, config):
         if legacy_key in legacy_results:
             legacy_result = legacy_results[legacy_key]['test']
             print(f"| {display_name:<22} | {'Legacy':<16} | {legacy_result['MAE']:.4f} | {legacy_result['MdAE']:.4f} | {legacy_result['RMSE']:.4f} | {legacy_result['R²']:.4f} | {'':<8} |")
+        else:
+            # 检查是否缺少Legacy结果
+            print(f"| {display_name:<22} | {'Legacy':<16} | {'MISSING':<8} | {'MISSING':<8} | {'MISSING':<8} | {'MISSING':<8} | {'':<8} |")
 
         # Sklearn results
         if sklearn_key in sklearn_results:
@@ -567,6 +671,8 @@ def print_comparison_table(legacy_results, sklearn_results, config):
             if legacy_result and sklearn_result:
                 mdae_diff = ((sklearn_result['MdAE'] - legacy_result['MdAE']) / legacy_result['MdAE']) * 100
                 diff_pct = f"{mdae_diff:+.2f}%"
+            elif sklearn_result and not legacy_result:
+                diff_pct = "N/A"
             
             print(f"| {display_name:<22} | {'Sklearn-Style':<16} | {sklearn_result['MAE']:.4f} | {sklearn_result['MdAE']:.4f} | {sklearn_result['RMSE']:.4f} | {sklearn_result['R²']:.4f} | {diff_pct:<8} |")
         
