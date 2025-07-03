@@ -35,7 +35,7 @@ From the perspective of realization, CausalEngine reframes this into a transpare
 
 
 
-## The Four Axioms
+## The Three Axioms
 
 1. **Inference = Abduction + Action**  
    First understand "who you are", then decide "what to do"
@@ -43,11 +43,9 @@ From the perspective of realization, CausalEngine reframes this into a transpare
 2. **Cauchy Mathematics**  
    The only distribution that computes causation analytically
 
-3. **Temperature Control**  
-   One parameter to rule determinism vs. randomness
-
-4. **Structural Equation Decisions**  
+3. **Structural Equation Decisions**  
    Every choice computed by deterministic functions for multiple output types
+
 
 ## Why It Matters
 
