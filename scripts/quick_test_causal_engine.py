@@ -226,35 +226,37 @@ def generate_regression_data(config):
         random_state=config['random_state']
     )
     
-    # 对训练集标签进行异常注入
-    if config['anomaly_ratio'] > 0:
-        y_train_noisy, noise_indices = inject_shuffle_noise(
-            y_train, 
-            noise_ratio=config['anomaly_ratio'],
-            random_state=config['random_state']
-        )
-        y_train = y_train_noisy
-        print(f"   异常注入: {config['anomaly_ratio']:.1%} ({len(noise_indices)}/{len(y_train)} 样本受影响)")
-    else:
-        print(f"   无异常注入: 纯净环境")
-    
     print(f"   训练集: {len(X_train)} | 测试集: {len(X_test)}")
     
-    # 🎯 全局标准化策略
-    print(f"   🎯 实施全局标准化策略:")
+    # 🎯 全局标准化策略 (先标准化，后注入噪声)
+    print(f"   🎯 实施全局标准化策略 (先标准化，后注入噪声):")
     
     # 特征标准化
     scaler_X = StandardScaler()
     X_train_scaled = scaler_X.fit_transform(X_train)
     X_test_scaled = scaler_X.transform(X_test)
     
-    # 目标标准化（关键！）
+    # 目标标准化（关键！）- 在干净数据上拟合
     scaler_y = StandardScaler()
     y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
     y_test_scaled = scaler_y.transform(y_test.reshape(-1, 1)).flatten()
+    print(f"      - X 和 y 都已在干净数据上完成标准化")
+
+    # 对 *标准化后* 的训练集标签进行异常注入
+    if config['anomaly_ratio'] > 0:
+        y_train_scaled_noisy, noise_indices = inject_shuffle_noise(
+            y_train_scaled, 
+            noise_ratio=config['anomaly_ratio'],
+            random_state=config['random_state']
+        )
+        y_train_for_training = y_train_scaled_noisy
+        print(f"   异常注入: 在标准化空间中对 {config['anomaly_ratio']:.1%} 的标签注入噪声")
+        print(f"             ({len(noise_indices)}/{len(y_train)} 样本受影响)")
+    else:
+        y_train_for_training = y_train_scaled
+        print(f"   无异常注入: 纯净环境")
     
-    print(f"      - X 和 y 都已标准化")
-    print(f"      - 所有模型将在标准化空间中竞争")
+    print(f"      - 所有模型将在含噪标准化空间中竞争")
     
     data = {
         # 原始数据（用于最终评估）
@@ -263,7 +265,8 @@ def generate_regression_data(config):
         
         # 标准化数据（用于模型训练）
         'X_train': X_train_scaled, 'X_test': X_test_scaled,
-        'y_train': y_train_scaled, 'y_test': y_test_scaled,
+        'y_train': y_train_for_training,
+        'y_test': y_test_scaled,
         
         # 标准化器（用于逆变换）
         'scaler_X': scaler_X, 'scaler_y': scaler_y

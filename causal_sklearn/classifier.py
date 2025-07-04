@@ -1,5 +1,65 @@
 """
 MLPCausalClassifier: Scikit-learn compatible causal neural network classifier.
+
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                        分类器模块架构图 - Classifier Suite                        ║
+╠════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                ║
+║                         sklearn兼容的神经网络分类器集合                          ║
+║                                                                                ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                            输入层 (Input)                                 │  ║
+║  │          X: [n_samples, n_features] + sample_weight (可选)                │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                     │                                          ║
+║                                     ▼                                          ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                         两种分类器架构                                       │  ║
+║  │                                                                           │  ║
+║  │  ┌─────────────────────────────┐  ┌─────────────────────────────────┐    │  ║
+║  │  │    MLPCausalClassifier      │  │    MLPPytorchClassifier         │    │  ║
+║  │  │     因果推理分类器            │  │      标准PyTorch分类器           │    │  ║
+║  │  │                             │  │                                 │    │  ║
+║  │  │  🧠 CausalEngine 四阶段架构  │  │  🔧 标准MLP架构                  │    │  ║
+║  │  │  📊 五种推理模式             │  │  ⚡ CrossEntropy损失             │    │  ║
+║  │  │  🎯 OvR (One-vs-Rest)       │  │  🎛️ ReLU/Tanh/Sigmoid激活        │    │  ║
+║  │  │  📈 分布预测能力             │  │  📊 Softmax概率输出              │    │  ║
+║  │  │  🔄 自动数据标准化           │  │  🎲 基准对比用途                 │    │  ║
+║  │  │  🎪 Cauchy/Softmax输出       │  │  💪 简单高效                    │    │  ║
+║  │  └─────────────────────────────┘  └─────────────────────────────────┘    │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                     │                                          ║
+║                                     ▼                                          ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                           核心特性                                         │  ║
+║  │                                                                           │  ║
+║  │  🔧 sklearn兼容: fit/predict/predict_proba/score接口                       │  ║
+║  │  ⚖️  样本权重: 完整支持sample_weight参数                                    │  ║
+║  │  📈 早停机制: validation-based early stopping                             │  ║
+║  │  🎛️  批处理: 自动/手动batch size配置                                        │  ║
+║  │  🎲 随机种子: 可重现的random_state控制                                      │  ║
+║  │  📊 多类支持: 自动处理多类分类任务                                          │  ║
+║  │  🔄 标签映射: 自动处理非数值标签                                           │  ║
+║  │  📈 分层采样: 验证集保持类别分布                                           │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                     │                                          ║
+║                                     ▼                                          ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                         输出层 (Output)                                   │  ║
+║  │     • predict(): 类别标签 [n_samples]                                      │  ║
+║  │     • predict_proba(): 类别概率 [n_samples, n_classes]                     │  ║
+║  │     • predict_log_proba(): 对数概率 [n_samples, n_classes]                 │  ║
+║  │     • predict_dist(): 分布参数 [n_samples, n_classes, 2] (仅CausalEngine)  │  ║
+║  │     • score(): 准确率评估                                                  │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                                ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                           使用场景指南                                      │  ║
+║  │                                                                           │  ║
+║  │  🧠 MLPCausalClassifier → 需要因果推理、不确定性量化、分布式分类              │  ║
+║  │  🔧 MLPPytorchClassifier → 标准分类基线、性能对比、简单分类任务             │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+╚════════════════════════════════════════════════════════════════════════════════╝
 """
 
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -14,7 +74,7 @@ import torch.optim as optim
 from typing import Optional
 import inspect
 
-from ._causal_engine import create_causal_classifier
+from ._causal_engine.engine import CausalEngine
 
 class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
     """
@@ -131,6 +191,23 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
         self.out_activation_ = None
         self.loss_ = None
         
+    def _build_model(self):
+        """Build CausalEngine model"""
+        return CausalEngine(
+            input_size=self.n_features_in_,
+            output_size=len(self.classes_),
+            repre_size=self.repre_size,
+            causal_size=self.causal_size,
+            task_type='classification',
+            perception_hidden_layers=self.perception_hidden_layers,
+            abduction_hidden_layers=self.abduction_hidden_layers,
+            gamma_init=self.gamma_init,
+            b_noise_init=self.b_noise_init,
+            b_noise_trainable=self.b_noise_trainable,
+            ovr_threshold=self.ovr_threshold,
+            alpha=self.alpha
+        )
+        
     def fit(self, X, y, sample_weight=None):
         """
         Fit the causal classifier to training data.
@@ -142,7 +219,7 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
         y : array-like of shape (n_samples,)
             Target class labels.
         sample_weight : array-like of shape (n_samples,), default=None
-            Sample weights (not implemented yet).
+            Sample weights. If provided, the loss function will be weighted by these values.
             
         Returns
         -------
@@ -151,6 +228,16 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
         """
         # Validate input
         X, y = check_X_y(X, y, accept_sparse=False)
+        
+        # Validate sample_weight if provided
+        if sample_weight is not None:
+            sample_weight = check_array(sample_weight, ensure_2d=False, accept_sparse=False)
+            if sample_weight.shape[0] != X.shape[0]:
+                raise ValueError(f"sample_weight has {sample_weight.shape[0]} samples, but X has {X.shape[0]} samples.")
+            # Convert to tensor
+            sample_weight_tensor = torch.FloatTensor(sample_weight)
+        else:
+            sample_weight_tensor = None
         
         # Store classes and input info
         self.classes_ = unique_labels(y)
@@ -166,15 +253,25 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
         
         # Split for validation if early stopping is enabled
         if self.early_stopping:
-            X_train, X_val, y_train, y_val = train_test_split(
-                X_scaled, y_indexed, 
-                test_size=self.validation_fraction,
-                random_state=self.random_state,
-                stratify=y_indexed
-            )
+            if sample_weight_tensor is not None:
+                X_train, X_val, y_train, y_val, sw_train, sw_val = train_test_split(
+                    X_scaled, y_indexed, sample_weight_tensor, 
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state,
+                    stratify=y_indexed
+                )
+            else:
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X_scaled, y_indexed, 
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state,
+                    stratify=y_indexed
+                )
+                sw_train, sw_val = None, None
         else:
             X_train, y_train = X_scaled, y_indexed
             X_val, y_val = None, None
+            sw_train, sw_val = sample_weight_tensor, None
         
         # Convert to torch tensors
         X_train_tensor = torch.FloatTensor(X_train)
@@ -184,20 +281,8 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
             X_val_tensor = torch.FloatTensor(X_val)
             y_val_tensor = torch.LongTensor(y_val)
         
-        # Create CausalEngine
-        self.engine_ = create_causal_classifier(
-            input_size=self.n_features_in_,
-            n_classes=len(self.classes_),
-            repre_size=self.repre_size,
-            causal_size=self.causal_size,
-            perception_hidden_layers=self.perception_hidden_layers,
-            abduction_hidden_layers=self.abduction_hidden_layers,
-            gamma_init=self.gamma_init,
-            b_noise_init=self.b_noise_init,
-            b_noise_trainable=self.b_noise_trainable,
-            ovr_threshold=self.ovr_threshold,
-            alpha=self.alpha
-        )
+        # Create CausalEngine using _build_model
+        self.engine_ = self._build_model()
         
         # Setup optimizer
         optimizer = optim.Adam(self.engine_.parameters(), lr=self.learning_rate, weight_decay=self.alpha)
@@ -226,15 +311,33 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
             indices = torch.randperm(n_samples)
             X_train_shuffled = X_train_tensor[indices]
             y_train_shuffled = y_train_tensor[indices]
+            sw_train_shuffled = sw_train[indices] if sw_train is not None else None
             
             # Mini-batch training
             for i in range(0, n_samples, batch_size):
                 end_idx = min(i + batch_size, n_samples)
                 X_batch = X_train_shuffled[i:end_idx]
                 y_batch = y_train_shuffled[i:end_idx]
+                sw_batch = sw_train_shuffled[i:end_idx] if sw_train_shuffled is not None else None
                 
                 optimizer.zero_grad()
-                loss = self.engine_.compute_loss(X_batch, y_batch, mode=self.mode)
+                
+                # Compute loss with sample weights
+                if sw_batch is not None:
+                    # Get individual losses for each sample
+                    decision_scores = self.engine_._get_decision_scores(X_batch, self.mode)
+                    individual_losses = self.engine_.decision_head.compute_loss(
+                        y_true=y_batch,
+                        decision_scores=decision_scores,
+                        mode=self.mode,
+                        reduction='none'
+                    )
+                    # Apply sample weights
+                    weighted_losses = individual_losses * sw_batch
+                    loss = torch.mean(weighted_losses)
+                else:
+                    loss = self.engine_.compute_loss(X_batch, y_batch, mode=self.mode)
+                
                 loss.backward()
                 optimizer.step()
                 
@@ -248,7 +351,19 @@ class MLPCausalClassifier(BaseEstimator, ClassifierMixin):
             if self.early_stopping and X_val is not None:
                 self.engine_.eval()
                 with torch.no_grad():
-                    val_loss = self.engine_.compute_loss(X_val_tensor, y_val_tensor, mode=self.mode)
+                    # Compute validation loss with sample weights if available
+                    if sw_val is not None:
+                        decision_scores = self.engine_._get_decision_scores(X_val_tensor, self.mode)
+                        individual_losses = self.engine_.decision_head.compute_loss(
+                            y_true=y_val_tensor,
+                            decision_scores=decision_scores,
+                            mode=self.mode,
+                            reduction='none'
+                        )
+                        weighted_losses = individual_losses * sw_val
+                        val_loss = torch.mean(weighted_losses)
+                    else:
+                        val_loss = self.engine_.compute_loss(X_val_tensor, y_val_tensor, mode=self.mode)
                     
                     if val_loss < best_val_loss - self.tol:
                         best_val_loss = val_loss
@@ -587,7 +702,7 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
         y : array-like of shape (n_samples,)
             Target class labels.
         sample_weight : array-like of shape (n_samples,), default=None
-            Sample weights (not implemented yet).
+            Sample weights. If provided, the loss function will be weighted by these values.
             
         Returns
         -------
@@ -602,6 +717,16 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
         # Validate input
         X, y = check_X_y(X, y, accept_sparse=False)
         
+        # Validate sample_weight if provided
+        if sample_weight is not None:
+            sample_weight = check_array(sample_weight, ensure_2d=False, accept_sparse=False)
+            if sample_weight.shape[0] != X.shape[0]:
+                raise ValueError(f"sample_weight has {sample_weight.shape[0]} samples, but X has {X.shape[0]} samples.")
+            # Convert to tensor
+            sample_weight_tensor = torch.FloatTensor(sample_weight)
+        else:
+            sample_weight_tensor = None
+        
         # Store classes and input info
         self.classes_ = unique_labels(y)
         self.n_features_in_ = X.shape[1]
@@ -612,15 +737,25 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
         
         # Split for validation if early stopping is enabled
         if self.early_stopping:
-            X_train, X_val, y_train, y_val = train_test_split(
-                X, y_indexed, 
-                test_size=self.validation_fraction,
-                random_state=self.random_state,
-                stratify=y_indexed
-            )
+            if sample_weight_tensor is not None:
+                X_train, X_val, y_train, y_val, sw_train, sw_val = train_test_split(
+                    X, y_indexed, sample_weight_tensor, 
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state,
+                    stratify=y_indexed
+                )
+            else:
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X, y_indexed, 
+                    test_size=self.validation_fraction,
+                    random_state=self.random_state,
+                    stratify=y_indexed
+                )
+                sw_train, sw_val = None, None
         else:
             X_train, y_train = X, y_indexed
             X_val, y_val = None, None
+            sw_train, sw_val = sample_weight_tensor, None
         
         # Convert to torch tensors
         X_train_tensor = torch.FloatTensor(X_train)
@@ -635,7 +770,7 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
         
         # Setup optimizer and loss
         optimizer = optim.Adam(self.model_.parameters(), lr=self.learning_rate, weight_decay=self.alpha)
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(reduction='none')  # Use reduction='none' for manual weighting
         
         # Determine batch size
         n_samples = X_train.shape[0]
@@ -661,16 +796,26 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
             indices = torch.randperm(n_samples)
             X_train_shuffled = X_train_tensor[indices]
             y_train_shuffled = y_train_tensor[indices]
+            sw_train_shuffled = sw_train[indices] if sw_train is not None else None
             
             # Mini-batch training
             for i in range(0, n_samples, batch_size):
                 end_idx = min(i + batch_size, n_samples)
                 X_batch = X_train_shuffled[i:end_idx]
                 y_batch = y_train_shuffled[i:end_idx]
+                sw_batch = sw_train_shuffled[i:end_idx] if sw_train_shuffled is not None else None
                 
                 optimizer.zero_grad()
                 outputs = self.model_(X_batch)
-                loss = criterion(outputs, y_batch)
+                individual_losses = criterion(outputs, y_batch)
+                
+                # Apply sample weights if provided
+                if sw_batch is not None:
+                    weighted_losses = individual_losses * sw_batch
+                    loss = torch.mean(weighted_losses)
+                else:
+                    loss = torch.mean(individual_losses)
+                
                 loss.backward()
                 optimizer.step()
                 
@@ -685,7 +830,14 @@ class MLPPytorchClassifier(BaseEstimator, ClassifierMixin):
                 self.model_.eval()
                 with torch.no_grad():
                     val_outputs = self.model_(X_val_tensor)
-                    val_loss = criterion(val_outputs, y_val_tensor).item()
+                    individual_val_losses = criterion(val_outputs, y_val_tensor)
+                    
+                    # Apply sample weights if provided
+                    if sw_val is not None:
+                        weighted_val_losses = individual_val_losses * sw_val
+                        val_loss = torch.mean(weighted_val_losses).item()
+                    else:
+                        val_loss = torch.mean(individual_val_losses).item()
                     
                     if val_loss < best_val_loss - self.tol:
                         best_val_loss = val_loss

@@ -58,7 +58,8 @@ class TaskHead(nn.Module, ABC):
         self,
         y_true: torch.Tensor,
         decision_scores: Tuple[torch.Tensor, torch.Tensor],
-        mode: str = 'standard'
+        mode: str = 'standard',
+        reduction: str = 'mean'
     ) -> torch.Tensor:
         """
         根据决策得分和真实标签计算损失。
@@ -93,15 +94,24 @@ class RegressionHead(TaskHead):
         self,
         y_true: torch.Tensor,
         decision_scores: Tuple[torch.Tensor, torch.Tensor],
-        mode: str = 'standard'
+        mode: str = 'standard',
+        reduction: str = 'mean'
     ) -> torch.Tensor:
         mu_pred, gamma_pred = decision_scores
         if mode == 'deterministic':
             # 确定性模式：使用均方误差 (MSE)
-            return torch.mean((y_true - mu_pred) ** 2)
+            mse = (y_true - mu_pred) ** 2
+            if reduction == 'mean':
+                return torch.mean(mse)
+            elif reduction == 'sum':
+                return torch.sum(mse)
+            elif reduction == 'none':
+                return mse
+            else:
+                raise ValueError(f"Unknown reduction: {reduction}")
         else:
             # 分布模式：使用柯西负对数似然 (NLL)
-            return CauchyMath.nll_loss(y_true, mu_pred, gamma_pred)
+            return CauchyMath.nll_loss(y_true, mu_pred, gamma_pred, reduction=reduction)
 
 
 class ClassificationHead(TaskHead):
@@ -146,12 +156,13 @@ class ClassificationHead(TaskHead):
         self,
         y_true: torch.Tensor,
         decision_scores: Tuple[torch.Tensor, torch.Tensor],
-        mode: str = 'standard'
+        mode: str = 'standard',
+        reduction: str = 'mean'
     ) -> torch.Tensor:
         mu_S, gamma_S = decision_scores
         if mode == 'deterministic':
             # 确定性模式：使用交叉熵损失，输入为原始 logits
-            return nn.functional.cross_entropy(mu_S, y_true)
+            return nn.functional.cross_entropy(mu_S, y_true, reduction=reduction)
         else:
             # 分布模式：使用独立的 OvR 二元交叉熵 (BCE) 损失
             
@@ -177,7 +188,17 @@ class ClassificationHead(TaskHead):
             bce_loss = -(y_true_onehot * torch.log(ovr_probs) +
                          (1 - y_true_onehot) * torch.log(1 - ovr_probs))
             
-            return torch.mean(torch.sum(bce_loss, dim=-1))
+            # Sum over classes first, then apply reduction
+            sample_losses = torch.sum(bce_loss, dim=-1)
+            
+            if reduction == 'mean':
+                return torch.mean(sample_losses)
+            elif reduction == 'sum':
+                return torch.sum(sample_losses)
+            elif reduction == 'none':
+                return sample_losses
+            else:
+                raise ValueError(f"Unknown reduction: {reduction}")
 
 
 def create_task_head(

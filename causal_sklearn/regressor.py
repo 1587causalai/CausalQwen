@@ -1,6 +1,81 @@
 """
 MLPCausalRegressor and Robust Regressors: Scikit-learn compatible neural network regressors.
 
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                        回归器模块架构图 - Regressor Suite                         ║
+╠════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                ║
+║                          sklearn兼容的神经网络回归器集合                          ║
+║                                                                                ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                            输入层 (Input)                                 │  ║
+║  │          X: [n_samples, n_features] + sample_weight (可选)                │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                     │                                          ║
+║                                     ▼                                          ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                         五种回归器架构                                       │  ║
+║  │                                                                           │  ║
+║  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐          │  ║
+║  │  │ MLPCausalRegressor│  │MLPPytorchRegressor│ │  Robust Suite   │          │  ║
+║  │  │  因果推理回归器     │  │   标准PyTorch    │  │   鲁棒回归器      │          │  ║
+║  │  │                 │  │      MLP        │  │                 │          │  ║
+║  │  │  🧠 CausalEngine │  │   🔧 基准对比    │  │  💪 异常值鲁棒    │          │  ║
+║  │  │  四阶段架构       │  │   标准MSE损失    │  │   多种损失函数     │          │  ║
+║  │  │  五种推理模式     │  │   ReLU/Tanh     │  │                 │          │  ║
+║  │  │  分布预测能力     │  │   L2正则化      │  │  ┌─────────────┐ │          │  ║
+║  │  │                 │  │                 │  │  │ MLPHuber    │ │          │  ║
+║  │  └─────────────────┘  └─────────────────┘  │  │ 🛡️ Huber损失 │ │          │  ║
+║  │                                            │  │ 二次→线性    │ │          │  ║
+║  │                                            │  └─────────────┘ │          │  ║
+║  │                                            │  ┌─────────────┐ │          │  ║
+║  │                                            │  │ MLPPinball  │ │          │  ║
+║  │                                            │  │ 📊 分位数回归 │ │          │  ║
+║  │                                            │  │ Quantile损失 │ │          │  ║
+║  │                                            │  └─────────────┘ │          │  ║
+║  │                                            │  ┌─────────────┐ │          │  ║
+║  │                                            │  │ MLPCauchy   │ │          │  ║
+║  │                                            │  │ 🎯 厚尾分布  │ │          │  ║
+║  │                                            │  │ log(1+e²)   │ │          │  ║
+║  │                                            │  └─────────────┘ │          │  ║
+║  │                                            └─────────────────┘          │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                     │                                          ║
+║                                     ▼                                          ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                           核心特性                                         │  ║
+║  │                                                                           │  ║
+║  │  🔧 sklearn兼容: 标准fit/predict/score接口                                 │  ║
+║  │  ⚖️  样本权重: 完整支持sample_weight参数                                    │  ║
+║  │  📈 早停机制: validation-based early stopping                             │  ║
+║  │  🎛️  批处理: 自动/手动batch size配置                                        │  ║
+║  │  🎲 随机种子: 可重现的random_state控制                                      │  ║
+║  │  📊 进度追踪: 可选的verbose训练日志                                         │  ║
+║  │  🎯 多GPU: 自动CUDA设备检测和使用                                          │  ║
+║  │  🔄 数据分割: 自动训练/验证集划分                                           │  ║
+║  │  🧠 表征提取: get_representation() 统一暴露中间表征 Z                       │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                     │                                          ║
+║                                     ▼                                          ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                         输出层 (Output)                                   │  ║
+║  │     y_pred: [n_samples] + 可选的分布参数 (MLPCausalRegressor)              │  ║
+║  │     R² score: 统一的性能评估指标                                           │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                                ║
+║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
+║  │                           使用场景指南                                      │  ║
+║  │                                                                           │  ║
+║  │  🧠 MLPCausalRegressor → 需要因果推理和不确定性量化                         │  ║
+║  │  🔧 MLPPytorchRegressor → 标准回归基线，性能对比                           │  ║
+║  │  🛡️  MLPHuberRegressor → 数据有异常值，需要鲁棒性                           │  ║
+║  │  📊 MLPPinballRegressor → 分位数回归，风险评估                             │  ║
+║  │  🎯 MLPCauchyRegressor → 厚尾分布数据，极端鲁棒性                          │  ║
+║  │                                                                           │  ║
+║  │  📋 表征分析: 所有回归器都支持 get_representation(X) 获取中间表征 Z          │  ║
+║  └─────────────────────────────────────────────────────────────────────────┘  ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
 This module provides:
 - MLPCausalRegressor: Causal reasoning-based regressor
 - MLPPytorchRegressor: Standard PyTorch MLP regressor for baseline comparison
@@ -12,7 +87,6 @@ This module provides:
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_X_y, check_array
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
 import numpy as np
 import torch
 import torch.nn as nn
@@ -20,7 +94,7 @@ import torch.optim as optim
 from typing import Optional
 import inspect
 
-from ._causal_engine import create_causal_regressor
+from ._causal_engine.engine import CausalEngine
 
 class MLPCausalRegressor(BaseEstimator, RegressorMixin):
     """
@@ -135,6 +209,22 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         self.out_activation_ = None
         self.loss_ = None
         
+    def _build_model(self, input_size):
+        """Build CausalEngine model"""
+        return CausalEngine(
+            input_size=input_size,
+            output_size=1,
+            repre_size=self.repre_size,
+            causal_size=self.causal_size,
+            task_type='regression',
+            perception_hidden_layers=self.perception_hidden_layers,
+            abduction_hidden_layers=self.abduction_hidden_layers,
+            gamma_init=self.gamma_init,
+            b_noise_init=self.b_noise_init,
+            b_noise_trainable=self.b_noise_trainable,
+            alpha=self.alpha
+        )
+        
     def fit(self, X, y, sample_weight=None):
         """
         Fit the causal regressor to training data.
@@ -213,18 +303,7 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
                 sw_val_tensor = None
         
         # Create CausalEngine
-        self.engine_ = create_causal_regressor(
-            input_size=self.n_features_in_,
-            output_size=1,
-            repre_size=self.repre_size,
-            causal_size=self.causal_size,
-            perception_hidden_layers=self.perception_hidden_layers,
-            abduction_hidden_layers=self.abduction_hidden_layers,
-            gamma_init=self.gamma_init,
-            b_noise_init=self.b_noise_init,
-            b_noise_trainable=self.b_noise_trainable,
-            alpha=self.alpha
-        )
+        self.engine_ = self._build_model(self.n_features_in_)
         
         # Setup optimizer
         optimizer = optim.Adam(self.engine_.parameters(), lr=self.learning_rate)
@@ -479,6 +558,46 @@ class MLPCausalRegressor(BaseEstimator, RegressorMixin):
         """
         from sklearn.metrics import r2_score
         return r2_score(y, self.predict(X), sample_weight=sample_weight)
+    
+    def get_representation(self, X):
+        """
+        Extract the perception representation Z from input X.
+        
+        This method exposes the intermediate representation from the Perception stage
+        of the CausalEngine, allowing analysis of the X → Z transformation.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data. Should be preprocessed consistently with training data.
+            
+        Returns
+        -------
+        Z : ndarray of shape (n_samples, repre_size)
+            The perception representation extracted from the CausalEngine.
+        """
+        # Validate input
+        X = check_array(X, accept_sparse=False)
+        
+        if self.n_features_in_ is None:
+            raise ValueError("This MLPCausalRegressor instance is not fitted yet.")
+            
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(f"X has {X.shape[1]} features, but MLPCausalRegressor "
+                           f"is expecting {self.n_features_in_} features.")
+        
+        # Check if model is fitted
+        if not hasattr(self, 'engine_'):
+            raise ValueError("This MLPCausalRegressor instance is not fitted yet.")
+        
+        # Convert to tensor
+        X_tensor = torch.FloatTensor(X)
+        
+        # Extract representation using perception network
+        self.engine_.eval()
+        with torch.no_grad():
+            Z = self.engine_.perception_net(X_tensor)
+            return Z.cpu().numpy()
         
     def _more_tags(self):
         """Additional tags for sklearn compatibility."""
@@ -571,12 +690,16 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         self.out_activation_ = None
         self.loss_ = None
         
-    def _build_model(self, input_size, output_size):
-        """Build PyTorch MLP model"""
+    def _build_perception_network(self, input_size):
+        """Build perception network: X → Z"""
+        if not self.hidden_layer_sizes:
+            # If no hidden layers, perception network is just identity (return input)
+            return nn.Identity()
+        
         layers = []
         prev_size = input_size
         
-        # Hidden layers
+        # Hidden layers for perception
         for hidden_size in self.hidden_layer_sizes:
             layers.append(nn.Linear(prev_size, hidden_size))
             if self.activation == 'relu':
@@ -587,10 +710,24 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
                 layers.append(nn.Sigmoid())
             prev_size = hidden_size
         
-        # Output layer
-        layers.append(nn.Linear(prev_size, output_size))
-        
         return nn.Sequential(*layers)
+    
+    def _build_model(self, input_size, output_size):
+        """Build perception network + output layer architecture"""
+        # Build perception network: X → Z
+        self.perception_net = self._build_perception_network(input_size)
+        
+        # Determine representation size
+        if self.hidden_layer_sizes:
+            representation_size = self.hidden_layer_sizes[-1]  # Last hidden layer size
+        else:
+            representation_size = input_size  # No hidden layers, use input size
+        
+        # Build output layer: Z → Y
+        self.output_layer = nn.Linear(representation_size, output_size)
+        
+        # Create a module list to hold both components
+        return nn.ModuleList([self.perception_net, self.output_layer])
         
     def fit(self, X, y, sample_weight=None):
         """
@@ -671,7 +808,8 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         self.model_ = self._build_model(self.n_features_in_, 1)
         
         # Setup optimizer and loss
-        optimizer = optim.Adam(self.model_.parameters(), lr=self.learning_rate, weight_decay=self.alpha)
+        optimizer = optim.Adam(list(self.perception_net.parameters()) + list(self.output_layer.parameters()), 
+                              lr=self.learning_rate, weight_decay=self.alpha)
         criterion = nn.MSELoss()
         
         # Determine batch size
@@ -690,7 +828,8 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         
         for epoch in range(self.max_iter):
             # Training step with mini-batches
-            self.model_.train()
+            self.perception_net.train()
+            self.output_layer.train()
             epoch_loss = 0.0
             n_batches = 0
             
@@ -716,7 +855,10 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
                     sw_batch = None
                 
                 optimizer.zero_grad()
-                outputs = self.model_(X_batch)
+                
+                # Forward pass: X → Z → Y
+                Z = self.perception_net(X_batch)
+                outputs = self.output_layer(Z)
                 
                 # Compute loss with sample weights
                 if sw_batch is not None:
@@ -737,9 +879,12 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
             
             # Validation step
             if self.early_stopping and X_val is not None:
-                self.model_.eval()
+                self.perception_net.eval()
+                self.output_layer.eval()
                 with torch.no_grad():
-                    val_outputs = self.model_(X_val_tensor)
+                    # Forward pass: X → Z → Y
+                    Z_val = self.perception_net(X_val_tensor)
+                    val_outputs = self.output_layer(Z_val)
                     
                     # Compute validation loss with sample weights
                     if sw_val_tensor is not None:
@@ -752,7 +897,10 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
                     if val_loss < best_val_loss - self.tol:
                         best_val_loss = val_loss
                         no_improve_count = 0
-                        best_state_dict = self.model_.state_dict().copy()
+                        best_state_dict = {
+                            'perception_net': self.perception_net.state_dict().copy(),
+                            'output_layer': self.output_layer.state_dict().copy()
+                        }
                     else:
                         no_improve_count += 1
                         
@@ -761,7 +909,8 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
                             print(f"Early stopping at epoch {epoch + 1}")
                         # Restore the best model
                         if best_state_dict is not None:
-                            self.model_.load_state_dict(best_state_dict)
+                            self.perception_net.load_state_dict(best_state_dict['perception_net'])
+                            self.output_layer.load_state_dict(best_state_dict['output_layer'])
                         break
             
             if self.verbose and (epoch + 1) % 100 == 0:
@@ -806,16 +955,19 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
                            f"is expecting {self.n_features_in_} features.")
         
         # Check if model is fitted
-        if not hasattr(self, 'model_') or self.model_ is None:
+        if not hasattr(self, 'perception_net') or self.perception_net is None:
             raise ValueError("This MLPPytorchRegressor instance is not fitted yet.")
         
         # Convert to tensor
         X_tensor = torch.FloatTensor(X)
         
-        # Predict using PyTorch model
-        self.model_.eval()
+        # Predict using perception network + output layer
+        self.perception_net.eval()
+        self.output_layer.eval()
         with torch.no_grad():
-            y_pred = self.model_(X_tensor)
+            # Forward pass: X → Z → Y
+            Z = self.perception_net(X_tensor)
+            y_pred = self.output_layer(Z)
             y_pred_np = y_pred.squeeze().cpu().numpy()
             
         return y_pred_np
@@ -840,6 +992,46 @@ class MLPPytorchRegressor(BaseEstimator, RegressorMixin):
         """
         from sklearn.metrics import r2_score
         return r2_score(y, self.predict(X), sample_weight=sample_weight)
+    
+    def get_representation(self, X):
+        """
+        Extract the perception representation Z from input X.
+        
+        This method exposes the intermediate representation from the perception network,
+        allowing analysis of the X → Z transformation.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data.
+            
+        Returns
+        -------
+        Z : ndarray of shape (n_samples, representation_size)
+            The perception representation extracted from the perception network.
+        """
+        # Validate input
+        X = check_array(X, accept_sparse=False)
+        
+        if self.n_features_in_ is None:
+            raise ValueError("This MLPPytorchRegressor instance is not fitted yet.")
+            
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(f"X has {X.shape[1]} features, but MLPPytorchRegressor "
+                           f"is expecting {self.n_features_in_} features.")
+        
+        # Check if model is fitted
+        if not hasattr(self, 'perception_net') or self.perception_net is None:
+            raise ValueError("This MLPPytorchRegressor instance is not fitted yet.")
+        
+        # Convert to tensor
+        X_tensor = torch.FloatTensor(X)
+        
+        # Extract representation using perception network: X → Z
+        self.perception_net.eval()
+        with torch.no_grad():
+            Z = self.perception_net(X_tensor)
+            return Z.cpu().numpy()
         
     def _more_tags(self):
         """Additional tags for sklearn compatibility."""
@@ -940,22 +1132,40 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
         self.out_activation_ = None
         self.loss_ = None
         
-    def _build_model(self, input_size):
-        """Build the neural network model"""
+    def _build_perception_network(self, input_size):
+        """Build perception network: X → Z"""
+        if not self.hidden_layer_sizes:
+            # If no hidden layers, perception network is just identity (return input)
+            return nn.Identity()
+        
         layers = []
         prev_size = input_size
         
-        # Hidden layers
+        # Hidden layers for perception
         for hidden_size in self.hidden_layer_sizes:
             layers.append(nn.Linear(prev_size, hidden_size))
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(0.1))
             prev_size = hidden_size
         
-        # Output layer
-        layers.append(nn.Linear(prev_size, 1))
-        
         return nn.Sequential(*layers)
+    
+    def _build_model(self, input_size):
+        """Build perception network + output layer architecture"""
+        # Build perception network: X → Z
+        self.perception_net = self._build_perception_network(input_size)
+        
+        # Determine representation size
+        if self.hidden_layer_sizes:
+            representation_size = self.hidden_layer_sizes[-1]  # Last hidden layer size
+        else:
+            representation_size = input_size  # No hidden layers, use input size
+        
+        # Build output layer: Z → Y
+        self.output_layer = nn.Linear(representation_size, 1)
+        
+        # Create a module list to hold both components
+        return nn.ModuleList([self.perception_net, self.output_layer])
     
     def fit(self, X, y, sample_weight=None):
         """
@@ -1058,7 +1268,8 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
         
         for epoch in range(self.max_iter):
             # Training step with mini-batches
-            self.model_.train()
+            self.perception_net.train()
+            self.output_layer.train()
             epoch_loss = 0.0
             n_batches = 0
             
@@ -1084,7 +1295,9 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
                     sw_batch = None
                 
                 optimizer.zero_grad()
-                outputs = self.model_(X_batch).squeeze()
+                # Forward pass: X → Z → Y
+                z = self.perception_net(X_batch)
+                outputs = self.output_layer(z).squeeze()
                 
                 # Compute loss with sample weights
                 if sw_batch is not None:
@@ -1105,9 +1318,12 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
             
             # Validation step
             if self.early_stopping and X_val is not None:
-                self.model_.eval()
+                self.perception_net.eval()
+                self.output_layer.eval()
                 with torch.no_grad():
-                    val_outputs = self.model_(X_val_tensor).squeeze()
+                    # Forward pass: X → Z → Y
+                    z_val = self.perception_net(X_val_tensor)
+                    val_outputs = self.output_layer(z_val).squeeze()
                     
                     # Compute validation loss with sample weights
                     if sw_val_tensor is not None:
@@ -1174,17 +1390,20 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
                            f"is expecting {self.n_features_in_} features.")
         
         # Check if model is fitted
-        if not hasattr(self, 'model_') or self.model_ is None:
+        if not hasattr(self, 'perception_net') or self.perception_net is None:
             raise ValueError("This MLPHuberRegressor instance is not fitted yet.")
         
         # Input data is assumed to be pre-scaled
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         X_tensor = torch.FloatTensor(X).to(device)
         
-        # Predict
-        self.model_.eval()
+        # Predict using perception_net + output_layer
+        self.perception_net.eval()
+        self.output_layer.eval()
         with torch.no_grad():
-            y_pred_scaled = self.model_(X_tensor).squeeze().cpu().numpy()
+            # Forward pass: X → Z → Y
+            z = self.perception_net(X_tensor)
+            y_pred_scaled = self.output_layer(z).squeeze().cpu().numpy()
         
         # Output is on the scaled scale, benchmark runner should inverse transform if needed
         return y_pred_scaled
@@ -1209,6 +1428,47 @@ class MLPHuberRegressor(BaseEstimator, RegressorMixin):
         """
         from sklearn.metrics import r2_score
         return r2_score(y, self.predict(X), sample_weight=sample_weight)
+    
+    def get_representation(self, X):
+        """
+        Extract the perception representation Z from input X.
+        
+        This method exposes the intermediate representation from the perception network,
+        allowing analysis of the X → Z transformation.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data.
+            
+        Returns
+        -------
+        Z : ndarray of shape (n_samples, representation_size)
+            The perception representation extracted from the perception network.
+        """
+        # Validate input
+        X = check_array(X, accept_sparse=False)
+        
+        if self.n_features_in_ is None:
+            raise ValueError("This MLPHuberRegressor instance is not fitted yet.")
+            
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(f"X has {X.shape[1]} features, but MLPHuberRegressor "
+                           f"is expecting {self.n_features_in_} features.")
+        
+        # Check if model is fitted
+        if not hasattr(self, 'perception_net') or self.perception_net is None:
+            raise ValueError("This MLPHuberRegressor instance is not fitted yet.")
+        
+        # Convert to tensor and move to same device as model
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X_tensor = torch.FloatTensor(X).to(device)
+        
+        # Extract representation using perception network: X → Z
+        self.perception_net.eval()
+        with torch.no_grad():
+            Z = self.perception_net(X_tensor)
+            return Z.cpu().numpy()
     
     def _more_tags(self):
         """Additional tags for sklearn compatibility."""
@@ -1316,23 +1576,41 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
             return loss
         else:
             raise ValueError(f"Unknown reduction: {reduction}")
+    
+    def _build_perception_network(self, input_size):
+        """Build perception network: X → Z"""
+        if not self.hidden_layer_sizes:
+            # If no hidden layers, perception network is just identity (return input)
+            return nn.Identity()
         
-    def _build_model(self, input_size):
-        """Build the neural network model"""
         layers = []
         prev_size = input_size
         
-        # Hidden layers
+        # Hidden layers for perception
         for hidden_size in self.hidden_layer_sizes:
             layers.append(nn.Linear(prev_size, hidden_size))
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(0.1))
             prev_size = hidden_size
         
-        # Output layer
-        layers.append(nn.Linear(prev_size, 1))
-        
         return nn.Sequential(*layers)
+    
+    def _build_model(self, input_size):
+        """Build perception network + output layer architecture"""
+        # Build perception network: X → Z
+        self.perception_net = self._build_perception_network(input_size)
+        
+        # Determine representation size
+        if self.hidden_layer_sizes:
+            representation_size = self.hidden_layer_sizes[-1]  # Last hidden layer size
+        else:
+            representation_size = input_size  # No hidden layers, use input size
+        
+        # Build output layer: Z → Y
+        self.output_layer = nn.Linear(representation_size, 1)
+        
+        # Create a module list to hold both components
+        return nn.ModuleList([self.perception_net, self.output_layer])
     
     def fit(self, X, y, sample_weight=None):
         """
@@ -1460,7 +1738,9 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
                     sw_batch = None
                 
                 optimizer.zero_grad()
-                outputs = self.model_(X_batch).squeeze()
+                # Forward pass: X → Z → Y
+                z = self.perception_net(X_batch)
+                outputs = self.output_layer(z).squeeze()
                 
                 # Compute loss with sample weights
                 if sw_batch is not None:
@@ -1481,9 +1761,12 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
             
             # Validation step
             if self.early_stopping and X_val is not None:
-                self.model_.eval()
+                self.perception_net.eval()
+                self.output_layer.eval()
                 with torch.no_grad():
-                    val_outputs = self.model_(X_val_tensor).squeeze()
+                    # Forward pass: X → Z → Y
+                    z_val = self.perception_net(X_val_tensor)
+                    val_outputs = self.output_layer(z_val).squeeze()
                     
                     # Compute validation loss with sample weights
                     if sw_val_tensor is not None:
@@ -1550,17 +1833,20 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
                            f"is expecting {self.n_features_in_} features.")
         
         # Check if model is fitted
-        if not hasattr(self, 'model_') or self.model_ is None:
+        if not hasattr(self, 'perception_net') or self.perception_net is None:
             raise ValueError("This MLPPinballRegressor instance is not fitted yet.")
         
         # Input data is assumed to be pre-scaled
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         X_tensor = torch.FloatTensor(X).to(device)
         
-        # Predict
-        self.model_.eval()
+        # Predict using perception_net + output_layer
+        self.perception_net.eval()
+        self.output_layer.eval()
         with torch.no_grad():
-            y_pred_scaled = self.model_(X_tensor).squeeze().cpu().numpy()
+            # Forward pass: X → Z → Y
+            z = self.perception_net(X_tensor)
+            y_pred_scaled = self.output_layer(z).squeeze().cpu().numpy()
         
         # Output is on the scaled scale, benchmark runner should inverse transform if needed
         return y_pred_scaled
@@ -1585,6 +1871,47 @@ class MLPPinballRegressor(BaseEstimator, RegressorMixin):
         """
         from sklearn.metrics import r2_score
         return r2_score(y, self.predict(X), sample_weight=sample_weight)
+    
+    def get_representation(self, X):
+        """
+        Extract the perception representation Z from input X.
+        
+        This method exposes the intermediate representation from the perception network,
+        allowing analysis of the X → Z transformation.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data.
+            
+        Returns
+        -------
+        Z : ndarray of shape (n_samples, representation_size)
+            The perception representation extracted from the perception network.
+        """
+        # Validate input
+        X = check_array(X, accept_sparse=False)
+        
+        if self.n_features_in_ is None:
+            raise ValueError("This MLPPinballRegressor instance is not fitted yet.")
+            
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(f"X has {X.shape[1]} features, but MLPPinballRegressor "
+                           f"is expecting {self.n_features_in_} features.")
+        
+        # Check if model is fitted
+        if not hasattr(self, 'perception_net') or self.perception_net is None:
+            raise ValueError("This MLPPinballRegressor instance is not fitted yet.")
+        
+        # Convert to tensor and move to same device as model
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X_tensor = torch.FloatTensor(X).to(device)
+        
+        # Extract representation using perception network: X → Z
+        self.perception_net.eval()
+        with torch.no_grad():
+            Z = self.perception_net(X_tensor)
+            return Z.cpu().numpy()
     
     def _more_tags(self):
         """Additional tags for sklearn compatibility."""
@@ -1686,22 +2013,40 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
         else:
             raise ValueError(f"Unknown reduction: {reduction}")
         
-    def _build_model(self, input_size):
-        """Build the neural network model"""
+    def _build_perception_network(self, input_size):
+        """Build perception network: X → Z"""
+        if not self.hidden_layer_sizes:
+            # If no hidden layers, perception network is just identity (return input)
+            return nn.Identity()
+        
         layers = []
         prev_size = input_size
         
-        # Hidden layers
+        # Hidden layers for perception
         for hidden_size in self.hidden_layer_sizes:
             layers.append(nn.Linear(prev_size, hidden_size))
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(0.1))
             prev_size = hidden_size
         
-        # Output layer
-        layers.append(nn.Linear(prev_size, 1))
-        
         return nn.Sequential(*layers)
+    
+    def _build_model(self, input_size):
+        """Build perception network + output layer architecture"""
+        # Build perception network: X → Z
+        self.perception_net = self._build_perception_network(input_size)
+        
+        # Determine representation size
+        if self.hidden_layer_sizes:
+            representation_size = self.hidden_layer_sizes[-1]  # Last hidden layer size
+        else:
+            representation_size = input_size  # No hidden layers, use input size
+        
+        # Build output layer: Z → Y
+        self.output_layer = nn.Linear(representation_size, 1)
+        
+        # Create a module list to hold both components
+        return nn.ModuleList([self.perception_net, self.output_layer])
     
     def fit(self, X, y, sample_weight=None):
         """
@@ -1829,7 +2174,9 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
                     sw_batch = None
                 
                 optimizer.zero_grad()
-                outputs = self.model_(X_batch).squeeze()
+                # Forward pass: X → Z → Y
+                z = self.perception_net(X_batch)
+                outputs = self.output_layer(z).squeeze()
                 
                 # Compute loss with sample weights
                 if sw_batch is not None:
@@ -1850,9 +2197,12 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
             
             # Validation step
             if self.early_stopping and X_val is not None:
-                self.model_.eval()
+                self.perception_net.eval()
+                self.output_layer.eval()
                 with torch.no_grad():
-                    val_outputs = self.model_(X_val_tensor).squeeze()
+                    # Forward pass: X → Z → Y
+                    z_val = self.perception_net(X_val_tensor)
+                    val_outputs = self.output_layer(z_val).squeeze()
                     
                     # Compute validation loss with sample weights
                     if sw_val_tensor is not None:
@@ -1919,17 +2269,20 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
                            f"is expecting {self.n_features_in_} features.")
         
         # Check if model is fitted
-        if not hasattr(self, 'model_') or self.model_ is None:
+        if not hasattr(self, 'perception_net') or self.perception_net is None:
             raise ValueError("This MLPCauchyRegressor instance is not fitted yet.")
         
         # Input data is assumed to be pre-scaled
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         X_tensor = torch.FloatTensor(X).to(device)
         
-        # Predict
-        self.model_.eval()
+        # Predict using perception_net + output_layer
+        self.perception_net.eval()
+        self.output_layer.eval()
         with torch.no_grad():
-            y_pred_scaled = self.model_(X_tensor).squeeze().cpu().numpy()
+            # Forward pass: X → Z → Y
+            z = self.perception_net(X_tensor)
+            y_pred_scaled = self.output_layer(z).squeeze().cpu().numpy()
         
         # Output is on the scaled scale, benchmark runner should inverse transform if needed
         return y_pred_scaled
@@ -1954,6 +2307,47 @@ class MLPCauchyRegressor(BaseEstimator, RegressorMixin):
         """
         from sklearn.metrics import r2_score
         return r2_score(y, self.predict(X), sample_weight=sample_weight)
+    
+    def get_representation(self, X):
+        """
+        Extract the perception representation Z from input X.
+        
+        This method exposes the intermediate representation from the perception network,
+        allowing analysis of the X → Z transformation.
+        
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data.
+            
+        Returns
+        -------
+        Z : ndarray of shape (n_samples, representation_size)
+            The perception representation extracted from the perception network.
+        """
+        # Validate input
+        X = check_array(X, accept_sparse=False)
+        
+        if self.n_features_in_ is None:
+            raise ValueError("This MLPCauchyRegressor instance is not fitted yet.")
+            
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(f"X has {X.shape[1]} features, but MLPCauchyRegressor "
+                           f"is expecting {self.n_features_in_} features.")
+        
+        # Check if model is fitted
+        if not hasattr(self, 'perception_net') or self.perception_net is None:
+            raise ValueError("This MLPCauchyRegressor instance is not fitted yet.")
+        
+        # Convert to tensor and move to same device as model
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X_tensor = torch.FloatTensor(X).to(device)
+        
+        # Extract representation using perception network: X → Z
+        self.perception_net.eval()
+        with torch.no_grad():
+            Z = self.perception_net(X_tensor)
+            return Z.cpu().numpy()
     
     def _more_tags(self):
         """Additional tags for sklearn compatibility."""

@@ -114,21 +114,21 @@ class CausalEngine(nn.Module):
     
     def __init__(
         self,
-        input_size: int,
-        output_size: int,
-        repre_size: Optional[int] = None,
-        causal_size: Optional[int] = None,
-        task_type: str = 'regression',
-        perception_hidden_layers: Optional[Tuple[int, ...]] = None,
-        abduction_hidden_layers: Optional[Tuple[int, ...]] = None,
-        activation: str = 'relu',
-        dropout: float = 0.0,
-        gamma_init: float = 10.0,
-        b_noise_init: float = 0.1,
-        b_noise_trainable: bool = True,
-        ovr_threshold: float = 0.0,
-        learnable_threshold: bool = False,
-        alpha: float = 0.0
+        input_size: int, # 输入特征的维度
+        output_size: int, # 输出维度（回归维度数或分类类别数）
+        repre_size: Optional[int] = None, # 表征的维度
+        causal_size: Optional[int] = None, # 因果表征的维度
+        task_type: str = 'regression', # 任务类型
+        perception_hidden_layers: Optional[Tuple[int, ...]] = None, # 感知网络的隐藏层配置
+        abduction_hidden_layers: Optional[Tuple[int, ...]] = None, # 归因网络的隐藏层配置
+        activation: str = 'relu', 
+        dropout: float = 0.0, # dropout比率
+        gamma_init: float = 10.0, # 尺度参数初始化值
+        b_noise_init: float = 0.1, # 外生噪声初始化值
+        b_noise_trainable: bool = True, # 外生噪声是否可训练
+        ovr_threshold: float = 0.0, # 分类任务的OvR阈值初始化
+        learnable_threshold: bool = False, # 是否可学习阈值
+        alpha: float = 0.0 # L2正则化参数
     ):
         super().__init__()
         

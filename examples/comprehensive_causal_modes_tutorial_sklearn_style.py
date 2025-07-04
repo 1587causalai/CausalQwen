@@ -3,6 +3,74 @@
 🏠 全面CausalEngine模式教程：加州房价预测 - Sklearn-Style版本
 ================================================================
 
+╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║                                    Sklearn-Style CausalEngine 实验流程架构图                                        ║
+╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                                                    ║
+║  📊 数据处理管道 (Data Processing Pipeline)                                                                         ║
+║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  ║
+║  │                                                                                                                │  ║
+║  │  1. 原始数据加载 → 2. 数据分割 → 3. 标准化(仅训练集fit) → 4. 噪声注入(仅训练集) → 5. 模型训练                      │  ║
+║  │                                                                                                                │  ║
+║  │  California Housing    Train/Test     X & Y         40% Label     13种方法                                      │  ║
+║  │  (20,640 samples)  →   Split      →   Scaling   →   Noise     →   训练对比                                       │  ║
+║  │  8 features            (80/20)       (基于干净数据)   (训练集Only)   Performance                                  │  ║
+║  │                                      📌无数据泄露    📌测试集保持纯净                                             │  ║
+║  │                                                                                                                │  ║
+║  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                                                                    ║
+║  🔧 统一参数传递机制 (Unified Parameter Passing)                                                                     ║
+║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  ║
+║  │                                                                                                                │  ║
+║  │  SklearnStyleTutorialConfig                                                                                    │  ║
+║  │  ├─ 🧠 统一神经网络配置                                                                                          │  ║
+║  │  │   ├─ NN_HIDDEN_SIZES = (128, 64, 32)     # 所有神经网络使用相同架构                                          │  ║
+║  │  │   ├─ NN_MAX_EPOCHS = 3000                # 统一最大训练轮数                                                  │  ║
+║  │  │   ├─ NN_LEARNING_RATE = 0.01             # 统一学习率                                                      │  ║
+║  │  │   ├─ NN_PATIENCE = 200                   # 统一早停patience                                                │  ║
+║  │  │   └─ NN_BATCH_SIZE = 200                 # 统一批处理大小                                                   │  ║
+║  │  │                                                                                                            │  ║
+║  │  ├─ 🎯 方法特定参数                                                                                              │  ║
+║  │  │   ├─ CausalEngine: gamma_init, b_noise_init, modes=['deterministic', 'exogenous', 'endogenous', 'standard'] │  ║
+║  │  │   ├─ Robust MLP: delta (Huber), quantile (Pinball), Cauchy loss                                           │  ║
+║  │  │   └─ Tree Methods: n_estimators, max_depth, learning_rate                                                  │  ║
+║  │  │                                                                                                            │  ║
+║  │  └─ 📊 实验控制参数                                                                                              │  ║
+║  │      ├─ ANOMALY_RATIO = 0.4                 # 40%标签噪声                                                      │  ║
+║  │      ├─ TEST_SIZE = 0.2                     # 测试集比例                                                       │  ║
+║  │      └─ RANDOM_STATE = 42                   # 随机种子                                                        │  ║
+║  │                                                                                                                │  ║
+║  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                                                                    ║
+║  🔄 13种方法对比架构 (13-Method Comparison Framework)                                                               ║
+║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  ║
+║  │                                                                                                                │  ║
+║  │  传统神经网络 (2种)          稳健回归 (3种)              树模型 (4种)              因果推理 (4种)                    │  ║
+║  │  ├─ sklearn MLP             ├─ Huber MLP              ├─ Random Forest          ├─ deterministic              │  ║
+║  │  └─ PyTorch MLP             ├─ Pinball MLP            ├─ XGBoost                ├─ exogenous                  │  ║
+║  │                             └─ Cauchy MLP             ├─ LightGBM               ├─ endogenous                 │  ║
+║  │                                                       └─ CatBoost               └─ standard                   │  ║
+║  │                                                                                                                │  ║
+║  │  💡 关键设计亮点:                                                                                                │  ║
+║  │  • 科学实验设计: 先基于干净数据标准化，再在训练集注入40%噪声，测试集保持纯净                                      │  ║
+║  │  • 无数据泄露: 标准化器只在干净训练数据上fit，避免噪声污染统计量                                                  │  ║
+║  │  • 统一数据标准化策略: 所有方法在标准化空间训练，确保实验公平性                                                     │  ║
+║  │  • 参数公平性: 所有神经网络使用统一配置，确保公平比较                                                             │  ║
+║  │  • 评估一致性: 所有方法在原始尺度下评估，便于结果解释                                                             │  ║
+║  │                                                                                                                │  ║
+║  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                                                                    ║
+║  📈 输出分析 (Analysis & Visualization)                                                                             ║
+║  ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  ║
+║  │                                                                                                                │  ║
+║  │  1. 数据探索分析图    2. 标准版性能对比    3. 扩展版性能对比    4. CausalEngine专项对比                             │  ║
+║  │     (特征分布)           (9种核心方法)       (13种全部方法)       (4种模式详细)                                    │  ║
+║  │                                                                                                                │  ║
+║  │  📊 评估指标: MAE, MdAE, RMSE, R² (所有方法在原始房价尺度下统一评估)                                               │  ║
+║  │                                                                                                                │  ║
+║  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘  ║
+╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+
 这个教程演示所有CausalEngine推理模式在真实世界回归任务中的性能表现，使用sklearn-style实现。
 
 数据集：加州房价数据集（California Housing Dataset）
@@ -120,7 +188,7 @@ class SklearnStyleTutorialConfig:
     NN_HIDDEN_SIZES = (128, 64, 32)                  # 神经网络隐藏层结构
     NN_MAX_EPOCHS = 3000                         # 最大训练轮数
     NN_LEARNING_RATE = 0.01                      # 学习率
-    NN_PATIENCE = 200                            # 早停patience
+    NN_PATIENCE = 50                            # 早停patience
     NN_TOLERANCE = 1e-4                          # 早停tolerance
     NN_BATCH_SIZE = 200                          # 批处理大小
     # =========================================================================
@@ -186,6 +254,9 @@ class SklearnStyleTutorialConfig:
     CATBOOST_ITERATIONS = 100
     CATBOOST_DEPTH = 6
     CATBOOST_LEARNING_RATE = 0.1
+    
+    # 🛑 树方法早停配置（仅XGBoost, LightGBM, CatBoost支持）
+    TREE_EARLY_STOPPING_ROUNDS = 10     # 早停patience，与神经网络NN_PATIENCE/5保持合理比例
     
     # 📈 可视化参数
     FIGURE_DPI = 300                             # 图表分辨率
@@ -306,55 +377,75 @@ class SklearnStyleCausalModesTutorial:
         print(f"  - 数据完整性: 无缺失值" if not np.any(np.isnan(self.X)) else "  - 警告: 存在缺失值")
     
     def prepare_data(self, verbose=True):
-        """准备数据 - 实施全局标准化策略"""
+        """准备数据 - 科学严谨的标准化策略"""
         if verbose:
-            print("\n📊 数据准备 - 实施全局标准化策略")
+            print("\n📊 数据准备 - 科学严谨的标准化策略")
             print("=" * 60)
         
-        # 数据分割
+        # 1. 数据分割
         X_train, X_test, y_train, y_test = train_test_split(
             self.X, self.y,
             test_size=self.config.TEST_SIZE,
             random_state=self.config.RANDOM_STATE
         )
         
-        # 异常注入
-        if self.config.ANOMALY_RATIO > 0:
-            y_train_noisy, noise_indices = inject_shuffle_noise(
-                y_train,
-                noise_ratio=self.config.ANOMALY_RATIO,
-                random_state=self.config.RANDOM_STATE
-            )
-            y_train = y_train_noisy
-            if verbose:
-                print(f"✅ 异常注入完成: {self.config.ANOMALY_RATIO:.1%} ({len(noise_indices)}/{len(y_train)} 样本受影响)")
-        else:
-            if verbose:
-                print("✅ 无异常注入: 纯净环境")
-        
-        # 🎯 全局标准化策略
         if verbose:
-            print("\n🎯 实施全局标准化策略（绝对公平的竞技场）:")
+            print(f"✅ 数据分割完成: 训练集 {len(X_train)} | 测试集 {len(X_test)}")
         
-        # 特征标准化
+        # 2. 🎯 标准化策略（基于干净的训练数据）
+        if verbose:
+            print("\n🎯 标准化策略 - 基于干净训练数据学习统计量:")
+        
+        # 特征标准化 - 只在训练集上fit
         scaler_X = StandardScaler()
         X_train_scaled = scaler_X.fit_transform(X_train)
         X_test_scaled = scaler_X.transform(X_test)
         
-        # 目标标准化（关键！）
+        # 目标标准化 - 关键：在干净的训练集上fit
         scaler_y = StandardScaler()
-        y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
+        y_train_clean_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
         y_test_scaled = scaler_y.transform(y_test.reshape(-1, 1)).flatten()
         
         if verbose:
-            print(f"   - X 和 y 都已标准化")
-            print(f"   - 所有模型将在标准化空间中竞争")
-            print(f"   - 训练集: {len(X_train)} | 测试集: {len(X_test)}")
+            print(f"   - 特征标准化器基于训练集学习: mean={scaler_X.mean_[:3]}, std={scaler_X.scale_[:3]}")
+            print(f"   - 目标标准化器基于干净训练目标学习: mean={scaler_y.mean_[0]:.3f}, std={scaler_y.scale_[0]:.3f}")
+        
+        # 3. 噪声注入（在标准化后进行）
+        if self.config.ANOMALY_RATIO > 0:
+            y_train_scaled_noisy, noise_indices = inject_shuffle_noise(
+                y_train_clean_scaled,
+                noise_ratio=self.config.ANOMALY_RATIO,
+                random_state=self.config.RANDOM_STATE
+            )
+            y_train_scaled = y_train_scaled_noisy
+            
+            # 同时对原始尺度的训练目标应用相同的噪声（用于评估）
+            y_train_noisy, _ = inject_shuffle_noise(
+                y_train,
+                noise_ratio=self.config.ANOMALY_RATIO,
+                random_state=self.config.RANDOM_STATE
+            )
+            y_train_original = y_train_noisy
+            
+            if verbose:
+                print(f"\n✅ 噪声注入完成: {self.config.ANOMALY_RATIO:.1%} ({len(noise_indices)}/{len(y_train_scaled)} 样本受影响)")
+                print(f"   - 噪声在标准化后注入，保证标准化器基于干净数据")
+        else:
+            y_train_scaled = y_train_clean_scaled
+            y_train_original = y_train
+            if verbose:
+                print("\n✅ 无噪声注入: 纯净环境")
+        
+        if verbose:
+            print(f"\n📊 最终数据状态:")
+            print(f"   - 训练集: X标准化 + y标准化 + {self.config.ANOMALY_RATIO:.0%}噪声")
+            print(f"   - 测试集: X标准化 + y标准化 + 纯净无噪声")
+            print(f"   - 标准化器基于干净训练数据，确保无泄露")
         
         return {
             # 原始数据（用于最终评估）
             'X_train_original': X_train, 'X_test_original': X_test,
-            'y_train_original': y_train, 'y_test_original': y_test,
+            'y_train_original': y_train_original, 'y_test_original': y_test,
             
             # 标准化数据（用于模型训练）
             'X_train': X_train_scaled, 'X_test': X_test_scaled,
@@ -527,20 +618,37 @@ class SklearnStyleCausalModesTutorial:
             print("🚀 训练 XGBoost...")
         
         start_time = time.time()
+        
+        # 准备验证集用于早停（使用标准化数据）
+        X_train_std = data['X_train']
+        y_train_std = data['y_train']
+        X_train_val, X_val, y_train_val, y_val = train_test_split(
+            X_train_std, y_train_std,
+            test_size=self.config.VAL_SIZE,
+            random_state=self.config.RANDOM_STATE
+        )
+        
         model = xgb.XGBRegressor(
             n_estimators=self.config.XGBOOST_N_ESTIMATORS,
             max_depth=self.config.XGBOOST_MAX_DEPTH,
             learning_rate=self.config.XGBOOST_LEARNING_RATE,
             random_state=self.config.RANDOM_STATE,
             n_jobs=-1,
-            verbosity=0
+            verbosity=0,
+            early_stopping_rounds=self.config.TREE_EARLY_STOPPING_ROUNDS
         )
         
-        model.fit(data['X_train'], data['y_train'])
+        # 使用早停训练（统一使用标准化数据）
+        model.fit(
+            X_train_val, y_train_val,
+            eval_set=[(X_val, y_val)],
+            verbose=False
+        )
+        
         training_time = time.time() - start_time
         
         if verbose:
-            print(f"   训练完成 (用时: {training_time:.2f}s)")
+            print(f"   训练完成: {model.best_iteration} 轮 (早停) (用时: {training_time:.2f}s)")
         
         return model, training_time
     
@@ -597,54 +705,22 @@ class SklearnStyleCausalModesTutorial:
         return model, training_time
     
     def evaluate_model(self, model, data, model_name):
-        """评估模型性能"""
-        # 检查是否为传统机器学习方法（不需要标准化预测的逆变换）
-        traditional_ml_methods = ['random_forest', 'xgboost', 'lightgbm', 'catboost']
+        """评估模型性能 - 统一逆变换逻辑"""
+        # 🎯 统一策略：所有方法在标准化空间预测，然后逆变换到原始尺度评估
+        test_pred_scaled = model.predict(data['X_test'])
         
-        if model_name in traditional_ml_methods:
-            # 🌲 传统机器学习方法：在标准化特征上训练，但预测原始尺度的目标
-            # 需要用原始目标重新训练
-            X_train_original = data['X_train_original']
-            y_train_original = data['y_train_original']
-            X_test_original = data['X_test_original']
-            y_test_original = data['y_test_original']
-            
-            # 对特征进行标准化，但目标保持原始尺度
-            scaler_X = StandardScaler()
-            X_train_scaled = scaler_X.fit_transform(X_train_original)
-            X_test_scaled = scaler_X.transform(X_test_original)
-            
-            # 重新训练模型（用标准化特征但原始目标）
-            model.fit(X_train_scaled, y_train_original)
-            
-            # 预测（已经是原始尺度）
-            test_pred_original = model.predict(X_test_scaled)
-            
-            # 在原始尺度下计算性能指标
-            results = {
-                'test': {
-                    'MAE': mean_absolute_error(y_test_original, test_pred_original),
-                    'MdAE': median_absolute_error(y_test_original, test_pred_original),
-                    'RMSE': np.sqrt(mean_squared_error(y_test_original, test_pred_original)),
-                    'R²': r2_score(y_test_original, test_pred_original)
-                }
+        # 将预测结果转换回原始尺度进行评估
+        test_pred_original = data['scaler_y'].inverse_transform(test_pred_scaled.reshape(-1, 1)).flatten()
+        
+        # 在原始尺度下计算性能指标
+        results = {
+            'test': {
+                'MAE': mean_absolute_error(data['y_test_original'], test_pred_original),
+                'MdAE': median_absolute_error(data['y_test_original'], test_pred_original),
+                'RMSE': np.sqrt(mean_squared_error(data['y_test_original'], test_pred_original)),
+                'R²': r2_score(data['y_test_original'], test_pred_original)
             }
-        else:
-            # 🧠 神经网络方法：在标准化空间中预测，然后逆变换
-            test_pred_scaled = model.predict(data['X_test'])
-            
-            # 🎯 关键：将预测结果转换回原始尺度进行评估
-            test_pred_original = data['scaler_y'].inverse_transform(test_pred_scaled.reshape(-1, 1)).flatten()
-            
-            # 在原始尺度下计算性能指标
-            results = {
-                'test': {
-                    'MAE': mean_absolute_error(data['y_test_original'], test_pred_original),
-                    'MdAE': median_absolute_error(data['y_test_original'], test_pred_original),
-                    'RMSE': np.sqrt(mean_squared_error(data['y_test_original'], test_pred_original)),
-                    'R²': r2_score(data['y_test_original'], test_pred_original)
-                }
-            }
+        }
         
         return results
     
