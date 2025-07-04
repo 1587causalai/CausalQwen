@@ -217,7 +217,7 @@ class SklearnStyleTutorialConfig:
     PYTORCH_ALPHA = 0.0                          # PyTorch MLP L2正则化
     
     # 📊 实验参数
-    ANOMALY_RATIO = 0.4                          # 标签异常比例 (核心实验默认值: 40%噪声挑战)
+    ANOMALY_RATIO = 0.3                          # 标签异常比例 (核心实验默认值: 40%噪声挑战)
     SAVE_PLOTS = True                            # 是否保存图表
     VERBOSE = True                               # 是否显示详细输出
     
