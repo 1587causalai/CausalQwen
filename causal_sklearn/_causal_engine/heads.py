@@ -31,9 +31,10 @@ class TaskHead(nn.Module, ABC):
 
     所有具体的任务头都应继承此类，并实现其抽象方法。
     """
-    def __init__(self, output_size: int):
+    def __init__(self, output_size: int, factor=10.0):
         super().__init__()
         self.output_size = output_size
+        self.factor = factor
 
     @abstractmethod
     def forward(
@@ -81,6 +82,9 @@ class RegressionHead(TaskHead):
     TODO: 未来可以考虑加入一些可学习的线性变化，比如加入一个可学习的线性层，将决策得分映射到输出空间。
     """
 
+    def __init__(self, output_size: int, factor=10.0):
+        super().__init__(output_size, factor)
+
     def forward(
         self,
         decision_scores: Tuple[torch.Tensor, torch.Tensor],
@@ -111,7 +115,7 @@ class RegressionHead(TaskHead):
                 raise ValueError(f"Unknown reduction: {reduction}")
         else:
             # 分布模式：使用柯西负对数似然 (NLL)
-            return CauchyMath.nll_loss(y_true, mu_pred, gamma_pred, reduction=reduction)
+            return CauchyMath.nll_loss(y_true, mu_pred, gamma_pred, reduction=reduction) * self.factor
 
 
 class ClassificationHead(TaskHead):

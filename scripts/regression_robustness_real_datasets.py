@@ -49,7 +49,12 @@ from causal_sklearn.regressor import (
     MLPCausalRegressor, MLPPytorchRegressor, 
     MLPHuberRegressor, MLPPinballRegressor, MLPCauchyRegressor
 )
-from causal_sklearn.data_processing import inject_shuffle_noise
+from causal_sklearn.data_processing import (
+    inject_shuffle_noise, 
+    load_extended_regression_dataset,
+    list_available_regression_datasets,
+    EXTENDED_REGRESSION_DATASETS
+)
 
 warnings.filterwarnings('ignore')
 
@@ -58,8 +63,9 @@ warnings.filterwarnings('ignore')
 # =============================================================================
 
 CONFIG = {
-    # 数据集选择
-    'dataset_name': 'california_housing',  # 可选: 'california_housing', 'diabetes', 'linnerud', 'boston'
+    # 数据集选择 - 支持扩展数据集
+    'dataset_name': 'california_housing',  # 支持所有EXTENDED_REGRESSION_DATASETS中的数据集
+    'use_extended_datasets': True,  # 是否使用扩展数据集加载器
     
     # 噪声级别设置
     'noise_levels': np.linspace(0, 1, 11),  # 0%, 10%, 20%, ..., 100%
@@ -69,9 +75,9 @@ CONFIG = {
     'random_state': 42,     # 固定随机种子
     
     # 网络结构（所有算法统一）- 优化参数
-    'hidden_layers': (256, 128, 64),    # 增大网络结构
+    'hidden_layers': (128, 128, 64),    # 增大网络结构
     'max_iter': 3000,               # 最大迭代次数
-    'learning_rate': 0.001,          # 提高学习率
+    'learning_rate': 0.003,          # 提高学习率
     'patience': 80,                 # 增加早停耐心
     'tol': 1e-4,                    # 收敛容忍度
     
@@ -96,8 +102,26 @@ CONFIG = {
 # 数据集加载函数
 # =============================================================================
 
-def load_real_dataset(dataset_name, random_state=42):
-    """加载真实数据集"""
+def load_real_dataset(dataset_name, random_state=42, use_extended=True):
+    """
+    加载真实数据集 - 支持扩展数据集
+    
+    Args:
+        dataset_name: 数据集名称
+        random_state: 随机种子
+        use_extended: 是否使用扩展数据集加载器
+    """
+    if use_extended and dataset_name in EXTENDED_REGRESSION_DATASETS:
+        # 使用扩展数据集加载器
+        return load_extended_regression_dataset(
+            dataset_name=dataset_name,
+            random_state=random_state,
+            return_info=True,
+            handle_missing='auto',
+            standardize_features=False
+        )
+    
+    # 传统数据集加载方式（向后兼容）
     print(f"📊 加载真实数据集: {dataset_name}")
     
     if dataset_name == 'california_housing':
@@ -181,7 +205,11 @@ def test_regression_robustness_real_data(config):
     print("="*80)
     
     # 加载真实数据集
-    X, y, dataset_info = load_real_dataset(config['dataset_name'], config['random_state'])
+    X, y, dataset_info = load_real_dataset(
+        config['dataset_name'], 
+        config['random_state'],
+        config.get('use_extended_datasets', True)
+    )
     
     noise_levels = config['noise_levels']
     results = {}
@@ -455,6 +483,12 @@ def run_single_experiment(config, run_idx=0):
 # 主函数
 # =============================================================================
 
+def show_available_datasets():
+    """显示所有可用的回归数据集"""
+    print("\n🎯 可用的回归数据集:")
+    print("=" * 60)
+    list_available_regression_datasets()
+
 def run_regression_robustness_analysis(config=None):
     """运行完整的回归鲁棒性分析（支持多次运行）"""
     if config is None:
@@ -466,6 +500,18 @@ def run_regression_robustness_analysis(config=None):
     print("🚀 回归算法真实数据集噪声鲁棒性分析" + title_suffix)
     print("=" * 60)
     print(f"数据集: {config['dataset_name']}")
+    
+    # 显示是否使用扩展数据集
+    if config.get('use_extended_datasets', True):
+        print(f"🔧 使用扩展数据集加载器 (支持 {len(EXTENDED_REGRESSION_DATASETS)} 个数据集)")
+        
+        # 检查数据集是否在扩展列表中
+        if config['dataset_name'] not in EXTENDED_REGRESSION_DATASETS:
+            print(f"⚠️  警告: 数据集 '{config['dataset_name']}' 不在扩展数据集中，将使用传统加载方式")
+            show_available_datasets()
+    else:
+        print("🔧 使用传统数据集加载器")
+    
     print(f"噪声级别: {config['noise_levels'][0]:.0%} - {config['noise_levels'][-1]:.0%} ({len(config['noise_levels'])}个级别)")
     print(f"学习率: {config['learning_rate']}, 最大迭代: {config['max_iter']}, 耐心: {config['patience']}")
     print(f"验证集比例: {config['validation_fraction']}, 早停: {config['early_stopping']}")
@@ -525,5 +571,8 @@ def run_regression_robustness_analysis(config=None):
 # =============================================================================
 
 if __name__ == '__main__':
+    # 显示可用数据集
+    show_available_datasets()
+    
     # 运行完整分析
     results, dataset_info = run_regression_robustness_analysis()
