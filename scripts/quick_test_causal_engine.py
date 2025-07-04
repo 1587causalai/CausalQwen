@@ -24,6 +24,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.neural_network import MLPRegressor, MLPClassifier
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, median_absolute_error
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -34,12 +36,15 @@ import os
 import sys
 import warnings
 
+# 设置matplotlib后端，避免弹出窗口
+plt.switch_backend('Agg')
+
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 导入我们的CausalEngine实现
 from causal_sklearn.regressor import MLPCausalRegressor, MLPPytorchRegressor
-from causal_sklearn.classifier import MLPCausalClassifier, MLPPytorchClassifier
+from causal_sklearn.classifier import MLPCausalClassifier, MLPPytorchClassifier, MLPSklearnOvRClassifier, MLPPytorchSharedOvRClassifier
 from causal_sklearn.data_processing import inject_shuffle_noise
 
 warnings.filterwarnings('ignore')
@@ -55,7 +60,7 @@ REGRESSION_CONFIG = {
     'noise': 1.0,
     'random_state': 42,
     'test_size': 0.2,  # 测试集比例
-    'anomaly_ratio': 0.4,  # 40%异常数据，匹配其他脚本
+    'anomaly_ratio': 0.3,  # 40%异常数据，匹配其他脚本
     
     # 网络结构
     'perception_hidden_layers': (128, 64, 32),  # 统一网络结构
@@ -80,9 +85,18 @@ REGRESSION_CONFIG = {
     # 测试控制
     'test_sklearn': True,
     'test_pytorch': True,
+    'test_sklearn_ovr': True,
+    'test_pytorch_shared_ovr': True,
     'test_causal_deterministic': True,
+    'test_causal_exogenous': True,
+    'test_causal_endogenous': True,
     'test_causal_standard': True,
-    'verbose': True
+    'verbose': True,
+    
+    # 可视化控制
+    'save_plots': True,
+    'output_dir': 'results/quick_test_results',
+    'figure_dpi': 300
 }
 
 CLASSIFICATION_CONFIG = {
@@ -93,7 +107,7 @@ CLASSIFICATION_CONFIG = {
     'class_sep': 1.0,   # 提高类别分离度
     'random_state': 42,
     'test_size': 0.2,   # 测试集比例
-    'label_noise_ratio': 0.4,  # 统一标签噪声水平
+    'label_noise_ratio': 0.3,  # 统一标签噪声水平
     
     # 网络结构 - 更简单的网络
     'perception_hidden_layers': (128, 64, 32),  # 统一网络结构
@@ -105,7 +119,7 @@ CLASSIFICATION_CONFIG = {
     'gamma_init': 1.0,
     'b_noise_init': 1.0,
     'b_noise_trainable': True,
-    'ovr_threshold': 2.0,
+    'ovr_threshold': 0.0,
     'alpha': 0.0,  # 匹配sklearn默认L2正则化
     
     # 训练参数 - 更接近sklearn默认值
@@ -119,9 +133,18 @@ CLASSIFICATION_CONFIG = {
     # 测试控制
     'test_sklearn': True,
     'test_pytorch': True,
+    'test_sklearn_ovr': True,
+    'test_pytorch_shared_ovr': True,
     'test_causal_deterministic': True,
+    'test_causal_exogenous': True,
+    'test_causal_endogenous': True,
     'test_causal_standard': True,
-    'verbose': True
+    'verbose': True,
+    
+    # 可视化控制
+    'save_plots': True,
+    'output_dir': 'results/quick_test_results',
+    'figure_dpi': 300
 }
 
 # =============================================================================
@@ -399,6 +422,58 @@ def train_causal_regressor(data, config, mode='standard'):
     
     return model
 
+def train_sklearn_ovr_classifier(data, config):
+    """训练sklearn OvR分类器"""
+    print("🔧 训练 sklearn OvR MLPClassifier...")
+    
+    model = MLPSklearnOvRClassifier(
+        hidden_layer_sizes=config['perception_hidden_layers'],
+        max_iter=config['max_iter'],
+        learning_rate_init=config['learning_rate'],
+        early_stopping=True,
+        validation_fraction=config['validation_fraction'],
+        n_iter_no_change=config['patience'],
+        tol=config['tol'],
+        random_state=config['random_state'],
+        verbose=config['verbose'],
+        alpha=config['alpha'],
+        batch_size=len(data['X_train']) if config['batch_size'] is None else config['batch_size']
+    )
+    
+    model.fit(data['X_train'], data['y_train'])
+    
+    if config['verbose']:
+        n_iter = model.n_iter_
+        print(f"   训练完成: 平均 {n_iter} epochs")
+    
+    return model
+
+def train_pytorch_shared_ovr_classifier(data, config):
+    """训练PyTorch共享OvR分类器"""
+    print("🔧 训练 PyTorch Shared OvR MLPClassifier...")
+    
+    model = MLPPytorchSharedOvRClassifier(
+        hidden_layer_sizes=config['perception_hidden_layers'],
+        max_iter=config['max_iter'],
+        learning_rate=config['learning_rate'],
+        early_stopping=True,
+        validation_fraction=config['validation_fraction'],
+        n_iter_no_change=config['patience'],
+        tol=config['tol'],
+        random_state=config['random_state'],
+        verbose=config['verbose'],
+        alpha=config['alpha'],
+        batch_size=len(data['X_train']) if config['batch_size'] is None else config['batch_size']
+    )
+    
+    model.fit(data['X_train'], data['y_train'])
+    
+    if config['verbose']:
+        n_iter = model.n_iter_
+        print(f"   训练完成: {n_iter} epochs")
+    
+    return model
+
 def train_causal_classifier(data, config, mode='standard'):
     """训练因果分类器"""
     print(f"🔧 训练 CausalClassifier ({mode})...")
@@ -514,6 +589,263 @@ def predict_and_evaluate_classification(model, data, model_name, config):
     return results
 
 # =============================================================================
+# 可视化和结果显示函数
+# =============================================================================
+
+def _ensure_output_dir(output_dir):
+    """确保输出目录存在"""
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"📁 创建输出目录: {output_dir}/")
+
+def _get_output_path(output_dir, filename):
+    """获取输出文件的完整路径"""
+    return os.path.join(output_dir, filename)
+
+def create_regression_visualization(results, config):
+    """创建回归任务可视化图表"""
+    if not config.get('save_plots', False):
+        return
+        
+    _ensure_output_dir(config['output_dir'])
+    
+    print("\n📊 创建回归可视化图表")
+    print("-" * 30)
+    
+    # 准备数据 - 确保方法顺序
+    method_order = ['sklearn', 'pytorch', 'sklearn_ovr', 'pytorch_shared_ovr', 'deterministic', 'exogenous', 'endogenous', 'standard']
+    methods = [method for method in method_order if method in results]
+    method_labels = {
+        'sklearn': 'sklearn MLP',
+        'pytorch': 'PyTorch MLP',
+        'sklearn_ovr': 'sklearn OvR MLP',
+        'pytorch_shared_ovr': 'PyTorch Shared OvR',
+        'deterministic': 'CausalEngine (deterministic)',
+        'exogenous': 'CausalEngine (exogenous)',
+        'endogenous': 'CausalEngine (endogenous)',
+        'standard': 'CausalEngine (standard)'
+    }
+    
+    metrics = ['MAE', 'MdAE', 'RMSE', 'R²']
+    
+    # 创建子图 - 调整尺寸以容纳更多方法
+    fig, axes = plt.subplots(2, 2, figsize=(24, 20))
+    fig.suptitle(f'CausalEngine Quick Regression Test Results ({config["anomaly_ratio"]:.0%} Label Noise)', 
+                 fontsize=18, fontweight='bold')
+    axes = axes.flatten()
+    
+    # 定义颜色方案 - 扩展支持8种方法
+    colors = {
+        'sklearn': '#1f77b4',           # 蓝色
+        'pytorch': '#ff7f0e',           # 橙色
+        'sklearn_ovr': '#2ca02c',       # 绿色 (新增)
+        'pytorch_shared_ovr': '#d62728', # 红色 (新增)
+        'deterministic': '#9467bd',     # 紫色
+        'exogenous': '#8c564b',         # 棕色
+        'endogenous': '#e377c2',        # 粉色
+        'standard': '#7f7f7f'           # 灰色
+    }
+    
+    for i, metric in enumerate(metrics):
+        values = [results[method]['test'][metric] for method in methods]
+        labels = [method_labels[method] for method in methods]
+        bar_colors = [colors[method] for method in methods]
+        
+        bars = axes[i].bar(labels, values, color=bar_colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+        axes[i].set_title(f'{metric} (Test Set)', fontweight='bold', fontsize=14)
+        axes[i].set_ylabel(metric, fontsize=12)
+        
+        # 添加数值标签
+        for bar, value in zip(bars, values):
+            height = bar.get_height()
+            if metric == 'R²':
+                label_text = f'{value:.4f}'
+            else:
+                label_text = f'{value:.3f}'
+            axes[i].text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                       label_text, ha='center', va='bottom', fontweight='bold', fontsize=10)
+        
+        # 高亮最佳结果
+        if metric == 'R²':
+            best_idx = values.index(max(values))
+        else:
+            best_idx = values.index(min(values))
+        bars[best_idx].set_edgecolor('gold')
+        bars[best_idx].set_linewidth(3)
+        
+        axes[i].tick_params(axis='x', rotation=45, labelsize=10)
+        axes[i].grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    
+    output_path = _get_output_path(config['output_dir'], 'regression_performance.png')
+    plt.savefig(output_path, dpi=config['figure_dpi'], bbox_inches='tight')
+    print(f"📊 回归性能图表已保存为 {output_path}")
+    plt.close()
+
+def create_classification_visualization(results, config, n_classes):
+    """创建分类任务可视化图表"""
+    if not config.get('save_plots', False):
+        return
+        
+    _ensure_output_dir(config['output_dir'])
+    
+    print("\n📊 创建分类可视化图表")
+    print("-" * 30)
+    
+    # 准备数据 - 确保方法顺序（支持8种方法）
+    method_order = ['sklearn', 'pytorch', 'sklearn_ovr', 'pytorch_shared_ovr', 'deterministic', 'exogenous', 'endogenous', 'standard']
+    methods = [method for method in method_order if method in results]
+    method_labels = {
+        'sklearn': 'sklearn MLP',
+        'pytorch': 'PyTorch MLP',
+        'sklearn_ovr': 'sklearn OvR MLP',
+        'pytorch_shared_ovr': 'PyTorch Shared OvR',
+        'deterministic': 'CausalEngine (deterministic)',
+        'exogenous': 'CausalEngine (exogenous)',
+        'endogenous': 'CausalEngine (endogenous)',
+        'standard': 'CausalEngine (standard)'
+    }
+    
+    metrics = ['Acc', 'Precision', 'Recall', 'F1']
+    
+    # 创建子图（扩展支持8种方法）
+    fig, axes = plt.subplots(2, 2, figsize=(24, 20))
+    fig.suptitle(f'CausalEngine Quick {n_classes}-Class Classification Results ({config["label_noise_ratio"]:.0%} Label Noise)', 
+                 fontsize=18, fontweight='bold')
+    axes = axes.flatten()
+    
+    # 定义颜色方案 - 支持8种方法
+    colors = {
+        'sklearn': '#1f77b4',       # 蓝色
+        'pytorch': '#ff7f0e',       # 橙色
+        'sklearn_ovr': '#17becf',   # 青色
+        'pytorch_shared_ovr': '#e377c2',  # 粉色
+        'deterministic': '#d62728', # 红色
+        'exogenous': '#2ca02c',     # 绿色 
+        'endogenous': '#9467bd',    # 紫色
+        'standard': '#8c564b'       # 棕色
+    }
+    
+    for i, metric in enumerate(metrics):
+        values = [results[method]['test'][metric] for method in methods]
+        labels = [method_labels[method] for method in methods]
+        bar_colors = [colors[method] for method in methods]
+        
+        bars = axes[i].bar(labels, values, color=bar_colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+        axes[i].set_title(f'{metric} (Test Set)', fontweight='bold', fontsize=14)
+        axes[i].set_ylabel(metric, fontsize=12)
+        axes[i].set_ylim(0, 1.1)  # 分类指标都在0-1之间
+        
+        # 添加数值标签
+        for bar, value in zip(bars, values):
+            height = bar.get_height()
+            axes[i].text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                       f'{value:.4f}', ha='center', va='bottom', fontweight='bold', fontsize=10)
+        
+        # 高亮最佳结果
+        best_idx = values.index(max(values))
+        bars[best_idx].set_edgecolor('gold')
+        bars[best_idx].set_linewidth(3)
+        
+        axes[i].tick_params(axis='x', rotation=45, labelsize=10)
+        axes[i].grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    
+    output_path = _get_output_path(config['output_dir'], 'classification_performance.png')
+    plt.savefig(output_path, dpi=config['figure_dpi'], bbox_inches='tight')
+    print(f"📊 分类性能图表已保存为 {output_path}")
+    plt.close()
+
+def create_data_analysis_visualization(data, config, task_type):
+    """创建数据分析可视化图表"""
+    if not config.get('save_plots', False):
+        return
+        
+    _ensure_output_dir(config['output_dir'])
+    
+    print(f"\n📊 创建{task_type}数据分析图表")
+    print("-" * 30)
+    
+    # 创建图形
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    
+    if task_type == '回归':
+        fig.suptitle(f'Regression Data Analysis (Features: {data["X_train"].shape[1]}, Samples: {len(data["X_train"]) + len(data["X_test"])})', 
+                     fontsize=16, fontweight='bold')
+        
+        # 1. 目标变量分布 (原始尺度)
+        y_all_original = np.concatenate([data['y_train_original'], data['y_test_original']])
+        axes[0, 0].hist(y_all_original, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
+        axes[0, 0].set_title('Target Distribution (Original Scale)')
+        axes[0, 0].set_xlabel('Target Value')
+        axes[0, 0].set_ylabel('Frequency')
+        axes[0, 0].axvline(y_all_original.mean(), color='red', linestyle='--', 
+                          label=f'Mean: {y_all_original.mean():.3f}')
+        axes[0, 0].legend()
+        
+        # 2. 训练集vs测试集目标分布对比
+        axes[0, 1].hist(data['y_train_original'], bins=30, alpha=0.7, label='Train', color='lightblue')
+        axes[0, 1].hist(data['y_test_original'], bins=30, alpha=0.7, label='Test', color='lightcoral')
+        axes[0, 1].set_title('Train vs Test Target Distribution')
+        axes[0, 1].set_xlabel('Target Value')
+        axes[0, 1].set_ylabel('Frequency')
+        axes[0, 1].legend()
+        
+    else:  # 分类
+        fig.suptitle(f'Classification Data Analysis (Features: {data["X_train"].shape[1]}, Classes: {len(np.unique(data["y_train"]))})', 
+                     fontsize=16, fontweight='bold')
+        
+        # 1. 类别分布
+        unique_classes, counts = np.unique(data['y_train_original'], return_counts=True)
+        axes[0, 0].bar(unique_classes, counts, alpha=0.7, color='skyblue', edgecolor='black')
+        axes[0, 0].set_title('Class Distribution (Training Set)')
+        axes[0, 0].set_xlabel('Class')
+        axes[0, 0].set_ylabel('Count')
+        
+        # 2. 训练集噪声影响
+        clean_counts = np.unique(data['y_train_original'], return_counts=True)[1]
+        noisy_counts = np.unique(data['y_train'], return_counts=True)[1]
+        
+        x = np.arange(len(unique_classes))
+        width = 0.35
+        axes[0, 1].bar(x - width/2, clean_counts, width, label='Original', alpha=0.7, color='lightblue')
+        axes[0, 1].bar(x + width/2, noisy_counts, width, label='With Noise', alpha=0.7, color='lightcoral')
+        axes[0, 1].set_title('Impact of Label Noise')
+        axes[0, 1].set_xlabel('Class')
+        axes[0, 1].set_ylabel('Count')
+        axes[0, 1].set_xticks(x)
+        axes[0, 1].set_xticklabels(unique_classes)
+        axes[0, 1].legend()
+    
+    # 3. 特征分布 (标准化后)
+    n_features = min(data['X_train'].shape[1], 5)  # 最多显示5个特征
+    for i in range(n_features):
+        axes[1, 0].hist(data['X_train'][:, i], bins=30, alpha=0.5, 
+                       label=f'Feature {i+1}', density=True)
+    axes[1, 0].set_title(f'Feature Distributions (Standardized, Top {n_features})')
+    axes[1, 0].set_xlabel('Standardized Value')
+    axes[1, 0].set_ylabel('Density')
+    axes[1, 0].legend()
+    
+    # 4. 数据集规模分析
+    train_size = len(data['X_train'])
+    test_size = len(data['X_test'])
+    
+    axes[1, 1].pie([train_size, test_size], labels=['Training', 'Test'], 
+                  autopct='%1.1f%%', colors=['lightblue', 'lightcoral'])
+    axes[1, 1].set_title(f'Data Split\n(Total: {train_size + test_size} samples)')
+    
+    plt.tight_layout()
+    
+    task_name = 'regression' if task_type == '回归' else 'classification'
+    output_path = _get_output_path(config['output_dir'], f'{task_name}_data_analysis.png')
+    plt.savefig(output_path, dpi=config['figure_dpi'], bbox_inches='tight')
+    print(f"📊 {task_type}数据分析图表已保存为 {output_path}")
+    plt.close()
+
+# =============================================================================
 # 结果显示函数
 # =============================================================================
 
@@ -564,6 +896,11 @@ def test_regression(config=None):
     
     # 1. 生成数据
     data = generate_regression_data(config)
+    
+    # 2. 数据分析可视化
+    if config.get('save_plots', False):
+        create_data_analysis_visualization(data, config, '回归')
+    
     results = {}
     
     # 2. 训练各种模型
@@ -579,6 +916,14 @@ def test_regression(config=None):
         causal_det = train_causal_regressor(data, config, 'deterministic')
         results['deterministic'] = predict_and_evaluate_regression(causal_det, data, 'causal', config)
     
+    if config['test_causal_exogenous']:
+        causal_exo = train_causal_regressor(data, config, 'exogenous')
+        results['exogenous'] = predict_and_evaluate_regression(causal_exo, data, 'causal', config)
+    
+    if config['test_causal_endogenous']:
+        causal_endo = train_causal_regressor(data, config, 'endogenous')
+        results['endogenous'] = predict_and_evaluate_regression(causal_endo, data, 'causal', config)
+    
     if config['test_causal_standard']:
         causal_std = train_causal_regressor(data, config, 'standard')
         results['standard'] = predict_and_evaluate_regression(causal_std, data, 'causal', config)
@@ -586,6 +931,10 @@ def test_regression(config=None):
     # 3. 显示结果
     if config['verbose']:
         print_regression_results(results)
+    
+    # 4. 可视化结果
+    if config.get('save_plots', False):
+        create_regression_visualization(results, config)
     
     return results
 
@@ -600,6 +949,11 @@ def test_classification(config=None):
     
     # 1. 生成数据
     data = generate_classification_data(config)
+    
+    # 2. 数据分析可视化
+    if config.get('save_plots', False):
+        create_data_analysis_visualization(data, config, '分类')
+    
     results = {}
     
     # 2. 训练各种模型
@@ -609,11 +963,27 @@ def test_classification(config=None):
     
     if config['test_pytorch']:
         pytorch_model = train_pytorch_classifier(data, config)
-        results['pytorch'] = predict_and_evaluate_classification(pytorch_model, data, 'causal', config)
+        results['pytorch'] = predict_and_evaluate_classification(pytorch_model, data, 'pytorch', config)
+    
+    if config['test_sklearn_ovr']:
+        sklearn_ovr_model = train_sklearn_ovr_classifier(data, config)
+        results['sklearn_ovr'] = predict_and_evaluate_classification(sklearn_ovr_model, data, 'sklearn_ovr', config)
+    
+    if config['test_pytorch_shared_ovr']:
+        pytorch_shared_ovr_model = train_pytorch_shared_ovr_classifier(data, config)
+        results['pytorch_shared_ovr'] = predict_and_evaluate_classification(pytorch_shared_ovr_model, data, 'pytorch_shared_ovr', config)
     
     if config['test_causal_deterministic']:
         causal_det = train_causal_classifier(data, config, 'deterministic')
         results['deterministic'] = predict_and_evaluate_classification(causal_det, data, 'causal', config)
+    
+    if config['test_causal_exogenous']:
+        causal_exo = train_causal_classifier(data, config, 'exogenous')
+        results['exogenous'] = predict_and_evaluate_classification(causal_exo, data, 'causal', config)
+    
+    if config['test_causal_endogenous']:
+        causal_endo = train_causal_classifier(data, config, 'endogenous')
+        results['endogenous'] = predict_and_evaluate_classification(causal_endo, data, 'causal', config)
     
     if config['test_causal_standard']:
         causal_std = train_causal_classifier(data, config, 'standard')
@@ -623,6 +993,11 @@ def test_classification(config=None):
     if config['verbose']:
         n_classes = len(np.unique(data['y_train']))
         print_classification_results(results, n_classes)
+    
+    # 4. 可视化结果
+    if config.get('save_plots', False):
+        n_classes = len(np.unique(data['y_train']))
+        create_classification_visualization(results, config, n_classes)
     
     return results
 
@@ -638,7 +1013,8 @@ def print_config_summary(config, task_type):
     print(f"网络: {config['perception_hidden_layers']}")
     print(f"训练: {config['max_iter']} epochs, lr={config['learning_rate']}, patience={config['patience']}")
     print(f"测试: sklearn={config['test_sklearn']}, pytorch={config['test_pytorch']}, "
-          f"deterministic={config['test_causal_deterministic']}, standard={config['test_causal_standard']}")
+          f"deterministic={config['test_causal_deterministic']}, exogenous={config['test_causal_exogenous']}, "
+          f"endogenous={config['test_causal_endogenous']}, standard={config['test_causal_standard']}")
     print()
 
 # =============================================================================
@@ -657,6 +1033,15 @@ def main():
     classification_results = test_classification()
     
     print(f"\n✅ 测试完成!")
+    
+    # 显示生成的文件信息
+    if REGRESSION_CONFIG.get('save_plots', False):
+        print(f"\n📊 生成的可视化文件:")
+        print(f"   - {REGRESSION_CONFIG['output_dir']}/regression_data_analysis.png")
+        print(f"   - {REGRESSION_CONFIG['output_dir']}/regression_performance.png")
+        print(f"   - {REGRESSION_CONFIG['output_dir']}/classification_data_analysis.png")
+        print(f"   - {REGRESSION_CONFIG['output_dir']}/classification_performance.png")
+    
     print("💡 修改脚本顶部的 CONFIG 部分来调整实验参数")
 
 def quick_regression_test():
@@ -666,6 +1051,8 @@ def quick_regression_test():
         'n_samples': 1000,
         'max_iter': 500,
         'test_pytorch': False,  # 跳过pytorch基线以节省时间
+        'test_causal_exogenous': False,  # 跳过部分模式以节省时间
+        'test_causal_endogenous': False,
         'verbose': True
     })
     return test_regression(quick_config)
@@ -677,6 +1064,8 @@ def quick_classification_test():
         'n_samples': 1500,
         'max_iter': 500,
         'test_pytorch': False,  # 跳过pytorch基线以节省时间
+        'test_causal_exogenous': False,  # 跳过部分模式以节省时间
+        'test_causal_endogenous': False,
         'verbose': True
     })
     return test_classification(quick_config)
