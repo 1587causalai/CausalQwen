@@ -34,7 +34,7 @@ class TaskHead(nn.Module, ABC):
     def __init__(self, output_size: int, factor=10.0):
         super().__init__()
         self.output_size = output_size
-        self.factor = factor
+        self.factor = factor  # 默认10.0, 用于调整损失的权重，因为 Cauchy NLL 损失很平坦，所以需要乘以一个较大的数
 
     @abstractmethod
     def forward(
