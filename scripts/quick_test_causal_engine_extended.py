@@ -494,9 +494,13 @@ def create_robustness_plots(regression_results, classification_results, config):
                     # 过滤NaN值
                     valid_mask = ~np.isnan(values)
                     if valid_mask.any():
+                        # 判断是否为因果算法
+                        is_causal = algo_key.startswith('causal_')
+                        linestyle = '-' if is_causal else '--'  # 因果算法实线，其他虚线
+                        
                         # 只绘制平均值线条，不显示误差条
                         ax.plot(noise_levels[valid_mask], values[valid_mask], 
-                               marker='o', linewidth=2, markersize=4,
+                               marker='o', linewidth=2, markersize=4, linestyle=linestyle,
                                label=data['name'], color=colors[color_idx])
                         color_idx += 1
             
@@ -538,9 +542,13 @@ def create_robustness_plots(regression_results, classification_results, config):
                     # 过滤NaN值
                     valid_mask = ~np.isnan(values)
                     if valid_mask.any():
+                        # 判断是否为因果算法
+                        is_causal = algo_key.startswith('causal_')
+                        linestyle = '-' if is_causal else '--'  # 因果算法实线，其他虚线
+                        
                         # 只绘制平均值线条，不显示误差条
                         ax.plot(noise_levels[valid_mask], values[valid_mask], 
-                               marker='o', linewidth=2, markersize=4,
+                               marker='o', linewidth=2, markersize=4, linestyle=linestyle,
                                label=data['name'], color=colors[color_idx])
                         color_idx += 1
             
