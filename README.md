@@ -48,26 +48,67 @@ predictions = classifier.predict(X_test)
 probabilities = classifier.predict_proba(X_test)
 ```
 
+### 🚀 快速验证测试
+
+运行快速测试脚本，同时验证回归和分类性能：
+
+```bash
+# 运行完整的快速测试（回归+分类）
+python scripts/quick_test_causal_engine.py
+
+# 这个脚本将：
+# 1. 生成合成数据（回归：4000样本×12特征，分类：4000样本×10特征×3类）
+# 2. 在30%噪声下比较8种方法性能
+# 3. 统一标准化策略确保公平比较
+# 4. 生成完整的性能分析报告和可视化图表
+```
+
+**快速测试亮点**：
+- ⚡ 快速验证：几分钟内完成全面测试
+- 🔄 双任务支持：同时测试回归和分类能力
+- 🎯 8种方法对比：sklearn/PyTorch基线 + CausalEngine四种模式
+- 📊 科学实验设计：无数据泄露的标准化策略
+- 🛡️ 噪声鲁棒性：在30%噪声环境下验证优势
+
 ### 🏠 真实世界教程 - 加州房价预测
 
 运行完整的真实世界回归教程，展示CausalEngine的强大性能：
 
-```python
-# 运行真实世界回归教程
-python examples/real_world_regression_tutorial.py
+```bash
+# 运行真实世界回归教程（sklearn-style版本）
+python examples/comprehensive_causal_modes_tutorial_sklearn_style.py
 
 # 这个教程将：
 # 1. 加载加州房价数据集（20,640个样本）
-# 2. 在25%标签噪声下比较CausalEngine vs 传统方法
-# 3. 运行鲁棒性测试（0%-30%噪声梯度）
-# 4. 生成完整的性能分析报告和可视化图表
+# 2. 在30%标签噪声下比较13种方法
+# 3. 测试CausalEngine所有4种推理模式
+# 4. 生成标准版和扩展版性能对比图表
 ```
 
-**教程亮点**：
-- 📊 全面的数据分析和可视化
-- 🎯 CausalEngine在25%噪声下仍保持优异性能
-- 📈 4个核心指标的完整对比（MAE、MdAE、RMSE、R²）
-- 🛡️ 鲁棒性测试验证算法在噪声环境中的优势
+**真实世界教程亮点**：
+- 🌍 真实数据：加州房价数据集的完整分析
+- 🔬 全面对比：13种方法（传统ML + 稳健回归 + CausalEngine四模式）
+- 📊 双重可视化：标准版（9种核心方法）+ 扩展版（13种全方法）
+- 🎯 CausalEngine专项：四种推理模式的深度对比分析
+- 🛡️ 鲁棒性验证：在30%噪声环境下的真实表现
+
+### 📈 鲁棒性测试脚本
+
+测试算法在不同噪声水平下的鲁棒性表现：
+
+```bash
+# 回归算法鲁棒性测试（真实数据集）
+python scripts/regression_robustness_real_datasets.py
+
+# 分类算法鲁棒性测试（真实数据集）
+python scripts/classification_robustness_real_datasets.py
+
+# 这些脚本将：
+# 1. 使用sklearn内置真实数据集
+# 2. 测试0%-100%噪声梯度（11个级别）
+# 3. 比较多种算法的鲁棒性曲线
+# 4. 支持多次运行取平均，提高结果稳定性
+```
 
 #
 
