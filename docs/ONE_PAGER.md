@@ -71,12 +71,6 @@ decision, uncertainty = output['loc_S'], output['scale_S']
 
 ## The Vision
 
-Just as Google built an empire on PageRank, we're building the future of AI on CausalEngine.
+Just as Google built an empire on PageRank, we're building the future of AI on CausalEngine. Every intelligent system of tomorrow will be powered by causal reasoning, not statistical imitation.
 
-Every intelligent system of tomorrow will be powered by causal reasoning, not statistical imitation.
-
-**CausalEngine isn't just better AI. It's real AI.**
-
----
-
-*"We found the algorithm of intelligence itself."*
+*CausalEngine isn't just better AI. It's real AI.*
