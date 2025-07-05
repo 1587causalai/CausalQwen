@@ -863,10 +863,18 @@ def create_data_analysis_visualization(data, config, task_type):
                           label=f'Mean: {y_all_original.mean():.3f}')
         axes[0, 0].legend()
         
-        # 2. 训练集vs测试集目标分布对比
-        axes[0, 1].hist(data['y_train_original'], bins=30, alpha=0.7, label='Train', color='lightblue')
-        axes[0, 1].hist(data['y_test_original'], bins=30, alpha=0.7, label='Test', color='lightcoral')
-        axes[0, 1].set_title('Train vs Test Target Distribution')
+        # 2. 噪声注入影响对比（标准化尺度）
+        axes[0, 1].hist(data['y_train_original'], bins=30, alpha=0.7, label='Clean Train', color='lightblue')
+        
+        # 将标准化空间的带噪声标签转换回原始尺度进行可视化
+        if 'scaler_y' in data:
+            y_train_noisy_original = data['scaler_y'].inverse_transform(data['y_train'].reshape(-1, 1)).flatten()
+            axes[0, 1].hist(y_train_noisy_original, bins=30, alpha=0.7, label='With Noise', color='lightcoral')
+        else:
+            # 如果没有scaler_y，直接使用带噪声的标签
+            axes[0, 1].hist(data['y_train'], bins=30, alpha=0.7, label='With Noise', color='lightcoral')
+        
+        axes[0, 1].set_title('Impact of Label Noise (Original Scale)')
         axes[0, 1].set_xlabel('Target Value')
         axes[0, 1].set_ylabel('Frequency')
         axes[0, 1].legend()
