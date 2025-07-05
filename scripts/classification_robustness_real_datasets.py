@@ -69,8 +69,9 @@ REAL_DATASETS_CONFIG = {
     'hidden_layers': (128, 64, 64),      # 保持网络结构
     'max_iter': 3000,               # 进一步增加最大迭代次数
     'learning_rate': 0.001,        # 进一步降低学习率提高稳定性
-    'patience': 100,                # 大幅增加早停耐心
+    'patience': 100,                # 早停耐心（统一参数，适用于所有算法）
     'tol': 1e-4,                    # 更严格的收敛容忍度
+    'batch_size': None,             # 批处理大小 (None=全批次, 数字=小批次)
     
     # 稳定性改进参数
     'n_runs': 5,                     # 增加到5次运行
@@ -79,7 +80,6 @@ REAL_DATASETS_CONFIG = {
     # 额外稳定性参数
     'validation_fraction': 0.2,     # 验证集比例（早停用）
     'early_stopping': True,          # 确保早停开启
-    'n_iter_no_change': 100,         # sklearn算法的早停耐心
     
     # 输出控制
     'output_dir': 'results/classification_real_datasets',
@@ -212,10 +212,11 @@ def test_classification_noise_robustness_real_data(config):
                         hidden_layer_sizes=config['hidden_layers'],
                         max_iter=config['max_iter'],
                         learning_rate_init=config['learning_rate'],
+                        batch_size=config['batch_size'],
                         random_state=config['random_state'],
                         early_stopping=config['early_stopping'],
                         validation_fraction=config['validation_fraction'],
-                        n_iter_no_change=config['n_iter_no_change'],
+                        n_iter_no_change=config['patience'],
                         tol=config['tol']
                     )
                     model.fit(X_train_scaled, y_train_noisy)
@@ -225,6 +226,7 @@ def test_classification_noise_robustness_real_data(config):
                         hidden_layer_sizes=config['hidden_layers'],
                         max_iter=config['max_iter'],
                         learning_rate=config['learning_rate'],
+                        batch_size=config['batch_size'],
                         random_state=config['random_state'],
                         early_stopping=config['early_stopping'],
                         validation_fraction=config['validation_fraction'],
@@ -237,10 +239,11 @@ def test_classification_noise_robustness_real_data(config):
                         hidden_layer_sizes=config['hidden_layers'],
                         max_iter=config['max_iter'],
                         learning_rate_init=config['learning_rate'],
+                        batch_size=config['batch_size'],
                         random_state=config['random_state'],
                         early_stopping=config['early_stopping'],
                         validation_fraction=config['validation_fraction'],
-                        n_iter_no_change=config['n_iter_no_change'],
+                        n_iter_no_change=config['patience'],
                         tol=config['tol'],
                         verbose=False
                     )
@@ -251,6 +254,7 @@ def test_classification_noise_robustness_real_data(config):
                         hidden_layer_sizes=config['hidden_layers'],
                         max_iter=config['max_iter'],
                         learning_rate=config['learning_rate'],
+                        batch_size=config['batch_size'],
                         random_state=config['random_state'],
                         early_stopping=config['early_stopping'],
                         validation_fraction=config['validation_fraction'],
@@ -264,6 +268,7 @@ def test_classification_noise_robustness_real_data(config):
                         mode=causal_mode,
                         max_iter=config['max_iter'],
                         learning_rate=config['learning_rate'],
+                        batch_size=config['batch_size'],
                         random_state=config['random_state'],
                         early_stopping=config['early_stopping'],
                         validation_fraction=config['validation_fraction'],

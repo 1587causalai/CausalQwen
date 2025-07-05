@@ -82,7 +82,7 @@ class RegressionHead(TaskHead):
     TODO: 未来可以考虑加入一些可学习的线性变化，比如加入一个可学习的线性层，将决策得分映射到输出空间。
     """
 
-    def __init__(self, output_size: int, factor=10.0):
+    def __init__(self, output_size: int, factor=1.0):
         super().__init__(output_size, factor)
 
     def forward(

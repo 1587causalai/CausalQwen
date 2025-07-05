@@ -78,13 +78,13 @@ CONFIG = {
     'hidden_layers': (128, 128, 64),    # 增大网络结构
     'max_iter': 3000,               # 最大迭代次数
     'learning_rate': 0.003,          # 提高学习率
-    'patience': 80,                 # 增加早停耐心
+    'patience': 100,                 # 增加早停耐心
     'tol': 1e-4,                    # 收敛容忍度
     
     # 验证集参数
     'validation_fraction': 0.2,    # 验证集比例（早停用）
     'early_stopping': True,         # 开启早停
-    'n_iter_no_change': 50,         # sklearn算法早停耐心
+    'n_iter_no_change': 100,         # sklearn算法早停耐心
     
     # 多次运行参数
     'n_runs': 3,                    # 运行次数（1=单次，>1=多次平均）
